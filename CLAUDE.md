@@ -2,7 +2,7 @@
 
 BaoBaoClaude — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows, with persistent personality (SOUL.md), identity (IDENTITY.md), user profiles (USER.md), and memory (MEMORY.md + daily memories).
 
-Built on CCBot. All intelligence stays in Claude Code; BaoBaoClaude handles file management, workspace assembly, and Telegram UI.
+All intelligence stays in Claude Code; BaoBaoClaude handles file management, workspace assembly, and Telegram UI.
 
 **Architecture philosophy**: Operates on tmux, not the Claude Code SDK. The Claude Code process stays in a tmux window; BaoBaoClaude reads output and sends keystrokes. Users can seamlessly switch between desktop terminal and Telegram.
 
@@ -16,33 +16,33 @@ uv run ruff check src/ tests/
 uv run ruff format src/ tests/
 
 # Type Checking
-uv run pyright src/baobao/
+uv run pyright src/baobaobot/
 
 # Testing
 uv run pytest                              # All tests
-uv run pytest tests/baobao/               # Unit tests only
-uv run pytest tests/baobao/workspace/     # Workspace tests
-uv run pytest tests/baobao/persona/       # Persona tests
-uv run pytest tests/baobao/memory/        # Memory tests
+uv run pytest tests/baobaobot/               # Unit tests only
+uv run pytest tests/baobaobot/workspace/     # Workspace tests
+uv run pytest tests/baobaobot/persona/       # Persona tests
+uv run pytest tests/baobaobot/memory/        # Memory tests
 uv run pytest -v -k "test_name"           # Specific test
 
 # Development
-baobao init                                # Initialize workspace
-baobao hook --install                      # Install Claude Code hook
+baobaobot init                                # Initialize workspace
+baobaobot hook --install                      # Install Claude Code hook
 uv sync                                    # Install dependencies
 ```
 
 ## Project Structure
 
 ```
-src/baobao/
+src/baobaobot/
 ├── main.py                  # CLI entry: hook / init / bot start
 ├── config.py                # Config singleton (workspace settings added)
 ├── bot.py                   # Telegram bot (new: /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild)
 ├── workspace/               # Workspace system
 │   ├── manager.py           # Directory init, project linking, bin/ script install
 │   ├── assembler.py         # CLAUDE.md assembly from source files
-│   ├── bin/                 # Scripts deployed to ~/.baobao/bin/
+│   ├── bin/                 # Scripts deployed to ~/.baobaobot/bin/
 │   │   ├── memory-search    # SQLite memory search (used by Claude Code)
 │   │   └── memory-list      # List recent daily memories
 │   └── templates/           # Default SOUL.md, IDENTITY.md, USER.md, AGENTS.md, MEMORY.md
@@ -59,13 +59,13 @@ src/baobao/
 │   ├── persona_handler.py   # /soul, /identity commands
 │   ├── profile_handler.py   # /profile command
 │   └── memory_handler.py    # /memory, /forget commands
-└── (inherited from ccbot)   # session.py, tmux_manager.py, hook.py, etc.
+└── ...                      # session.py, tmux_manager.py, hook.py, etc.
 ```
 
 ## Directory Layout
 
 ```
-~/.baobao/                   # Root (BAOBAO_DIR)
+~/.baobaobot/                   # Root (BAOBAOBOT_DIR)
 ├── .env                     # Bot configuration
 ├── state.json               # Bot state (thread bindings, window states)
 ├── session_map.json         # Hook-generated window→session mapping
@@ -92,4 +92,4 @@ src/baobao/
 - **CLAUDE.md assembly** — auto-composed from SOUL/IDENTITY/USER/AGENTS/MEMORY files
 - **Two-layer memory** — MEMORY.md (long-term, curated) + memory/*.md (daily, auto)
 - **SQLite memory index** — .md files are source of truth; SQLite provides fast search via lazy sync
-- **Skill-based memory access** — Claude Code uses `~/.baobao/bin/memory-search` to query memories
+- **Skill-based memory access** — Claude Code uses `~/.baobaobot/bin/memory-search` to query memories

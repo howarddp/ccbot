@@ -2,7 +2,7 @@
 
 import pytest
 
-from baobao.monitor_state import MonitorState, TrackedSession
+from baobaobot.monitor_state import MonitorState, TrackedSession
 
 pytestmark = pytest.mark.integration
 
