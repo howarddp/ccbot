@@ -14,7 +14,8 @@ Key classes: SessionMonitor, NewMessage, SessionInfo.
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -37,6 +38,9 @@ class SessionInfo:
     file_path: Path
 
 
+_SEND_FILE_RE = re.compile(r"\[SEND_FILE:([^\]]+)\]")
+
+
 @dataclass
 class NewMessage:
     """A new message detected by the monitor."""
@@ -48,6 +52,7 @@ class NewMessage:
     tool_use_id: str | None = None
     role: str = "assistant"  # "user" or "assistant"
     tool_name: str | None = None  # For tool_use messages, the tool name
+    file_paths: list[str] = field(default_factory=list)  # [SEND_FILE:path] matches
 
 
 class SessionMonitor:
@@ -327,6 +332,10 @@ class SessionMonitor:
                     # Skip user messages unless show_user_messages is enabled
                     if entry.role == "user" and not config.show_user_messages:
                         continue
+                    # Extract [SEND_FILE:path] markers from assistant text
+                    file_paths: list[str] = []
+                    if entry.role == "assistant" and entry.content_type == "text":
+                        file_paths = _SEND_FILE_RE.findall(entry.text)
                     new_messages.append(
                         NewMessage(
                             session_id=session_info.session_id,
@@ -336,6 +345,7 @@ class SessionMonitor:
                             tool_use_id=entry.tool_use_id,
                             role=entry.role,
                             tool_name=entry.tool_name,
+                            file_paths=file_paths,
                         )
                     )
 

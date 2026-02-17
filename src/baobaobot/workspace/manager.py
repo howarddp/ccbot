@@ -78,6 +78,7 @@ class WorkspaceManager:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.projects_dir.mkdir(exist_ok=True)
         self.memory_dir.mkdir(exist_ok=True)
+        (self.workspace_dir / "tmp").mkdir(exist_ok=True)
 
         for filename in _WORKSPACE_TEMPLATE_FILES:
             dest = self.workspace_dir / filename
@@ -100,7 +101,9 @@ class WorkspaceManager:
             if src.exists():
                 shutil.copy2(src, dest)
                 # Ensure executable
-                dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                dest.chmod(
+                    dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                )
                 logger.debug("Installed script: %s", dest)
             else:
                 logger.warning("Script not found: %s", src)
@@ -163,7 +166,5 @@ class WorkspaceManager:
         if not self.projects_dir.exists():
             return []
         return sorted(
-            p.name
-            for p in self.projects_dir.iterdir()
-            if p.is_dir() or p.is_symlink()
+            p.name for p in self.projects_dir.iterdir() if p.is_dir() or p.is_symlink()
         )

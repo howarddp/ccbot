@@ -34,6 +34,7 @@ Key functions: create_bot(), handle_new_message().
 import asyncio
 import io
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from telegram import (
@@ -98,7 +99,7 @@ from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
 from .screenshot import text_to_image
 from .session import session_manager
-from .session_monitor import NewMessage, SessionMonitor
+from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
 from .terminal_parser import extract_bash_output
 from .tmux_manager import tmux_manager
 from .handlers.persona_handler import (
@@ -263,9 +264,7 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # --- Workspace commands ---
 
 
-async def workspace_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show workspace status for the current topic."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -312,9 +311,7 @@ async def workspace_command(
     await safe_reply(update.message, "\n".join(lines))
 
 
-async def rebuild_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -491,7 +488,7 @@ async def unsupported_content_handler(
     update: Update,
     _context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    """Reply to non-text messages (images, stickers, voice, etc.)."""
+    """Reply to truly unsupported content (stickers, etc.)."""
     if not update.message:
         return
     user = update.effective_user
@@ -500,8 +497,126 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ Only text messages are supported. Images, stickers, voice, and other media cannot be forwarded to Claude Code.",
+        "⚠ 不支援此類型的訊息（貼圖等）。",
     )
+
+
+def _resolve_tmp_dir(user_id: int, thread_id: int) -> Path | None:
+    """Resolve the tmp/ directory for the workspace bound to this thread.
+
+    Returns None if thread has no bound window or cwd is unknown.
+    """
+    wid = session_manager.get_window_for_thread(user_id, thread_id)
+    if not wid:
+        return None
+    state = session_manager.get_window_state(wid)
+    if not state.cwd:
+        return None
+    tmp_dir = Path(state.cwd) / "tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    return tmp_dir
+
+
+async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle photo/document/video/audio/voice — download to tmp/ and forward path to Claude."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(
+            update.message,
+            "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    # Store group chat_id for forum topic message routing
+    chat = update.message.chat
+    if chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    # Check if topic is bound to a window
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if wid is None:
+        await safe_reply(
+            update.message,
+            "❌ 尚無 session。請先發送文字訊息建立 session，再傳送檔案。",
+        )
+        return
+
+    # Resolve tmp directory
+    tmp_dir = _resolve_tmp_dir(user.id, thread_id)
+    if tmp_dir is None:
+        await safe_reply(update.message, "❌ 無法取得 workspace 路徑。")
+        return
+
+    # Determine file object and filename
+    msg = update.message
+    file_obj = None
+    original_name: str | None = None
+
+    if msg.document:
+        file_obj = await msg.document.get_file()
+        original_name = msg.document.file_name
+    elif msg.photo:
+        # Use largest photo
+        file_obj = await msg.photo[-1].get_file()
+    elif msg.video:
+        file_obj = await msg.video.get_file()
+        original_name = msg.video.file_name
+    elif msg.audio:
+        file_obj = await msg.audio.get_file()
+        original_name = msg.audio.file_name
+    elif msg.voice:
+        file_obj = await msg.voice.get_file()
+
+    if file_obj is None:
+        await safe_reply(update.message, "❌ 無法取得檔案。")
+        return
+
+    # Generate filename
+    now = datetime.now(tz=timezone.utc)
+    ts = now.strftime("%Y%m%d_%H%M%S")
+    if original_name:
+        filename = f"{ts}_{original_name}"
+    else:
+        # Infer extension from file_path hint
+        ext = ".jpg"
+        if file_obj.file_path:
+            fp = Path(file_obj.file_path)
+            if fp.suffix:
+                ext = fp.suffix
+        if msg.voice:
+            ext = ".ogg"
+        elif msg.video and ext == ".jpg":
+            ext = ".mp4"
+        filename = f"file_{ts}{ext}"
+
+    dest = tmp_dir / filename
+    await file_obj.download_to_drive(str(dest))
+    logger.info("Downloaded file to %s (user=%d, thread=%d)", dest, user.id, thread_id)
+
+    # Build text to send to Claude Code
+    caption = msg.caption or ""
+    lines = [f"[收到檔案] {dest}"]
+    if caption:
+        lines.append(caption)
+    else:
+        lines.append("請查看這個檔案。")
+    text_to_send = "\n".join(lines)
+
+    await msg.chat.send_action(ChatAction.TYPING)
+    success, message = await session_manager.send_to_window(wid, text_to_send)
+    if success:
+        await safe_reply(update.message, f"📎 已傳送檔案: {filename}")
+    else:
+        await safe_reply(update.message, f"❌ 檔案已儲存但無法送達 Claude: {message}")
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
@@ -664,7 +779,9 @@ async def _auto_create_session(
     send_ok, send_msg = await session_manager.send_to_window(created_wid, text)
     if not send_ok:
         logger.warning("Failed to forward pending text: %s", send_msg)
-        await safe_reply(update.message, f"✅ Session created, but message failed: {send_msg}")
+        await safe_reply(
+            update.message, f"✅ Session created, but message failed: {send_msg}"
+        )
     else:
         await safe_reply(update.message, f"✅ Session created: {created_wname}")
 
@@ -810,7 +927,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
-        window_id = data[len(CB_SCREENSHOT_REFRESH):]
+        window_id = data[len(CB_SCREENSHOT_REFRESH) :]
         w = await tmux_manager.find_window_by_id(window_id)
         if not w:
             await query.answer("Window no longer exists", show_alert=True)
@@ -840,7 +957,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Up arrow
     elif data.startswith(CB_ASK_UP):
-        window_id = data[len(CB_ASK_UP):]
+        window_id = data[len(CB_ASK_UP) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -851,7 +968,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Down arrow
     elif data.startswith(CB_ASK_DOWN):
-        window_id = data[len(CB_ASK_DOWN):]
+        window_id = data[len(CB_ASK_DOWN) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -864,7 +981,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Left arrow
     elif data.startswith(CB_ASK_LEFT):
-        window_id = data[len(CB_ASK_LEFT):]
+        window_id = data[len(CB_ASK_LEFT) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -877,7 +994,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Right arrow
     elif data.startswith(CB_ASK_RIGHT):
-        window_id = data[len(CB_ASK_RIGHT):]
+        window_id = data[len(CB_ASK_RIGHT) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -890,7 +1007,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Escape
     elif data.startswith(CB_ASK_ESC):
-        window_id = data[len(CB_ASK_ESC):]
+        window_id = data[len(CB_ASK_ESC) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -902,7 +1019,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Enter
     elif data.startswith(CB_ASK_ENTER):
-        window_id = data[len(CB_ASK_ENTER):]
+        window_id = data[len(CB_ASK_ENTER) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -915,7 +1032,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Space
     elif data.startswith(CB_ASK_SPACE):
-        window_id = data[len(CB_ASK_SPACE):]
+        window_id = data[len(CB_ASK_SPACE) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -928,7 +1045,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Tab
     elif data.startswith(CB_ASK_TAB):
-        window_id = data[len(CB_ASK_TAB):]
+        window_id = data[len(CB_ASK_TAB) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -939,20 +1056,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: refresh display
     elif data.startswith(CB_ASK_REFRESH):
-        window_id = data[len(CB_ASK_REFRESH):]
+        window_id = data[len(CB_ASK_REFRESH) :]
         thread_id = _get_thread_id(update)
         await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
         await query.answer("🔄")
 
     # Screenshot quick keys: send key to tmux window
     elif data.startswith(CB_KEYS_PREFIX):
-        rest = data[len(CB_KEYS_PREFIX):]
+        rest = data[len(CB_KEYS_PREFIX) :]
         colon_idx = rest.find(":")
         if colon_idx < 0:
             await query.answer("Invalid data")
             return
         key_id = rest[:colon_idx]
-        window_id = rest[colon_idx + 1:]
+        window_id = rest[colon_idx + 1 :]
 
         key_info = _KEYS_SEND_MAP.get(key_id)
         if not key_info:
@@ -1042,6 +1159,64 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if get_interactive_msg_id(user_id, thread_id):
             await clear_interactive_msg(user_id, bot, thread_id)
 
+        # Send files if [SEND_FILE:path] markers are present
+        if msg.file_paths:
+            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            for fpath_str in msg.file_paths:
+                fpath = Path(fpath_str)
+                if not fpath.is_file():
+                    logger.warning("SEND_FILE: file not found: %s", fpath)
+                    continue
+                # Security: file must be within a workspace directory
+                try:
+                    fpath_resolved = fpath.resolve()
+                    config_resolved = config.config_dir.resolve()
+                    if not str(fpath_resolved).startswith(str(config_resolved)):
+                        logger.warning("SEND_FILE: path outside workspace: %s", fpath)
+                        continue
+                except (OSError, ValueError):
+                    continue
+                # Size check: Telegram limit ~50MB
+                try:
+                    if fpath.stat().st_size > 50 * 1024 * 1024:
+                        logger.warning("SEND_FILE: file too large: %s", fpath)
+                        continue
+                except OSError:
+                    continue
+                # Send as photo or document based on extension
+                try:
+                    suffix = fpath.suffix.lower()
+                    with open(fpath, "rb") as f:
+                        if suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                            await bot.send_photo(
+                                chat_id=chat_id,
+                                photo=f,
+                                message_thread_id=thread_id,
+                            )
+                        else:
+                            await bot.send_document(
+                                chat_id=chat_id,
+                                document=f,
+                                filename=fpath.name,
+                                message_thread_id=thread_id,
+                            )
+                    logger.info("Sent file to Telegram: %s", fpath)
+                except Exception as e:
+                    logger.error("Failed to send file %s: %s", fpath, e)
+            # Strip [SEND_FILE:...] markers from the text
+            msg = NewMessage(
+                session_id=msg.session_id,
+                text=_SEND_FILE_RE.sub("", msg.text).strip(),
+                is_complete=msg.is_complete,
+                content_type=msg.content_type,
+                tool_use_id=msg.tool_use_id,
+                role=msg.role,
+                tool_name=msg.tool_name,
+                file_paths=[],
+            )
+            if not msg.text:
+                continue
+
         parts = build_response_parts(
             msg.text,
             msg.is_complete,
@@ -1113,7 +1288,9 @@ async def post_init(application: Application) -> None:
             config.shared_dir, workspace_dirs, config.recent_memory_days
         )
         if rebuilt:
-            logger.info("Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt)
+            logger.info(
+                "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
+            )
 
     monitor = SessionMonitor()
 
@@ -1193,10 +1370,22 @@ def create_bot() -> Application:
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
     )
-    # Catch-all: non-text content (images, stickers, voice, etc.)
+    # File content: photos, documents, video, audio, voice → download and forward
+    _file_filter = (
+        filters.PHOTO
+        | filters.Document.ALL
+        | filters.VIDEO
+        | filters.AUDIO
+        | filters.VOICE
+    )
+    application.add_handler(MessageHandler(_file_filter, file_handler))
+    # Catch-all: truly unsupported content (stickers, etc.)
     application.add_handler(
         MessageHandler(
-            ~filters.COMMAND & ~filters.TEXT & ~filters.StatusUpdate.ALL,
+            ~filters.COMMAND
+            & ~filters.TEXT
+            & ~filters.StatusUpdate.ALL
+            & ~_file_filter,
             unsupported_content_handler,
         )
     )
