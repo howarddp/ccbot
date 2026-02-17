@@ -104,6 +104,20 @@ class TestDisplayNames:
         assert mgr.get_display_name("@1") == "@1"
 
 
+class TestTopicNames:
+    def test_get_returns_none_by_default(self, mgr: SessionManager) -> None:
+        assert mgr.get_topic_name(42) is None
+
+    def test_set_and_get(self, mgr: SessionManager) -> None:
+        mgr.set_topic_name(42, "my-project")
+        assert mgr.get_topic_name(42) == "my-project"
+
+    def test_update(self, mgr: SessionManager) -> None:
+        mgr.set_topic_name(42, "old-name")
+        mgr.set_topic_name(42, "new-name")
+        assert mgr.get_topic_name(42) == "new-name"
+
+
 class TestIsWindowId:
     def test_valid_ids(self, mgr: SessionManager) -> None:
         assert mgr._is_window_id("@0") is True

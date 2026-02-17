@@ -1,6 +1,6 @@
-"""Tests for topic name caching in bot.topic_created_handler."""
+"""Tests for topic name persistence in bot.topic_created_handler."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,38 +17,37 @@ def _make_update(thread_id, topic_name):
     return update
 
 
-def _make_context(bot_data=None):
-    """Build a minimal context with bot_data."""
+def _make_context():
+    """Build a minimal context."""
     ctx = AsyncMock()
-    ctx.bot_data = bot_data if bot_data is not None else {}
+    ctx.bot_data = {}
     return ctx
 
 
 class TestTopicCreatedHandler:
     @pytest.mark.asyncio
-    async def test_topic_created_handler_caches_name(self):
-        """Verify name stored in bot_data['_topic_names']."""
+    async def test_persists_topic_name(self):
+        """Verify name stored via session_manager.set_topic_name."""
         update = _make_update(thread_id=42, topic_name="my-project")
         context = _make_context()
-        await topic_created_handler(update, context)
-        assert context.bot_data["_topic_names"][42] == "my-project"
+        with patch("baobaobot.bot.session_manager") as mock_sm:
+            await topic_created_handler(update, context)
+            mock_sm.set_topic_name.assert_called_once_with(42, "my-project")
 
     @pytest.mark.asyncio
-    async def test_topic_created_handler_no_name(self):
+    async def test_no_name(self):
         """No crash when topic name is None."""
         update = _make_update(thread_id=42, topic_name=None)
         context = _make_context()
-        await topic_created_handler(update, context)
-        assert "_topic_names" not in context.bot_data or 42 not in context.bot_data.get(
-            "_topic_names", {}
-        )
+        with patch("baobaobot.bot.session_manager") as mock_sm:
+            await topic_created_handler(update, context)
+            mock_sm.set_topic_name.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_topic_created_handler_no_thread_id(self):
+    async def test_no_thread_id(self):
         """No crash when thread_id is None."""
         update = _make_update(thread_id=None, topic_name="some-name")
         context = _make_context()
-        await topic_created_handler(update, context)
-        assert "_topic_names" not in context.bot_data or None not in context.bot_data.get(
-            "_topic_names", {}
-        )
+        with patch("baobaobot.bot.session_manager") as mock_sm:
+            await topic_created_handler(update, context)
+            mock_sm.set_topic_name.assert_not_called()

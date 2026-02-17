@@ -390,15 +390,14 @@ def _build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
 async def topic_created_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Cache topic name when a new topic is created."""
+    """Persist topic name when a new topic is created."""
     if not update.message or not update.message.forum_topic_created:
         return
     ftc = update.message.forum_topic_created
     thread_id = update.message.message_thread_id
     if thread_id and ftc.name:
-        topic_names: dict[int, str] = context.bot_data.setdefault("_topic_names", {})
-        topic_names[thread_id] = ftc.name
-        logger.debug("Cached topic name: thread=%d, name=%s", thread_id, ftc.name)
+        session_manager.set_topic_name(thread_id, ftc.name)
+        logger.debug("Persisted topic name: thread=%d, name=%s", thread_id, ftc.name)
 
 
 async def topic_closed_handler(
@@ -616,9 +615,8 @@ async def _auto_create_session(
     if not update.message:
         return
 
-    # Resolve topic name
-    topic_names: dict[int, str] = context.bot_data.get("_topic_names", {})
-    topic_name = topic_names.get(thread_id, f"topic-{thread_id}")
+    # Resolve topic name (persisted in state.json, survives restarts)
+    topic_name = session_manager.get_topic_name(thread_id) or f"topic-{thread_id}"
 
     # Create per-topic workspace
     workspace_path = config.workspace_dir_for(topic_name)

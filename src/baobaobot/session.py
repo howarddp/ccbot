@@ -116,6 +116,8 @@ class SessionManager:
     group_chat_ids: dict[str, int] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
+    # thread_id -> topic_name (persisted so topic names survive restarts)
+    topic_names: dict[int, str] = field(default_factory=dict)
 
     # Reverse index: (user_id, window_id) -> thread_id for O(1) inbound lookups
     _window_to_thread: dict[tuple[int, str], int] = field(
@@ -145,6 +147,7 @@ class SessionManager:
             },
             "group_chat_ids": self.group_chat_ids,
             "window_display_names": self.window_display_names,
+            "topic_names": {str(tid): name for tid, name in self.topic_names.items()},
         }
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
@@ -176,6 +179,10 @@ class SessionManager:
                 }
                 self.group_chat_ids = state.get("group_chat_ids", {})
                 self.window_display_names = state.get("window_display_names", {})
+                self.topic_names = {
+                    int(tid): name
+                    for tid, name in state.get("topic_names", {}).items()
+                }
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -208,6 +215,7 @@ class SessionManager:
                 self.thread_bindings = {}
                 self.group_chat_ids = {}
                 self.window_display_names = {}
+                self.topic_names = {}
                 self._needs_migration = False
         else:
             self._needs_migration = False
@@ -382,6 +390,18 @@ class SessionManager:
             del session_map[key]
         atomic_write_json(config.session_map_file, session_map)
         logger.info("Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys)
+
+    # --- Topic name management ---
+
+    def get_topic_name(self, thread_id: int) -> str | None:
+        """Get persisted topic name for a thread_id."""
+        return self.topic_names.get(thread_id)
+
+    def set_topic_name(self, thread_id: int, name: str) -> None:
+        """Persist a topic name for a thread_id."""
+        if self.topic_names.get(thread_id) != name:
+            self.topic_names[thread_id] = name
+            self._save_state()
 
     # --- Display name management ---
 
