@@ -39,6 +39,32 @@ class SessionInfo:
 
 
 _SEND_FILE_RE = re.compile(r"\[SEND_FILE:([^\]]+)\]")
+_SENDABLE_EXTENSIONS = {
+    # Images
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    # Documents
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".xls",
+    ".pptx",
+    ".ppt",
+    ".doc",
+    ".csv",
+    ".txt",
+    ".rtf",
+    # Archives
+    ".zip",
+    ".tar",
+    ".gz",
+    ".7z",
+    ".rar",
+}
+_READ_PATH_RE = re.compile(r"\*\*Read\*\*\((.+)\)")
 
 
 @dataclass
@@ -336,6 +362,13 @@ class SessionMonitor:
                     file_paths: list[str] = []
                     if entry.role == "assistant" and entry.content_type == "text":
                         file_paths = _SEND_FILE_RE.findall(entry.text)
+                    # Auto-send images when Claude Code reads them via Read tool
+                    if entry.content_type == "tool_use" and entry.tool_name == "Read":
+                        m = _READ_PATH_RE.match(entry.text)
+                        if m:
+                            p = Path(m.group(1))
+                            if p.suffix.lower() in _SENDABLE_EXTENSIONS:
+                                file_paths.append(str(p))
                     new_messages.append(
                         NewMessage(
                             session_id=session_info.session_id,
