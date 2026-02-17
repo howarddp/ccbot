@@ -5,7 +5,7 @@ Manages the key mappings:
   User→Thread→Window (thread_bindings): topic-to-window bindings (1 topic = 1 window_id).
 
 Responsibilities:
-  - Persist/load state to ~/.ccbot/state.json.
+  - Persist/load state to ~/.baobao/state.json.
   - Sync window↔session bindings from session_map.json (written by hook).
   - Resolve window IDs to ClaudeSession objects (JSONL file reading).
   - Track per-user read offsets for unread-message detection.
@@ -438,7 +438,7 @@ class SessionManager:
     async def load_session_map(self) -> None:
         """Read session_map.json and update window_states with new session associations.
 
-        Keys in session_map are formatted as "tmux_session:window_id" (e.g. "ccbot:@12").
+        Keys in session_map are formatted as "tmux_session:window_id" (e.g. "baobao:@12").
         Only entries matching our tmux_session_name are processed.
         Also cleans up window_states entries not in current session_map.
         Updates window_display_names from the "window_name" field in values.
@@ -518,7 +518,7 @@ class SessionManager:
         """Build the direct file path for a session from session_id and cwd."""
         if not session_id or not cwd:
             return None
-        # Encode cwd: /data/code/ccbot -> -data-code-ccbot
+        # Encode cwd: /data/code/baobao -> -data-code-baobao
         encoded_cwd = cwd.replace("/", "-")
         return config.claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
 

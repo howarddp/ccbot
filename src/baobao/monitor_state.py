@@ -1,7 +1,7 @@
 """Monitor state persistence — tracks byte offsets for each session.
 
 Persists TrackedSession records (session_id, file_path, last_byte_offset)
-to ~/.ccbot/monitor_state.json so the session monitor can resume
+to ~/.baobao/monitor_state.json so the session monitor can resume
 incremental reading after restarts without re-sending old messages.
 
 Key classes: MonitorState, TrackedSession.

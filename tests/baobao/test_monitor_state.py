@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ccbot.monitor_state import MonitorState, TrackedSession
+from baobao.monitor_state import MonitorState, TrackedSession
 
 
 class TestTrackedSession:
@@ -69,7 +69,7 @@ class TestMonitorStateSave:
         def fake_write(path, data, indent=2):
             calls.append((path, data))
 
-        monkeypatch.setattr("ccbot.utils.atomic_write_json", fake_write)
+        monkeypatch.setattr("baobao.utils.atomic_write_json", fake_write)
         state.save()
         assert len(calls) == 1
         path, data = calls[0]
@@ -129,7 +129,7 @@ class TestSaveIfDirty:
         def fake_write(*_args, **_kwargs):
             saved.append(True)
 
-        monkeypatch.setattr("ccbot.utils.atomic_write_json", fake_write)
+        monkeypatch.setattr("baobao.utils.atomic_write_json", fake_write)
         state.save_if_dirty()
         assert len(saved) == 1
 
@@ -140,6 +140,6 @@ class TestSaveIfDirty:
         def fake_write(*_args, **_kwargs):
             saved.append(True)
 
-        monkeypatch.setattr("ccbot.utils.atomic_write_json", fake_write)
+        monkeypatch.setattr("baobao.utils.atomic_write_json", fake_write)
         state.save_if_dirty()
         assert len(saved) == 0

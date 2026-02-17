@@ -1,59 +1,95 @@
 # CLAUDE.md
 
-ccmux — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows. Each topic is bound to one tmux window running one Claude Code instance.
+BaoBaoClaude — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows, with persistent personality (SOUL.md), identity (IDENTITY.md), user profiles (USER.md), and memory (MEMORY.md + daily memories).
 
-Tech stack: Python, python-telegram-bot, tmux, uv.
+Built on CCBot. All intelligence stays in Claude Code; BaoBaoClaude handles file management, workspace assembly, and Telegram UI.
+
+**Architecture philosophy**: Operates on tmux, not the Claude Code SDK. The Claude Code process stays in a tmux window; BaoBaoClaude reads output and sends keystrokes. Users can seamlessly switch between desktop terminal and Telegram.
+
+Tech stack: Python, python-telegram-bot, tmux, uv, SQLite.
 
 ## Common Commands
 
 ```bash
-uv run ruff check src/ tests/         # Lint — MUST pass before committing
-uv run ruff format src/ tests/        # Format — auto-fix, then verify with --check
-uv run pyright src/ccbot/             # Type check — MUST be 0 errors before committing
-./scripts/restart.sh                  # Restart the ccbot service after code changes
-ccbot hook --install                  # Auto-install Claude Code SessionStart hook
+# Linting & Formatting (MUST pass before committing)
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+
+# Type Checking
+uv run pyright src/baobao/
+
+# Testing
+uv run pytest                              # All tests
+uv run pytest tests/baobao/               # Unit tests only
+uv run pytest tests/baobao/workspace/     # Workspace tests
+uv run pytest tests/baobao/persona/       # Persona tests
+uv run pytest tests/baobao/memory/        # Memory tests
+uv run pytest -v -k "test_name"           # Specific test
+
+# Development
+baobao init                                # Initialize workspace
+baobao hook --install                      # Install Claude Code hook
+uv sync                                    # Install dependencies
+```
+
+## Project Structure
+
+```
+src/baobao/
+├── main.py                  # CLI entry: hook / init / bot start
+├── config.py                # Config singleton (workspace settings added)
+├── bot.py                   # Telegram bot (new: /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild)
+├── workspace/               # Workspace system
+│   ├── manager.py           # Directory init, project linking, bin/ script install
+│   ├── assembler.py         # CLAUDE.md assembly from source files
+│   ├── bin/                 # Scripts deployed to ~/.baobao/bin/
+│   │   ├── memory-search    # SQLite memory search (used by Claude Code)
+│   │   └── memory-list      # List recent daily memories
+│   └── templates/           # Default SOUL.md, IDENTITY.md, USER.md, AGENTS.md, MEMORY.md
+├── persona/                 # Persona system
+│   ├── soul.py              # SOUL.md read/write
+│   ├── identity.py          # IDENTITY.md parse/update (AgentIdentity)
+│   └── profile.py           # USER.md parse/update (UserProfile)
+├── memory/                  # Memory system
+│   ├── db.py                # SQLite index (sync .md → SQLite, search, stats)
+│   ├── manager.py           # MemoryManager (list, search via SQLite, cleanup)
+│   ├── daily.py             # Daily memory file operations
+│   └── search.py            # Legacy plain-text search (fallback)
+├── handlers/                # Telegram handlers
+│   ├── persona_handler.py   # /soul, /identity commands
+│   ├── profile_handler.py   # /profile command
+│   └── memory_handler.py    # /memory, /forget commands
+└── (inherited from ccbot)   # session.py, tmux_manager.py, hook.py, etc.
+```
+
+## Directory Layout
+
+```
+~/.baobao/                   # Root (BAOBAO_DIR)
+├── .env                     # Bot configuration
+├── state.json               # Bot state (thread bindings, window states)
+├── session_map.json         # Hook-generated window→session mapping
+├── monitor_state.json       # Poll progress per JSONL file
+├── bin/                     # Memory tools (shared across workspaces)
+│   ├── memory-search        # SQLite-backed memory search
+│   └── memory-list          # List recent daily memories
+└── workspace/               # Default workspace (WORKSPACE_DIR)
+    ├── CLAUDE.md            # Auto-assembled (persona + memory)
+    ├── SOUL.md              # Personality definition
+    ├── IDENTITY.md          # Agent identity (name, emoji, role)
+    ├── USER.md              # User profile
+    ├── AGENTS.md            # Work instructions + memory tool usage
+    ├── MEMORY.md            # Long-term memory
+    ├── memory/              # Daily memories (YYYY-MM-DD.md)
+    ├── memory.db            # SQLite index of memory files
+    └── projects/            # Symlinked project directories
 ```
 
 ## Core Design Constraints
 
-- **1 Topic = 1 Window = 1 Session** — all internal routing keyed by tmux window ID (`@0`, `@12`), not window name. Window names kept as display names. Same directory can have multiple windows.
-- **Topic-only** — no backward-compat for non-topic mode. No `active_sessions`, no `/list`, no General topic routing.
-- **No message truncation** at parse layer — splitting only at send layer (`split_message`, 4096 char limit).
-- **MarkdownV2 only** — use `safe_reply`/`safe_edit`/`safe_send` helpers (auto fallback to plain text). Internal queue/UI code calls bot API directly with its own fallback.
-- **Hook-based session tracking** — `SessionStart` hook writes `session_map.json`; monitor polls it to detect session changes.
-- **Message queue per user** — FIFO ordering, message merging (3800 char limit), tool_use/tool_result pairing.
-- **Rate limiting** — 1.1s minimum interval between messages per user via `rate_limit_send()`.
-
-## Code Conventions
-
-- Every `.py` file starts with a module-level docstring: purpose clear within 10 lines, one-sentence summary first line, then core responsibilities and key components.
-- Telegram interaction: prefer inline keyboards over reply keyboards; use `edit_message_text` for in-place updates; keep callback data under 64 bytes; use `answer_callback_query` for instant feedback.
-
-## Configuration
-
-- Config directory: `~/.ccbot/` by default, override with `CCBOT_DIR` env var.
-- `.env` loading priority: local `.env` > config dir `.env`.
-- State files: `state.json` (thread bindings), `session_map.json` (hook-generated), `monitor_state.json` (byte offsets).
-
-## Hook Configuration
-
-Auto-install: `ccbot hook --install`
-
-Or manually in `~/.claude/settings.json`:
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [{ "type": "command", "command": "ccbot hook", "timeout": 5 }]
-      }
-    ]
-  }
-}
-```
-
-## Architecture Details
-
-See @.claude/rules/architecture.md for full system diagram and module inventory.
-See @.claude/rules/topic-architecture.md for topic→window→session mapping details.
-See @.claude/rules/message-handling.md for message queue, merging, and rate limiting.
+- **No LLM calls in Python** — all intelligence in Claude Code, BaoBaoClaude manages files only
+- **1 Topic = 1 Window = 1 Session** — all routing keyed by tmux window ID
+- **CLAUDE.md assembly** — auto-composed from SOUL/IDENTITY/USER/AGENTS/MEMORY files
+- **Two-layer memory** — MEMORY.md (long-term, curated) + memory/*.md (daily, auto)
+- **SQLite memory index** — .md files are source of truth; SQLite provides fast search via lazy sync
+- **Skill-based memory access** — Claude Code uses `~/.baobao/bin/memory-search` to query memories

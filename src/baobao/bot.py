@@ -1,10 +1,11 @@
-"""Telegram bot handlers — the main UI layer of CCBot.
+"""Telegram bot handlers — the main UI layer of BaoBaoClaude.
 
 Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
   - Command handlers: /start, /history, /screenshot, /esc, /kill,
+    /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: directory browser, history pagination,
     interactive UI navigation, screenshot refresh.
@@ -24,6 +25,9 @@ Handler modules (in handlers/):
   - interactive_ui: Interactive UI handling
   - status_polling: Terminal status polling
   - response_builder: Response message building
+  - persona_handler: /soul, /identity commands
+  - profile_handler: /profile command
+  - memory_handler: /memory, /forget commands
 
 Key functions: create_bot(), handle_new_message().
 """
@@ -120,6 +124,16 @@ from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
 from .terminal_parser import extract_bash_output
 from .tmux_manager import tmux_manager
+from .handlers.persona_handler import (
+    cancel_command,
+    handle_edit_mode_message,
+    identity_command,
+    soul_command,
+)
+from .handlers.profile_handler import profile_command
+from .handlers.memory_handler import forget_command, memory_command
+from .workspace.assembler import ClaudeMdAssembler
+from .workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +149,6 @@ CC_COMMANDS: dict[str, str] = {
     "compact": "↗ Compact conversation context",
     "cost": "↗ Show token/cost usage",
     "help": "↗ Show Claude Code help",
-    "memory": "↗ Edit CLAUDE.md",
 }
 
 
@@ -252,6 +265,68 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Send Escape control character (no enter)
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
+
+
+# --- Workspace commands ---
+
+
+async def workspace_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show workspace status or link a project directory."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    text = (update.message.text or "").strip()
+    parts = text.split(maxsplit=2)
+
+    wm = WorkspaceManager(config.workspace_dir)
+
+    # /workspace link <path>
+    if len(parts) >= 3 and parts[1].lower() == "link":
+        project_path = parts[2]
+        try:
+            link_path = wm.ensure_project(project_path)
+            await safe_reply(
+                update.message, f"✅ 已連結專案: {link_path.name} → {project_path}"
+            )
+        except ValueError as e:
+            await safe_reply(update.message, f"❌ {e}")
+        return
+
+    # /workspace — show status
+    projects = wm.list_projects()
+    lines = [
+        "📁 **Workspace**\n",
+        f"路徑: `{config.workspace_dir}`\n",
+    ]
+    if projects:
+        lines.append(f"專案 ({len(projects)}):")
+        for p in projects:
+            lines.append(f"  • {p}")
+    else:
+        lines.append("尚無連結的專案。")
+
+    lines.append("\n使用 `/workspace link <path>` 連結專案")
+    await safe_reply(update.message, "\n".join(lines))
+
+
+async def rebuild_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Manually rebuild CLAUDE.md from workspace source files."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    assembler = ClaudeMdAssembler(config.workspace_dir, config.recent_memory_days)
+    assembler.write()
+    await safe_reply(update.message, "✅ CLAUDE.md 已重新組裝。")
 
 
 # --- Screenshot keyboard with quick control keys ---
@@ -520,6 +595,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     text = update.message.text
+
+    # Check if user is in persona edit mode (e.g. /soul edit)
+    if await handle_edit_mode_message(update, context):
+        return
 
     # Ignore text in window picker mode (only for the same thread)
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_WINDOW:
@@ -1329,12 +1408,26 @@ async def post_init(application: Application) -> None:
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
         BotCommand("kill", "Kill session and delete topic"),
+        BotCommand("soul", "View/edit personality (SOUL.md)"),
+        BotCommand("identity", "View/set identity fields"),
+        BotCommand("profile", "View/set user profile"),
+        BotCommand("memory", "List/view/search memories"),
+        BotCommand("forget", "Delete memory entries"),
+        BotCommand("workspace", "Workspace status & project linking"),
+        BotCommand("rebuild", "Rebuild CLAUDE.md"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
         bot_commands.append(BotCommand(cmd_name, desc))
 
     await application.bot.set_my_commands(bot_commands)
+
+    # Auto-assemble CLAUDE.md if enabled
+    if config.auto_assemble:
+        assembler = ClaudeMdAssembler(config.workspace_dir, config.recent_memory_days)
+        if assembler.needs_rebuild():
+            assembler.write()
+            logger.info("Auto-assembled CLAUDE.md on startup")
 
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await session_manager.resolve_stale_ids()
@@ -1388,6 +1481,15 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
+    # BaoBao persona/memory/workspace commands
+    application.add_handler(CommandHandler("soul", soul_command))
+    application.add_handler(CommandHandler("identity", identity_command))
+    application.add_handler(CommandHandler("profile", profile_command))
+    application.add_handler(CommandHandler("memory", memory_command))
+    application.add_handler(CommandHandler("forget", forget_command))
+    application.add_handler(CommandHandler("workspace", workspace_command))
+    application.add_handler(CommandHandler("rebuild", rebuild_command))
+    application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

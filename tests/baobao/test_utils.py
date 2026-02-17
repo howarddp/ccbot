@@ -1,21 +1,21 @@
-"""Tests for ccbot.utils: ccbot_dir, atomic_write_json, read_cwd_from_jsonl."""
+"""Tests for baobao.utils: baobao_dir, atomic_write_json, read_cwd_from_jsonl."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from ccbot.utils import atomic_write_json, ccbot_dir, read_cwd_from_jsonl
+from baobao.utils import atomic_write_json, baobao_dir, read_cwd_from_jsonl
 
 
-class TestCcbotDir:
+class TestBaobaoDir:
     def test_returns_env_var_path(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("CCBOT_DIR", "/custom/config")
-        assert ccbot_dir() == Path("/custom/config")
+        monkeypatch.setenv("BAOBAO_DIR", "/custom/config")
+        assert baobao_dir() == Path("/custom/config")
 
     def test_returns_default_without_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("CCBOT_DIR", raising=False)
-        assert ccbot_dir() == Path.home() / ".ccbot"
+        monkeypatch.delenv("BAOBAO_DIR", raising=False)
+        assert baobao_dir() == Path.home() / ".baobao"
 
 
 class TestAtomicWriteJson:

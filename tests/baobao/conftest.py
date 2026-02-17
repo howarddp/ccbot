@@ -1,4 +1,4 @@
-"""Shared fixtures for ccbot unit tests.
+"""Shared fixtures for baobao unit tests.
 
 Provides factories for building JSONL entries, content blocks,
 and sample pane text for terminal parser tests.

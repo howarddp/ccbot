@@ -1,8 +1,8 @@
-"""Tests for ccbot.transcript_parser — pure logic, no I/O."""
+"""Tests for baobao.transcript_parser — pure logic, no I/O."""
 
 import pytest
 
-from ccbot.transcript_parser import (
+from baobao.transcript_parser import (
     ParsedMessage,
     TranscriptParser,
 )

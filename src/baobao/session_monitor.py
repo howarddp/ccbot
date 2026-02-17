@@ -351,7 +351,7 @@ class SessionMonitor:
         """Load current session_map and return window_key -> session_id mapping.
 
         Keys in session_map are formatted as "tmux_session:window_id"
-        (e.g. "ccbot:@12"). Old-format keys ("ccbot:window_name") are also
+        (e.g. "baobao:@12"). Old-format keys ("baobao:window_name") are also
         accepted so that sessions running before a code upgrade continue
         to be monitored until the hook re-fires with new format.
         Only entries matching our tmux_session_name are processed.

@@ -2,7 +2,7 @@
 
 import pytest
 
-from ccbot.config import Config
+from baobao.config import Config
 
 
 @pytest.fixture

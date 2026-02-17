@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from ccbot.hook import _UUID_RE, _is_hook_installed, hook_main
+from baobao.hook import _UUID_RE, _is_hook_installed, hook_main
 
 
 class TestUuidRegex:
@@ -43,7 +43,7 @@ class TestIsHookInstalled:
                 "SessionStart": [
                     {
                         "hooks": [
-                            {"type": "command", "command": "ccbot hook", "timeout": 5}
+                            {"type": "command", "command": "baobao hook", "timeout": 5}
                         ]
                     }
                 ]
@@ -72,7 +72,7 @@ class TestIsHookInstalled:
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": "/usr/bin/ccbot hook",
+                                "command": "/usr/bin/baobao hook",
                                 "timeout": 5,
                             }
                         ]
@@ -87,7 +87,7 @@ class TestHookMainValidation:
     def _run_hook_main(
         self, monkeypatch: pytest.MonkeyPatch, payload: dict, *, tmux_pane: str = ""
     ) -> None:
-        monkeypatch.setattr(sys, "argv", ["ccbot", "hook"])
+        monkeypatch.setattr(sys, "argv", ["baobao", "hook"])
         monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
         if tmux_pane:
             monkeypatch.setenv("TMUX_PANE", tmux_pane)

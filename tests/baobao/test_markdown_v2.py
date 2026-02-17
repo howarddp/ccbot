@@ -2,8 +2,8 @@
 
 import pytest
 
-from ccbot.markdown_v2 import _escape_mdv2, convert_markdown
-from ccbot.transcript_parser import TranscriptParser
+from baobao.markdown_v2 import _escape_mdv2, convert_markdown
+from baobao.transcript_parser import TranscriptParser
 
 EXP_START = TranscriptParser.EXPANDABLE_QUOTE_START
 EXP_END = TranscriptParser.EXPANDABLE_QUOTE_END

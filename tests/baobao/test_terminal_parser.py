@@ -2,7 +2,7 @@
 
 import pytest
 
-from ccbot.terminal_parser import (
+from baobao.terminal_parser import (
     extract_bash_output,
     extract_interactive_content,
     is_interactive_ui,

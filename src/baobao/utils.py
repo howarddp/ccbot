@@ -1,7 +1,7 @@
-"""Shared utility functions used across multiple CCBot modules.
+"""Shared utility functions used across multiple BaoBaoClaude modules.
 
 Provides:
-  - ccbot_dir(): resolve config directory from CCBOT_DIR env var.
+  - baobao_dir(): resolve config directory from BAOBAO_DIR env var.
   - atomic_write_json(): crash-safe JSON file writes via temp+rename.
   - read_cwd_from_jsonl(): extract the cwd field from the first JSONL entry.
 """
@@ -12,13 +12,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-CCBOT_DIR_ENV = "CCBOT_DIR"
+BAOBAO_DIR_ENV = "BAOBAO_DIR"
 
 
-def ccbot_dir() -> Path:
-    """Resolve config directory from CCBOT_DIR env var or default ~/.ccbot."""
-    raw = os.environ.get(CCBOT_DIR_ENV, "")
-    return Path(raw) if raw else Path.home() / ".ccbot"
+def baobao_dir() -> Path:
+    """Resolve config directory from BAOBAO_DIR env var or default ~/.baobao."""
+    raw = os.environ.get(BAOBAO_DIR_ENV, "")
+    return Path(raw) if raw else Path.home() / ".baobao"
 
 
 def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:

@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""List recent BaoBao daily memories.
+
+Usage:
+    memory-list [--days N] [--workspace PATH]
+
+Examples:
+    memory-list
+    memory-list --days 30
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+
+def resolve_workspace() -> Path:
+    """Resolve workspace directory from env or default."""
+    raw = os.environ.get("WORKSPACE_DIR", "")
+    if raw:
+        return Path(raw).expanduser()
+    baobao_dir = os.environ.get("BAOBAO_DIR", "")
+    if baobao_dir:
+        return Path(baobao_dir) / "workspace"
+    return Path.home() / ".baobao" / "workspace"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="List recent BaoBao memories")
+    parser.add_argument("--days", type=int, default=7, help="List last N days (default: 7)")
+    parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
+    args = parser.parse_args()
+
+    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
+
+    if not workspace.exists():
+        print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from baobao.memory.db import MemoryDB
+
+    db = MemoryDB(workspace)
+    dates = db.list_dates(days=args.days)
+    stats = db.get_stats()
+
+    if not dates:
+        print("No daily memories found.")
+    else:
+        print("📅 Recent memories:\n")
+        for entry in dates:
+            print(f"  {entry['date']}  ({entry['line_count']} lines)")
+
+    print(f"\n📊 Total: {stats['daily_count']} days, {stats['total_lines']} lines indexed")
+    if stats["has_longterm"]:
+        print("   MEMORY.md: ✓")
+
+    db.close()
+
+
+if __name__ == "__main__":
+    main()

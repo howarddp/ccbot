@@ -1,9 +1,10 @@
 """Application entry point — CLI dispatcher and bot bootstrap.
 
-Handles two execution modes:
-  1. `ccbot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. Default — configures logging, initializes tmux session, and starts the
-     Telegram bot polling loop via bot.create_bot().
+Handles three execution modes:
+  1. `baobao hook` — delegates to hook.hook_main() for Claude Code hook processing.
+  2. `baobao init` — initializes workspace directory with default templates.
+  3. Default — configures logging, initializes workspace + tmux session, and starts
+     the Telegram bot polling loop via bot.create_bot().
 """
 
 import logging
@@ -18,6 +19,16 @@ def main() -> None:
         hook_main()
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        # Standalone workspace initialization
+        from .workspace.manager import WorkspaceManager
+        from .config import config
+
+        wm = WorkspaceManager(config.workspace_dir)
+        wm.init()
+        print(f"Workspace initialized at {config.workspace_dir}")
+        return
+
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.WARNING,
@@ -27,9 +38,9 @@ def main() -> None:
     try:
         from .config import config
     except ValueError as e:
-        from .utils import ccbot_dir
+        from .utils import baobao_dir
 
-        config_dir = ccbot_dir()
+        config_dir = baobao_dir()
         env_path = config_dir / ".env"
         print(f"Error: {e}\n")
         print(f"Create {env_path} with the following content:\n")
@@ -40,8 +51,15 @@ def main() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
-    logging.getLogger("ccbot").setLevel(logging.DEBUG)
+    logging.getLogger("baobao").setLevel(logging.DEBUG)
     logger = logging.getLogger(__name__)
+
+    # Initialize workspace on startup
+    from .workspace.manager import WorkspaceManager
+
+    wm = WorkspaceManager(config.workspace_dir)
+    wm.init()
+    logger.info("Workspace ready at %s", config.workspace_dir)
 
     from .tmux_manager import tmux_manager
 

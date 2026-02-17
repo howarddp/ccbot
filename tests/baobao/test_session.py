@@ -2,7 +2,7 @@
 
 import pytest
 
-from ccbot.session import SessionManager
+from baobao.session import SessionManager
 
 
 @pytest.fixture

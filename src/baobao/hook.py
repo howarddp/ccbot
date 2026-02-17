@@ -1,12 +1,12 @@
 """Hook subcommand for Claude Code session tracking.
 
 Called by Claude Code's SessionStart hook to maintain a window↔session
-mapping in <CCBOT_DIR>/session_map.json. Also provides `--install` to
+mapping in <BAOBAO_DIR>/session_map.json. Also provides `--install` to
 auto-configure the hook in ~/.claude/settings.json.
 
 This module must NOT import config.py (which requires TELEGRAM_BOT_TOKEN),
 since hooks run inside tmux panes where bot env vars are not set.
-Config directory resolution uses utils.ccbot_dir() (shared with config.py).
+Config directory resolution uses utils.baobao_dir() (shared with config.py).
 
 Key functions: hook_main() (CLI entry), _install_hook().
 """
@@ -30,36 +30,36 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 
 # The hook command suffix for detection
-_HOOK_COMMAND_SUFFIX = "ccbot hook"
+_HOOK_COMMAND_SUFFIX = "baobao hook"
 
 
-def _find_ccbot_path() -> str:
-    """Find the full path to the ccbot executable.
+def _find_baobao_path() -> str:
+    """Find the full path to the baobao executable.
 
     Priority:
-    1. shutil.which("ccbot") - if ccbot is in PATH
+    1. shutil.which("baobao") - if baobao is in PATH
     2. Same directory as the Python interpreter (for venv installs)
     """
     # Try PATH first
-    ccbot_path = shutil.which("ccbot")
-    if ccbot_path:
-        return ccbot_path
+    baobao_path = shutil.which("baobao")
+    if baobao_path:
+        return baobao_path
 
     # Fall back to the directory containing the Python interpreter
-    # This handles the case where ccbot is installed in a venv
+    # This handles the case where baobao is installed in a venv
     python_dir = Path(sys.executable).parent
-    ccbot_in_venv = python_dir / "ccbot"
-    if ccbot_in_venv.exists():
-        return str(ccbot_in_venv)
+    baobao_in_venv = python_dir / "baobao"
+    if baobao_in_venv.exists():
+        return str(baobao_in_venv)
 
     # Last resort: assume it will be in PATH
-    return "ccbot"
+    return "baobao"
 
 
 def _is_hook_installed(settings: dict) -> bool:
-    """Check if ccbot hook is already installed in the settings.
+    """Check if baobao hook is already installed in the settings.
 
-    Detects both 'ccbot hook' and full paths like '/path/to/ccbot hook'.
+    Detects both 'baobao hook' and full paths like '/path/to/baobao hook'.
     """
     hooks = settings.get("hooks", {})
     session_start = hooks.get("SessionStart", [])
@@ -72,14 +72,14 @@ def _is_hook_installed(settings: dict) -> bool:
             if not isinstance(h, dict):
                 continue
             cmd = h.get("command", "")
-            # Match 'ccbot hook' or paths ending with 'ccbot hook'
+            # Match 'baobao hook' or paths ending with 'baobao hook'
             if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
                 return True
     return False
 
 
 def _install_hook() -> int:
-    """Install the ccbot hook into Claude's settings.json.
+    """Install the baobao hook into Claude's settings.json.
 
     Returns 0 on success, 1 on error.
     """
@@ -102,9 +102,9 @@ def _install_hook() -> int:
         print(f"Hook already installed in {settings_file}")
         return 0
 
-    # Find the full path to ccbot
-    ccbot_path = _find_ccbot_path()
-    hook_command = f"{ccbot_path} hook"
+    # Find the full path to baobao
+    baobao_path = _find_baobao_path()
+    hook_command = f"{baobao_path} hook"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
     logger.info("Installing hook command: %s", hook_command)
 
@@ -141,7 +141,7 @@ def hook_main() -> None:
     )
 
     parser = argparse.ArgumentParser(
-        prog="ccbot hook",
+        prog="baobao hook",
         description="Claude Code session tracking hook",
     )
     parser.add_argument(
@@ -228,9 +228,9 @@ def hook_main() -> None:
     )
 
     # Read-modify-write with file locking to prevent concurrent hook races
-    from .utils import ccbot_dir
+    from .utils import baobao_dir
 
-    map_file = ccbot_dir() / "session_map.json"
+    map_file = baobao_dir() / "session_map.json"
     map_file.parent.mkdir(parents=True, exist_ok=True)
 
     lock_path = map_file.with_suffix(".lock")

@@ -1,8 +1,8 @@
 """Application configuration — reads env vars and exposes a singleton.
 
-Loads TELEGRAM_BOT_TOKEN, ALLOWED_USERS, tmux/Claude paths, and
-monitoring intervals from environment variables (with .env support).
-.env loading priority: local .env (cwd) > $CCBOT_DIR/.env (default ~/.ccbot).
+Loads TELEGRAM_BOT_TOKEN, ALLOWED_USERS, tmux/Claude paths, workspace settings,
+and monitoring intervals from environment variables (with .env support).
+.env loading priority: local .env (cwd) > $BAOBAO_DIR/.env (default ~/.baobao).
 The module-level `config` instance is imported by nearly every other module.
 
 Key class: Config (singleton instantiated as `config`).
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .utils import ccbot_dir
+from .utils import baobao_dir
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class Config:
     """Application configuration loaded from environment variables."""
 
     def __init__(self) -> None:
-        self.config_dir = ccbot_dir()
+        self.config_dir = baobao_dir()
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
         # Load .env: local (cwd) takes priority over config_dir
@@ -55,7 +55,7 @@ class Config:
             ) from e
 
         # Tmux session name and window naming
-        self.tmux_session_name = os.getenv("TMUX_SESSION_NAME", "ccbot")
+        self.tmux_session_name = os.getenv("TMUX_SESSION_NAME", "baobao")
         self.tmux_main_window_name = "__main__"
 
         # Claude command to run in new windows
@@ -73,6 +73,21 @@ class Config:
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = True
+
+        # BaoBao Workspace settings
+        workspace_raw = os.getenv("WORKSPACE_DIR", "")
+        self.workspace_dir = (
+            Path(workspace_raw).expanduser()
+            if workspace_raw
+            else self.config_dir / "workspace"
+        )
+        self.memory_keep_days = int(os.getenv("MEMORY_KEEP_DAYS", "30"))
+        self.recent_memory_days = int(os.getenv("RECENT_MEMORY_DAYS", "7"))
+        self.auto_assemble = os.getenv("AUTO_ASSEMBLE", "true").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
