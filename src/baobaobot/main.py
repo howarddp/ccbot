@@ -2,10 +2,10 @@
 
 Handles four execution modes:
   1. `baobaobot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. `baobaobot init` — initializes workspace directory with default templates.
-  3. `baobaobot setup` — interactive first-time setup (create .env, init workspace,
+  2. `baobaobot init` — initializes shared files (persona + bin scripts).
+  3. `baobaobot setup` — interactive first-time setup (create .env, init shared,
      install hook).
-  4. Default — configures logging, initializes workspace + tmux session, and starts
+  4. Default — configures logging, initializes shared files + tmux session, and starts
      the Telegram bot polling loop via bot.create_bot().
 
 By default, the bot auto-launches inside a tmux session so it survives terminal
@@ -34,6 +34,21 @@ def _setup() -> None:
             return
 
     print("=== BaoBaoClaude Setup ===\n")
+
+    # Allow custom BAOBAOBOT_DIR
+    custom_dir = input(
+        f"Config directory [{config_dir}]: "
+    ).strip()
+    if custom_dir:
+        custom_path = os.path.expanduser(custom_dir)
+        os.environ["BAOBAOBOT_DIR"] = custom_path
+        config_dir = baobaobot_dir()
+        env_file = config_dir / ".env"
+
+        from .utils import save_dir_pointer
+
+        save_dir_pointer(config_dir)
+        print("Custom path saved to ~/.config/baobaobot/dir")
 
     token = input("Telegram Bot Token (from @BotFather): ").strip()
     if not token:
@@ -72,15 +87,15 @@ def _setup() -> None:
     os.environ["ALLOWED_USERS"] = users
     os.environ["CLAUDE_COMMAND"] = claude_cmd
 
-    # Init workspace
+    # Init shared files
     from .config import Config
 
     cfg = Config()
     from .workspace.manager import WorkspaceManager
 
-    wm = WorkspaceManager(cfg.workspace_dir)
-    wm.init()
-    print(f"Workspace initialized at {cfg.workspace_dir}")
+    wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
+    wm.init_shared()
+    print(f"Shared files initialized at {cfg.shared_dir}")
 
     # Install hook
     from .hook import _install_hook
@@ -168,13 +183,13 @@ def main() -> None:
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "init":
-        # Standalone workspace initialization
+        # Standalone shared-files initialization
         from .config import config
         from .workspace.manager import WorkspaceManager
 
-        wm = WorkspaceManager(config.workspace_dir)
-        wm.init()
-        print(f"Workspace initialized at {config.workspace_dir}")
+        wm = WorkspaceManager(config.shared_dir, config.shared_dir)
+        wm.init_shared()
+        print(f"Shared files initialized at {config.shared_dir}")
 
         # Suggest hook install if not yet configured
         from .hook import _is_hook_installed, _CLAUDE_SETTINGS_FILE
@@ -219,12 +234,12 @@ def main() -> None:
     logging.getLogger("baobaobot").setLevel(logging.DEBUG)
     logger = logging.getLogger(__name__)
 
-    # Initialize workspace on startup
+    # Initialize shared files on startup (persona + bin scripts)
     from .workspace.manager import WorkspaceManager
 
-    wm = WorkspaceManager(config.workspace_dir)
-    wm.init()
-    logger.info("Workspace ready at %s", config.workspace_dir)
+    wm = WorkspaceManager(config.shared_dir, config.shared_dir)
+    wm.init_shared()
+    logger.info("Shared files ready at %s", config.shared_dir)
 
     from .tmux_manager import tmux_manager
 

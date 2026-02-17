@@ -20,10 +20,10 @@
 
 搜尋過去的記憶時，使用以下工具（不要自己 grep memory 目錄）：
 
-- **搜尋記憶**：`~/.baobaobot/bin/memory-search "關鍵字"`
-- **搜尋最近 N 天**：`~/.baobaobot/bin/memory-search "關鍵字" --days 7`
-- **列出近期記憶**：`~/.baobaobot/bin/memory-list`
-- **列出更多天**：`~/.baobaobot/bin/memory-list --days 30`
+- **搜尋記憶**：`{{BIN_DIR}}/memory-search "關鍵字"`
+- **搜尋最近 N 天**：`{{BIN_DIR}}/memory-search "關鍵字" --days 7`
+- **列出近期記憶**：`{{BIN_DIR}}/memory-list`
+- **列出更多天**：`{{BIN_DIR}}/memory-list --days 30`
 
 寫入記憶時，直接寫 memory/YYYY-MM-DD.md 檔案（不需要用工具）。
 

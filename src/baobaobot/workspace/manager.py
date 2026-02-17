@@ -1,10 +1,8 @@
 """Workspace directory initialization and project management.
 
-Manages the ~/.baobaobot/workspace/ directory structure:
-  - init(): create directories, copy default template files, install bin/ scripts.
-  - ensure_project(): symlink a project directory into workspace/projects/.
-  - get_claude_work_dir(): resolve the directory where Claude Code should start.
-  - list_projects(): enumerate linked projects.
+Manages a two-tier layout:
+  - Shared dir (config_dir): SOUL.md, IDENTITY.md, USER.md, AGENTS.md, bin/
+  - Per-topic workspace (workspace_<topic>): MEMORY.md, memory/, projects/, CLAUDE.md
 
 Key class: WorkspaceManager.
 """
@@ -22,16 +20,20 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Bin scripts bundled with the package
 _BIN_DIR = Path(__file__).parent / "bin"
 
-# Files that are deployed to the workspace root
-_TEMPLATE_FILES = [
+# Files deployed to the shared dir (config_dir)
+_SHARED_TEMPLATE_FILES = [
     "SOUL.md",
     "IDENTITY.md",
     "USER.md",
     "AGENTS.md",
+]
+
+# Files deployed to each per-topic workspace
+_WORKSPACE_TEMPLATE_FILES = [
     "MEMORY.md",
 ]
 
-# Scripts that are deployed to ~/.baobaobot/bin/
+# Scripts deployed to shared bin/
 _BIN_SCRIPTS = [
     "memory-search",
     "memory-list",
@@ -41,42 +43,56 @@ _BIN_SCRIPTS = [
 class WorkspaceManager:
     """Manages the BaoBao workspace directory structure."""
 
-    def __init__(self, workspace_dir: Path) -> None:
+    def __init__(self, shared_dir: Path, workspace_dir: Path) -> None:
+        self.shared_dir = shared_dir
         self.workspace_dir = workspace_dir
         self.projects_dir = workspace_dir / "projects"
         self.memory_dir = workspace_dir / "memory"
-        # bin/ lives under the baobaobot root (parent of workspace), shared across workspaces
-        self.bin_dir = workspace_dir.parent / "bin"
+        self.bin_dir = shared_dir / "bin"
 
-    def init(self) -> None:
-        """Initialize workspace directory structure and deploy default templates.
+    def init_shared(self) -> None:
+        """Initialize shared persona files and bin/ scripts.
+
+        Safe to call multiple times — only creates missing files.
+        """
+        self.shared_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename in _SHARED_TEMPLATE_FILES:
+            dest = self.shared_dir / filename
+            if not dest.exists():
+                src = _TEMPLATES_DIR / filename
+                if src.exists():
+                    shutil.copy2(src, dest)
+                    logger.info("Deployed shared template: %s", dest)
+                else:
+                    logger.warning("Template not found: %s", src)
+
+        self._install_bin_scripts()
+        logger.debug("Shared files initialized at %s", self.shared_dir)
+
+    def init_workspace(self) -> None:
+        """Initialize per-topic workspace directory structure.
 
         Safe to call multiple times — only creates missing directories and files.
-        Also installs bin/ scripts to the parent baobaobot directory.
         """
-        # Create directory structure
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.projects_dir.mkdir(exist_ok=True)
         self.memory_dir.mkdir(exist_ok=True)
 
-        # Copy template files (only if they don't exist)
-        for filename in _TEMPLATE_FILES:
+        for filename in _WORKSPACE_TEMPLATE_FILES:
             dest = self.workspace_dir / filename
             if not dest.exists():
                 src = _TEMPLATES_DIR / filename
                 if src.exists():
                     shutil.copy2(src, dest)
-                    logger.info("Deployed template: %s", dest)
+                    logger.info("Deployed workspace template: %s", dest)
                 else:
                     logger.warning("Template not found: %s", src)
-
-        # Install bin/ scripts (always overwrite to keep up-to-date)
-        self._install_bin_scripts()
 
         logger.debug("Workspace initialized at %s", self.workspace_dir)
 
     def _install_bin_scripts(self) -> None:
-        """Copy bin/ scripts to ~/.baobaobot/bin/ and make them executable."""
+        """Copy bin/ scripts to shared_dir/bin/ and make them executable."""
         self.bin_dir.mkdir(parents=True, exist_ok=True)
         for script_name in _BIN_SCRIPTS:
             src = _BIN_DIR / script_name

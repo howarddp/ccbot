@@ -10,9 +10,12 @@ from baobaobot.workspace.manager import WorkspaceManager
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    wm = WorkspaceManager(tmp_path / "workspace")
-    wm.init()
-    return wm.workspace_dir
+    shared = tmp_path / "shared"
+    ws = tmp_path / "workspace_test"
+    wm = WorkspaceManager(shared, ws)
+    wm.init_shared()
+    wm.init_workspace()
+    return ws
 
 
 @pytest.fixture

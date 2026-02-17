@@ -10,6 +10,7 @@ Key class: Config (singleton instantiated as `config`).
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -75,12 +76,8 @@ class Config:
         self.show_user_messages = True
 
         # BaoBao Workspace settings
-        workspace_raw = os.getenv("WORKSPACE_DIR", "")
-        self.workspace_dir = (
-            Path(workspace_raw).expanduser()
-            if workspace_raw
-            else self.config_dir / "workspace"
-        )
+        # Shared persona files (SOUL.md, IDENTITY.md, USER.md, AGENTS.md) live in config_dir
+        self.shared_dir = self.config_dir
         self.memory_keep_days = int(os.getenv("MEMORY_KEEP_DAYS", "30"))
         self.recent_memory_days = int(os.getenv("RECENT_MEMORY_DAYS", "7"))
         self.auto_assemble = os.getenv("AUTO_ASSEMBLE", "true").lower() in (
@@ -96,6 +93,35 @@ class Config:
             self.telegram_bot_token[:8],
             len(self.allowed_users),
             self.tmux_session_name,
+        )
+
+    def workspace_dir_for(self, topic_name: str) -> Path:
+        """Return the per-topic workspace directory path.
+
+        Args:
+            topic_name: Telegram topic name used as workspace suffix.
+
+        Returns:
+            Path like ``config_dir / "workspace_<topic_name>"``.
+        """
+        # Replace anything that isn't alphanumeric, hyphen, dot, or underscore
+        safe_name = re.sub(r"[^\w\-.]", "_", topic_name).strip("._")
+        # Collapse consecutive underscores
+        safe_name = re.sub(r"_+", "_", safe_name)
+        # Truncate to a reasonable filesystem length
+        safe_name = safe_name[:100]
+        # Fallback for empty or purely-special-character names
+        if not safe_name:
+            safe_name = "unnamed"
+        return self.config_dir / f"workspace_{safe_name}"
+
+    def iter_workspace_dirs(self) -> list[Path]:
+        """Return all existing per-topic workspace directories."""
+        if not self.config_dir.is_dir():
+            return []
+        return sorted(
+            p for p in self.config_dir.iterdir()
+            if p.is_dir() and p.name.startswith("workspace_")
         )
 
     def is_user_allowed(self, user_id: int) -> bool:

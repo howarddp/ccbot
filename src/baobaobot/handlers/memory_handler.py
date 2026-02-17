@@ -1,13 +1,15 @@
 """Telegram handlers for /memory and /forget commands.
 
 Provides listing, viewing, searching, and deleting memory files
-through Telegram bot commands.
+through Telegram bot commands. Memory is per-topic (each topic has
+its own workspace with its own memory directory).
 
 Key functions: memory_command(), forget_command().
 """
 
 import logging
 from datetime import date
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -15,13 +17,38 @@ from telegram.ext import ContextTypes
 from ..config import config
 from ..handlers.message_sender import safe_reply
 from ..memory.manager import MemoryManager
+from ..session import session_manager
 
 logger = logging.getLogger(__name__)
 
 
-def _get_memory_manager() -> MemoryManager:
-    """Create a MemoryManager for the configured workspace."""
-    return MemoryManager(config.workspace_dir)
+def _resolve_workspace_for_thread(update: Update) -> Path | None:
+    """Resolve the per-topic workspace directory for the current thread.
+
+    Returns None if the thread has no bound window / no workspace.
+    """
+    user = update.effective_user
+    msg = update.message or (
+        update.callback_query.message if update.callback_query else None
+    )
+    if not user or not msg:
+        return None
+
+    thread_id = getattr(msg, "message_thread_id", None)
+    if thread_id is None or thread_id == 1:
+        return None
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if not wid:
+        return None
+
+    display_name = session_manager.get_display_name(wid)
+    return config.workspace_dir_for(display_name)
+
+
+def _get_memory_manager(workspace_dir: Path) -> MemoryManager:
+    """Create a MemoryManager for the given workspace."""
+    return MemoryManager(workspace_dir)
 
 
 async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -30,9 +57,14 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not update.message:
         return
 
+    workspace_dir = _resolve_workspace_for_thread(update)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        return
+
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=2)
-    mm = _get_memory_manager()
+    mm = _get_memory_manager(workspace_dir)
 
     # /memory today
     if len(parts) >= 2 and parts[1].lower() == "today":
@@ -92,9 +124,14 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not update.message:
         return
 
+    workspace_dir = _resolve_workspace_for_thread(update)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        return
+
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=1)
-    mm = _get_memory_manager()
+    mm = _get_memory_manager(workspace_dir)
 
     if len(parts) < 2:
         await safe_reply(

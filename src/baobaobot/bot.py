@@ -7,10 +7,10 @@ Core responsibilities:
   - Command handlers: /start, /history, /screenshot, /esc, /kill,
     /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild,
     plus forwarding unknown /commands to Claude Code via tmux.
-  - Callback query handler: directory browser, history pagination,
+  - Callback query handler: history pagination,
     interactive UI navigation, screenshot refresh.
   - Topic-based routing: each named topic binds to one tmux window.
-    Unbound topics trigger the directory browser to create a new session.
+    Unbound topics auto-create a per-topic workspace and session.
   - Automatic cleanup: closing a topic kills the associated window
     (topic_closed_handler). Unsupported content (images, stickers, etc.)
     is rejected with a warning (unsupported_content_handler).
@@ -21,7 +21,6 @@ Handler modules (in handlers/):
   - message_queue: Per-user message queue management
   - message_sender: Safe message sending helpers
   - history: Message history pagination
-  - directory_browser: Directory browser UI
   - interactive_ui: Interactive UI handling
   - status_polling: Terminal status polling
   - response_builder: Response message building
@@ -66,31 +65,10 @@ from .handlers.callback_data import (
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
-    CB_DIR_CANCEL,
-    CB_DIR_CONFIRM,
-    CB_DIR_PAGE,
-    CB_DIR_SELECT,
-    CB_DIR_UP,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
     CB_SCREENSHOT_REFRESH,
-    CB_WIN_BIND,
-    CB_WIN_CANCEL,
-    CB_WIN_NEW,
-)
-from .handlers.directory_browser import (
-    BROWSE_DIRS_KEY,
-    BROWSE_PAGE_KEY,
-    BROWSE_PATH_KEY,
-    STATE_BROWSING_DIRECTORY,
-    STATE_KEY,
-    STATE_SELECTING_WINDOW,
-    UNBOUND_WINDOWS_KEY,
-    build_directory_browser,
-    build_window_picker,
-    clear_browse_state,
-    clear_window_picker_state,
 )
 from .handlers.cleanup import clear_topic_state
 from .handlers.history import send_history
@@ -114,7 +92,6 @@ from .handlers.message_sender import (
     rate_limit_send_message,
     safe_edit,
     safe_reply,
-    safe_send,
 )
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
@@ -132,7 +109,7 @@ from .handlers.persona_handler import (
 )
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
-from .workspace.assembler import ClaudeMdAssembler
+from .workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
 from .workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -169,6 +146,24 @@ def _get_thread_id(update: Update) -> int | None:
     return tid
 
 
+def _resolve_workspace_dir(update: Update) -> Path | None:
+    """Resolve the per-topic workspace directory for the current thread.
+
+    Returns None if thread has no bound window.
+    """
+    user = update.effective_user
+    if not user:
+        return None
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        return None
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if not wid:
+        return None
+    display_name = session_manager.get_display_name(wid)
+    return config.workspace_dir_for(display_name)
+
+
 # --- Command handlers ---
 
 
@@ -178,8 +173,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if update.message:
             await safe_reply(update.message, "You are not authorized to use this bot.")
         return
-
-    clear_browse_state(context.user_data)
 
     if update.message:
         await safe_reply(
@@ -273,17 +266,22 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def workspace_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Show workspace status or link a project directory."""
+    """Show workspace status for the current topic."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
     if not update.message:
         return
 
+    workspace_dir = _resolve_workspace_dir(update)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        return
+
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=2)
 
-    wm = WorkspaceManager(config.workspace_dir)
+    wm = WorkspaceManager(config.shared_dir, workspace_dir)
 
     # /workspace link <path>
     if len(parts) >= 3 and parts[1].lower() == "link":
@@ -301,7 +299,7 @@ async def workspace_command(
     projects = wm.list_projects()
     lines = [
         "📁 **Workspace**\n",
-        f"路徑: `{config.workspace_dir}`\n",
+        f"路徑: `{workspace_dir}`\n",
     ]
     if projects:
         lines.append(f"專案 ({len(projects)}):")
@@ -317,14 +315,21 @@ async def workspace_command(
 async def rebuild_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Manually rebuild CLAUDE.md from workspace source files."""
+    """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
     if not update.message:
         return
 
-    assembler = ClaudeMdAssembler(config.workspace_dir, config.recent_memory_days)
+    workspace_dir = _resolve_workspace_dir(update)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        return
+
+    assembler = ClaudeMdAssembler(
+        config.shared_dir, workspace_dir, config.recent_memory_days
+    )
     assembler.write()
     await safe_reply(update.message, "✅ CLAUDE.md 已重新組裝。")
 
@@ -592,6 +597,80 @@ async def _capture_bash_output(
         _bash_capture_tasks.pop((user_id, thread_id), None)
 
 
+async def _auto_create_session(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    thread_id: int,
+    text: str,
+) -> None:
+    """Auto-create a per-topic workspace and tmux window for an unbound topic.
+
+    Steps:
+      1. Resolve topic_name from _topic_names cache
+      2. Create workspace directory and init workspace files
+      3. Assemble CLAUDE.md
+      4. Create tmux window
+      5. Bind thread → forward pending message
+    """
+    if not update.message:
+        return
+
+    # Resolve topic name
+    topic_names: dict[int, str] = context.bot_data.get("_topic_names", {})
+    topic_name = topic_names.get(thread_id, f"topic-{thread_id}")
+
+    # Create per-topic workspace
+    workspace_path = config.workspace_dir_for(topic_name)
+    wm = WorkspaceManager(config.shared_dir, workspace_path)
+    wm.init_workspace()
+
+    # Assemble CLAUDE.md
+    assembler = ClaudeMdAssembler(
+        config.shared_dir, workspace_path, config.recent_memory_days
+    )
+    assembler.write()
+
+    # Create tmux window
+    success, message, created_wname, created_wid = await tmux_manager.create_window(
+        str(workspace_path), window_name=topic_name
+    )
+
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+
+    logger.info(
+        "Auto-created session: window=%s (id=%s) at %s (user=%d, thread=%d)",
+        created_wname,
+        created_wid,
+        workspace_path,
+        user_id,
+        thread_id,
+    )
+
+    # Wait for Claude Code's SessionStart hook to register in session_map
+    await session_manager.wait_for_session_map_entry(created_wid)
+
+    # Bind thread to newly created window
+    session_manager.bind_thread(
+        user_id, thread_id, created_wid, window_name=created_wname
+    )
+
+    # Store group chat_id for forum topic message routing
+    chat = update.message.chat
+    if chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user_id, thread_id, chat.id)
+
+    # Forward the pending message
+    send_ok, send_msg = await session_manager.send_to_window(created_wid, text)
+    if not send_ok:
+        logger.warning("Failed to forward pending text: %s", send_msg)
+        await safe_reply(update.message, f"✅ Session created, but message failed: {send_msg}")
+    else:
+        await safe_reply(update.message, f"✅ Session created: {created_wname}")
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -614,39 +693,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if await handle_edit_mode_message(update, context):
         return
 
-    # Ignore text in window picker mode (only for the same thread)
-    if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_WINDOW:
-        pending_tid = context.user_data.get("_pending_thread_id")
-        if pending_tid == thread_id:
-            await safe_reply(
-                update.message,
-                "Please use the window picker above, or tap Cancel.",
-            )
-            return
-        # Stale picker state from a different thread — clear it
-        clear_window_picker_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
-        context.user_data.pop("_pending_topic_name", None)
-
-    # Ignore text in directory browsing mode (only for the same thread)
-    if (
-        context.user_data
-        and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY
-    ):
-        pending_tid = context.user_data.get("_pending_thread_id")
-        if pending_tid == thread_id:
-            await safe_reply(
-                update.message,
-                "Please use the directory browser above, or tap Cancel.",
-            )
-            return
-        # Stale browsing state from a different thread — clear it
-        clear_browse_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
-        context.user_data.pop("_pending_topic_name", None)
-
     # Must be in a named topic
     if thread_id is None:
         await safe_reply(
@@ -657,62 +703,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
-        # Unbound topic — check for unbound windows first
-        all_windows = await tmux_manager.list_windows()
-        bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}
-        unbound = [
-            (w.window_id, w.window_name, w.cwd)
-            for w in all_windows
-            if w.window_id not in bound_ids
-        ]
-        logger.debug(
-            "Window picker check: all=%s, bound=%s, unbound=%s",
-            [w.window_name for w in all_windows],
-            bound_ids,
-            [name for _, name, _ in unbound],
-        )
-
-        # Resolve topic name for use as window name
-        topic_names: dict[int, str] = context.bot_data.get("_topic_names", {})
-        topic_name = topic_names.get(thread_id)
-
-        if unbound:
-            # Show window picker
-            logger.info(
-                "Unbound topic: showing window picker (%d unbound windows, user=%d, thread=%d)",
-                len(unbound),
-                user.id,
-                thread_id,
-            )
-            msg_text, keyboard, win_ids = build_window_picker(unbound)
-            if context.user_data is not None:
-                context.user_data[STATE_KEY] = STATE_SELECTING_WINDOW
-                context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
-                context.user_data["_pending_thread_id"] = thread_id
-                context.user_data["_pending_thread_text"] = text
-                if topic_name:
-                    context.user_data["_pending_topic_name"] = topic_name
-            await safe_reply(update.message, msg_text, reply_markup=keyboard)
-            return
-
-        # No unbound windows — show directory browser to create a new session
-        logger.info(
-            "Unbound topic: showing directory browser (user=%d, thread=%d)",
-            user.id,
-            thread_id,
-        )
-        start_path = str(config.workspace_dir)
-        msg_text, keyboard, subdirs = build_directory_browser(start_path, root_path=start_path)
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-            context.user_data["_pending_thread_id"] = thread_id
-            context.user_data["_pending_thread_text"] = text
-            if topic_name:
-                context.user_data["_pending_topic_name"] = topic_name
-        await safe_reply(update.message, msg_text, reply_markup=keyboard)
+        # Unbound topic — auto-create workspace and session
+        await _auto_create_session(update, context, user.id, thread_id, text)
         return
 
     # Bound topic — forward to bound window
@@ -813,348 +805,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 edit=True,
                 start_byte=start_byte,
                 end_byte=end_byte,
-                # Don't pass user_id for pagination - offset update only on initial view
-                # This prevents offset from going backwards if new messages arrive while paging
             )
         else:
             await safe_edit(query, "Window no longer exists.")
         await query.answer("Page updated")
 
-    # Directory browser handlers
-    elif data.startswith(CB_DIR_SELECT):
-        # Validate: callback must come from the same topic that started browsing
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale browser (topic mismatch)", show_alert=True)
-            return
-        # callback_data contains index, not dir name (to avoid 64-byte limit)
-        try:
-            idx = int(data[len(CB_DIR_SELECT) :])
-        except ValueError:
-            await query.answer("Invalid data")
-            return
-
-        # Look up dir name from cached subdirs
-        cached_dirs: list[str] = (
-            context.user_data.get(BROWSE_DIRS_KEY, []) if context.user_data else []
-        )
-        if idx < 0 or idx >= len(cached_dirs):
-            await query.answer(
-                "Directory list changed, please refresh", show_alert=True
-            )
-            return
-        subdir_name = cached_dirs[idx]
-
-        default_path = str(config.workspace_dir)
-        current_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
-        new_path = (Path(current_path) / subdir_name).resolve()
-
-        if not new_path.exists() or not new_path.is_dir():
-            await query.answer("Directory not found", show_alert=True)
-            return
-
-        new_path_str = str(new_path)
-        if context.user_data is not None:
-            context.user_data[BROWSE_PATH_KEY] = new_path_str
-            context.user_data[BROWSE_PAGE_KEY] = 0
-
-        msg_text, keyboard, subdirs = build_directory_browser(new_path_str, root_path=str(config.workspace_dir))
-        if context.user_data is not None:
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
-        await query.answer()
-
-    elif data == CB_DIR_UP:
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale browser (topic mismatch)", show_alert=True)
-            return
-        default_path = str(config.workspace_dir)
-        current_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
-        current = Path(current_path).resolve()
-        workspace_root = config.workspace_dir.resolve()
-        parent = current.parent
-        # Don't allow navigating above workspace root
-        if not str(parent).startswith(str(workspace_root)):
-            parent = workspace_root
-
-        parent_path = str(parent)
-        if context.user_data is not None:
-            context.user_data[BROWSE_PATH_KEY] = parent_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-
-        msg_text, keyboard, subdirs = build_directory_browser(parent_path, root_path=str(config.workspace_dir))
-        if context.user_data is not None:
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
-        await query.answer()
-
-    elif data.startswith(CB_DIR_PAGE):
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale browser (topic mismatch)", show_alert=True)
-            return
-        try:
-            pg = int(data[len(CB_DIR_PAGE) :])
-        except ValueError:
-            await query.answer("Invalid data")
-            return
-        default_path = str(config.workspace_dir)
-        current_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
-        if context.user_data is not None:
-            context.user_data[BROWSE_PAGE_KEY] = pg
-
-        msg_text, keyboard, subdirs = build_directory_browser(current_path, pg, root_path=str(config.workspace_dir))
-        if context.user_data is not None:
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
-        await query.answer()
-
-    elif data == CB_DIR_CONFIRM:
-        default_path = str(config.workspace_dir)
-        selected_path = (
-            context.user_data.get(BROWSE_PATH_KEY, default_path)
-            if context.user_data
-            else default_path
-        )
-        # Check if this was initiated from a thread bind flow
-        pending_thread_id: int | None = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-
-        # Validate: confirm button must come from the same topic that started browsing
-        confirm_thread_id = _get_thread_id(update)
-        if pending_thread_id is not None and confirm_thread_id != pending_thread_id:
-            clear_browse_state(context.user_data)
-            if context.user_data is not None:
-                context.user_data.pop("_pending_thread_id", None)
-                context.user_data.pop("_pending_thread_text", None)
-            await query.answer("Stale browser (topic mismatch)", show_alert=True)
-            return
-
-        clear_browse_state(context.user_data)
-
-        # Use topic name as window name if available
-        pending_topic_name: str | None = (
-            context.user_data.pop("_pending_topic_name", None)
-            if context.user_data
-            else None
-        )
-
-        success, message, created_wname, created_wid = await tmux_manager.create_window(
-            selected_path, window_name=pending_topic_name
-        )
-        if success:
-            logger.info(
-                "Window created: %s (id=%s) at %s (user=%d, thread=%s)",
-                created_wname,
-                created_wid,
-                selected_path,
-                user.id,
-                pending_thread_id,
-            )
-            # Wait for Claude Code's SessionStart hook to register in session_map
-            await session_manager.wait_for_session_map_entry(created_wid)
-
-            if pending_thread_id is not None:
-                # Thread bind flow: bind thread to newly created window
-                session_manager.bind_thread(
-                    user.id, pending_thread_id, created_wid, window_name=created_wname
-                )
-
-                await safe_edit(
-                    query,
-                    f"✅ {message}\n\nBound to this topic. Send messages here.",
-                )
-
-                # Send pending text if any
-                pending_text = (
-                    context.user_data.get("_pending_thread_text")
-                    if context.user_data
-                    else None
-                )
-                if pending_text:
-                    logger.debug(
-                        "Forwarding pending text to window %s (len=%d)",
-                        created_wname,
-                        len(pending_text),
-                    )
-                    if context.user_data is not None:
-                        context.user_data.pop("_pending_thread_text", None)
-                        context.user_data.pop("_pending_thread_id", None)
-                    send_ok, send_msg = await session_manager.send_to_window(
-                        created_wid,
-                        pending_text,
-                    )
-                    if not send_ok:
-                        logger.warning("Failed to forward pending text: %s", send_msg)
-                        await safe_send(
-                            context.bot,
-                            session_manager.resolve_chat_id(user.id, pending_thread_id),
-                            f"❌ Failed to send pending message: {send_msg}",
-                            message_thread_id=pending_thread_id,
-                        )
-                elif context.user_data is not None:
-                    context.user_data.pop("_pending_thread_id", None)
-            else:
-                # Should not happen in topic-only mode, but handle gracefully
-                await safe_edit(query, f"✅ {message}")
-        else:
-            await safe_edit(query, f"❌ {message}")
-            if pending_thread_id is not None and context.user_data is not None:
-                context.user_data.pop("_pending_thread_id", None)
-                context.user_data.pop("_pending_thread_text", None)
-                context.user_data.pop("_pending_topic_name", None)
-        await query.answer("Created" if success else "Failed")
-
-    elif data == CB_DIR_CANCEL:
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale browser (topic mismatch)", show_alert=True)
-            return
-        clear_browse_state(context.user_data)
-        if context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
-            context.user_data.pop("_pending_topic_name", None)
-        await safe_edit(query, "Cancelled")
-        await query.answer("Cancelled")
-
-    # Window picker: bind existing window
-    elif data.startswith(CB_WIN_BIND):
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale picker (topic mismatch)", show_alert=True)
-            return
-        try:
-            idx = int(data[len(CB_WIN_BIND) :])
-        except ValueError:
-            await query.answer("Invalid data")
-            return
-
-        cached_windows: list[str] = (
-            context.user_data.get(UNBOUND_WINDOWS_KEY, []) if context.user_data else []
-        )
-        if idx < 0 or idx >= len(cached_windows):
-            await query.answer("Window list changed, please retry", show_alert=True)
-            return
-        selected_wid = cached_windows[idx]
-
-        # Verify window still exists
-        w = await tmux_manager.find_window_by_id(selected_wid)
-        if not w:
-            display = session_manager.get_display_name(selected_wid)
-            await query.answer(f"Window '{display}' no longer exists", show_alert=True)
-            return
-
-        thread_id = _get_thread_id(update)
-        if thread_id is None:
-            await query.answer("Not in a topic", show_alert=True)
-            return
-
-        # Use topic name as display name if available
-        pending_topic_name: str | None = (
-            context.user_data.pop("_pending_topic_name", None)
-            if context.user_data
-            else None
-        )
-        display = pending_topic_name or w.window_name
-        clear_window_picker_state(context.user_data)
-        session_manager.bind_thread(
-            user.id, thread_id, selected_wid, window_name=display
-        )
-
-        # Rename the tmux window to match the topic name
-        if pending_topic_name:
-            await tmux_manager.rename_window(selected_wid, pending_topic_name)
-
-        await safe_edit(
-            query,
-            f"✅ Bound to window `{display}`",
-        )
-
-        # Forward pending text if any
-        pending_text = (
-            context.user_data.get("_pending_thread_text") if context.user_data else None
-        )
-        if context.user_data is not None:
-            context.user_data.pop("_pending_thread_text", None)
-            context.user_data.pop("_pending_thread_id", None)
-        if pending_text:
-            send_ok, send_msg = await session_manager.send_to_window(
-                selected_wid, pending_text
-            )
-            if not send_ok:
-                logger.warning("Failed to forward pending text: %s", send_msg)
-                await safe_send(
-                    context.bot,
-                    session_manager.resolve_chat_id(user.id, thread_id),
-                    f"❌ Failed to send pending message: {send_msg}",
-                    message_thread_id=thread_id,
-                )
-        await query.answer("Bound")
-
-    # Window picker: new session → transition to directory browser
-    elif data == CB_WIN_NEW:
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale picker (topic mismatch)", show_alert=True)
-            return
-        # Preserve pending thread info, clear only picker state
-        clear_window_picker_state(context.user_data)
-        start_path = str(config.workspace_dir)
-        msg_text, keyboard, subdirs = build_directory_browser(start_path, root_path=start_path)
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
-        await query.answer()
-
-    # Window picker: cancel
-    elif data == CB_WIN_CANCEL:
-        pending_tid = (
-            context.user_data.get("_pending_thread_id") if context.user_data else None
-        )
-        if pending_tid is not None and _get_thread_id(update) != pending_tid:
-            await query.answer("Stale picker (topic mismatch)", show_alert=True)
-            return
-        clear_window_picker_state(context.user_data)
-        if context.user_data is not None:
-            context.user_data.pop("_pending_thread_id", None)
-            context.user_data.pop("_pending_thread_text", None)
-            context.user_data.pop("_pending_topic_name", None)
-        await safe_edit(query, "Cancelled")
-        await query.answer("Cancelled")
-
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
-        window_id = data[len(CB_SCREENSHOT_REFRESH) :]
+        window_id = data[len(CB_SCREENSHOT_REFRESH):]
         w = await tmux_manager.find_window_by_id(window_id)
         if not w:
             await query.answer("Window no longer exists", show_alert=True)
@@ -1184,7 +842,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Up arrow
     elif data.startswith(CB_ASK_UP):
-        window_id = data[len(CB_ASK_UP) :]
+        window_id = data[len(CB_ASK_UP):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1195,7 +853,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Down arrow
     elif data.startswith(CB_ASK_DOWN):
-        window_id = data[len(CB_ASK_DOWN) :]
+        window_id = data[len(CB_ASK_DOWN):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1208,7 +866,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Left arrow
     elif data.startswith(CB_ASK_LEFT):
-        window_id = data[len(CB_ASK_LEFT) :]
+        window_id = data[len(CB_ASK_LEFT):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1221,7 +879,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Right arrow
     elif data.startswith(CB_ASK_RIGHT):
-        window_id = data[len(CB_ASK_RIGHT) :]
+        window_id = data[len(CB_ASK_RIGHT):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1234,7 +892,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Escape
     elif data.startswith(CB_ASK_ESC):
-        window_id = data[len(CB_ASK_ESC) :]
+        window_id = data[len(CB_ASK_ESC):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1246,7 +904,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Enter
     elif data.startswith(CB_ASK_ENTER):
-        window_id = data[len(CB_ASK_ENTER) :]
+        window_id = data[len(CB_ASK_ENTER):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1259,7 +917,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Space
     elif data.startswith(CB_ASK_SPACE):
-        window_id = data[len(CB_ASK_SPACE) :]
+        window_id = data[len(CB_ASK_SPACE):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1272,7 +930,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Tab
     elif data.startswith(CB_ASK_TAB):
-        window_id = data[len(CB_ASK_TAB) :]
+        window_id = data[len(CB_ASK_TAB):]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_id(window_id)
         if w:
@@ -1283,20 +941,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: refresh display
     elif data.startswith(CB_ASK_REFRESH):
-        window_id = data[len(CB_ASK_REFRESH) :]
+        window_id = data[len(CB_ASK_REFRESH):]
         thread_id = _get_thread_id(update)
         await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
         await query.answer("🔄")
 
     # Screenshot quick keys: send key to tmux window
     elif data.startswith(CB_KEYS_PREFIX):
-        rest = data[len(CB_KEYS_PREFIX) :]
+        rest = data[len(CB_KEYS_PREFIX):]
         colon_idx = rest.find(":")
         if colon_idx < 0:
             await query.answer("Invalid data")
             return
         key_id = rest[:colon_idx]
-        window_id = rest[colon_idx + 1 :]
+        window_id = rest[colon_idx + 1:]
 
         key_info = _KEYS_SEND_MAP.get(key_id)
         if not key_info:
@@ -1447,15 +1105,17 @@ async def post_init(application: Application) -> None:
 
     await application.bot.set_my_commands(bot_commands)
 
-    # Auto-assemble CLAUDE.md if enabled
-    if config.auto_assemble:
-        assembler = ClaudeMdAssembler(config.workspace_dir, config.recent_memory_days)
-        if assembler.needs_rebuild():
-            assembler.write()
-            logger.info("Auto-assembled CLAUDE.md on startup")
-
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await session_manager.resolve_stale_ids()
+
+    # Rebuild CLAUDE.md for existing workspaces if sources changed
+    workspace_dirs = config.iter_workspace_dirs()
+    if workspace_dirs:
+        rebuilt = rebuild_all_workspaces(
+            config.shared_dir, workspace_dirs, config.recent_memory_days
+        )
+        if rebuilt:
+            logger.info("Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt)
 
     monitor = SessionMonitor()
 

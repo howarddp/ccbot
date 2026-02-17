@@ -3,6 +3,8 @@
 Provides read/edit operations for SOUL.md and IDENTITY.md through
 Telegram bot commands. Edit mode accepts the next message as new content.
 
+Persona files live in config.shared_dir (shared across all topics).
+
 Key functions: soul_command(), identity_command().
 """
 
@@ -15,18 +17,12 @@ from ..config import config
 from ..handlers.message_sender import safe_reply
 from ..persona.identity import read_identity, read_identity_raw, update_identity
 from ..persona.soul import read_soul, write_soul
-from ..workspace.assembler import ClaudeMdAssembler
+from ..workspace.assembler import rebuild_all_workspaces
 
 logger = logging.getLogger(__name__)
 
 # Track users in edit mode: user_id -> edit_target ("soul")
 _edit_mode: dict[int, str] = {}
-
-
-def _rebuild_claude_md() -> None:
-    """Rebuild CLAUDE.md after a persona change."""
-    assembler = ClaudeMdAssembler(config.workspace_dir, config.recent_memory_days)
-    assembler.write()
 
 
 async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -49,7 +45,7 @@ async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Show current soul
-    content = read_soul(config.workspace_dir)
+    content = read_soul(config.shared_dir)
     if content:
         await safe_reply(update.message, f"🫀 **SOUL.md**\n\n{content}")
     else:
@@ -78,8 +74,10 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             return
 
-        updated = update_identity(config.workspace_dir, **{field_map[field]: value})
-        _rebuild_claude_md()
+        updated = update_identity(config.shared_dir, **{field_map[field]: value})
+        rebuild_all_workspaces(
+            config.shared_dir, config.iter_workspace_dirs(), config.recent_memory_days
+        )
         await safe_reply(
             update.message,
             f"✅ 已更新 {field} = {value}\n\n"
@@ -89,9 +87,9 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Show current identity
-    content = read_identity_raw(config.workspace_dir)
+    content = read_identity_raw(config.shared_dir)
     if content:
-        identity = read_identity(config.workspace_dir)
+        identity = read_identity(config.shared_dir)
         await safe_reply(
             update.message,
             f"🪪 **IDENTITY.md**\n\n"
@@ -126,8 +124,10 @@ async def handle_edit_mode_message(
         return True
 
     if target == "soul":
-        write_soul(config.workspace_dir, text)
-        _rebuild_claude_md()
+        write_soul(config.shared_dir, text)
+        rebuild_all_workspaces(
+            config.shared_dir, config.iter_workspace_dirs(), config.recent_memory_days
+        )
         await safe_reply(update.message, "✅ SOUL.md 已更新！")
         return True
 

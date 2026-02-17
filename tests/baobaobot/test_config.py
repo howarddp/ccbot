@@ -37,6 +37,41 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.is_user_allowed(99999) is False
 
+    def test_shared_dir_equals_config_dir(self):
+        cfg = Config()
+        assert cfg.shared_dir == cfg.config_dir
+
+    def test_workspace_dir_for(self):
+        cfg = Config()
+        ws = cfg.workspace_dir_for("my-topic")
+        assert ws == cfg.config_dir / "workspace_my-topic"
+
+    def test_workspace_dir_for_sanitizes_slashes(self):
+        cfg = Config()
+        ws = cfg.workspace_dir_for("a/b\\c")
+        assert ws == cfg.config_dir / "workspace_a_b_c"
+
+    def test_workspace_dir_for_sanitizes_special_chars(self):
+        cfg = Config()
+        ws = cfg.workspace_dir_for('a:b*c?"<>|')
+        assert ":" not in ws.name
+        assert "*" not in ws.name
+
+    def test_workspace_dir_for_empty_string(self):
+        cfg = Config()
+        ws = cfg.workspace_dir_for("")
+        assert ws == cfg.config_dir / "workspace_unnamed"
+
+    def test_workspace_dir_for_dots_only(self):
+        cfg = Config()
+        ws = cfg.workspace_dir_for("..")
+        assert ws == cfg.config_dir / "workspace_unnamed"
+
+    def test_workspace_dir_for_truncates_long_name(self):
+        cfg = Config()
+        ws = cfg.workspace_dir_for("x" * 200)
+        assert len(ws.name) <= len("workspace_") + 100
+
 
 @pytest.mark.usefixtures("_base_env")
 class TestConfigMissingEnv:

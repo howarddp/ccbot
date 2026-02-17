@@ -1,7 +1,8 @@
-"""CLAUDE.md assembly — composes the root CLAUDE.md from workspace source files.
+"""CLAUDE.md assembly — composes the root CLAUDE.md from shared + workspace files.
 
-Reads AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md and recent daily
-memory files, then writes a single assembled CLAUDE.md in the workspace root.
+Reads AGENTS.md, SOUL.md, IDENTITY.md, USER.md from shared_dir, and
+MEMORY.md + recent daily memory files from workspace_dir, then writes a
+single assembled CLAUDE.md in the workspace root.
 Claude Code reads this file automatically when starting in the workspace.
 
 Key class: ClaudeMdAssembler.
@@ -14,12 +15,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Section order in the assembled CLAUDE.md
+# (filename, section_title, source)  — source is "shared" or "workspace"
 _SECTION_ORDER = [
-    ("AGENTS.md", "工作指令 (AGENTS)"),
-    ("SOUL.md", "人格 (SOUL)"),
-    ("IDENTITY.md", "身份 (IDENTITY)"),
-    ("USER.md", "用戶資訊 (USER)"),
-    ("MEMORY.md", "記憶 (MEMORY)"),
+    ("AGENTS.md", "工作指令 (AGENTS)", "shared"),
+    ("SOUL.md", "人格 (SOUL)", "shared"),
+    ("IDENTITY.md", "身份 (IDENTITY)", "shared"),
+    ("USER.md", "用戶資訊 (USER)", "shared"),
+    ("MEMORY.md", "記憶 (MEMORY)", "workspace"),
 ]
 
 _HEADER = """\
@@ -31,9 +33,12 @@ _HEADER = """\
 
 
 class ClaudeMdAssembler:
-    """Reads workspace markdown files and assembles them into CLAUDE.md."""
+    """Reads shared persona files and per-topic memory, assembles CLAUDE.md."""
 
-    def __init__(self, workspace_dir: Path, recent_days: int = 7) -> None:
+    def __init__(
+        self, shared_dir: Path, workspace_dir: Path, recent_days: int = 7
+    ) -> None:
+        self.shared_dir = shared_dir
         self.workspace_dir = workspace_dir
         self.memory_dir = workspace_dir / "memory"
         self.output_path = workspace_dir / "CLAUDE.md"
@@ -46,6 +51,10 @@ class ClaudeMdAssembler:
             return path.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
+
+    def _resolve_source_dir(self, source: str) -> Path:
+        """Return shared_dir or workspace_dir based on source tag."""
+        return self.shared_dir if source == "shared" else self.workspace_dir
 
     def _get_recent_memories(self) -> str:
         """Collect content from recent daily memory files."""
@@ -72,8 +81,9 @@ class ClaudeMdAssembler:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         parts: list[str] = [_HEADER.format(timestamp=timestamp)]
 
-        for filename, section_title in _SECTION_ORDER:
-            filepath = self.workspace_dir / filename
+        for filename, section_title, source in _SECTION_ORDER:
+            source_dir = self._resolve_source_dir(source)
+            filepath = source_dir / filename
             content = self._read_file(filepath)
             if content:
                 parts.append(f"---\n\n## {section_title}")
@@ -85,7 +95,10 @@ class ClaudeMdAssembler:
             parts.append("---\n\n## 近期記憶")
             parts.append(recent)
 
-        return "\n\n".join(parts) + "\n"
+        result = "\n\n".join(parts) + "\n"
+        # Replace template variables
+        result = result.replace("{{BIN_DIR}}", str(self.shared_dir / "bin"))
+        return result
 
     def write(self) -> None:
         """Assemble and write CLAUDE.md to the workspace root."""
@@ -99,10 +112,11 @@ class ClaudeMdAssembler:
     def _update_mtimes(self) -> None:
         """Cache modification times of source files."""
         self._source_mtimes = {}
-        for filename, _ in _SECTION_ORDER:
-            filepath = self.workspace_dir / filename
+        for filename, _, source in _SECTION_ORDER:
+            source_dir = self._resolve_source_dir(source)
+            filepath = source_dir / filename
             if filepath.exists():
-                self._source_mtimes[filename] = filepath.stat().st_mtime
+                self._source_mtimes[f"{source}:{filename}"] = filepath.stat().st_mtime
 
         # Also track memory directory
         if self.memory_dir.exists():
@@ -119,11 +133,12 @@ class ClaudeMdAssembler:
             # No cached mtimes — need rebuild
             return True
 
-        for filename, _ in _SECTION_ORDER:
-            filepath = self.workspace_dir / filename
+        for filename, _, source in _SECTION_ORDER:
+            source_dir = self._resolve_source_dir(source)
+            filepath = source_dir / filename
             if filepath.exists():
                 current_mtime = filepath.stat().st_mtime
-                cached = self._source_mtimes.get(filename, 0)
+                cached = self._source_mtimes.get(f"{source}:{filename}", 0)
                 if current_mtime > cached:
                     return True
 
@@ -137,3 +152,19 @@ class ClaudeMdAssembler:
                     return True
 
         return False
+
+
+def rebuild_all_workspaces(
+    shared_dir: Path, workspace_dirs: list[Path], recent_days: int = 7
+) -> int:
+    """Rebuild CLAUDE.md for all workspaces where sources have changed.
+
+    Returns the number of workspaces rebuilt.
+    """
+    rebuilt = 0
+    for ws in workspace_dirs:
+        assembler = ClaudeMdAssembler(shared_dir, ws, recent_days)
+        if assembler.needs_rebuild():
+            assembler.write()
+            rebuilt += 1
+    return rebuilt

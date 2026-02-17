@@ -1,6 +1,7 @@
 """Telegram handler for /profile command.
 
 Provides read/update operations for USER.md through Telegram bot commands.
+USER.md lives in config.shared_dir (shared across all topics).
 
 Key function: profile_command().
 """
@@ -13,15 +14,9 @@ from telegram.ext import ContextTypes
 from ..config import config
 from ..handlers.message_sender import safe_reply
 from ..persona.profile import read_profile, read_profile_raw, update_profile
-from ..workspace.assembler import ClaudeMdAssembler
+from ..workspace.assembler import rebuild_all_workspaces
 
 logger = logging.getLogger(__name__)
-
-
-def _rebuild_claude_md() -> None:
-    """Rebuild CLAUDE.md after a profile change."""
-    assembler = ClaudeMdAssembler(config.workspace_dir, config.recent_memory_days)
-    assembler.write()
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -56,8 +51,10 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return
 
-        updated = update_profile(config.workspace_dir, **{field_map[field]: value})
-        _rebuild_claude_md()
+        updated = update_profile(config.shared_dir, **{field_map[field]: value})
+        rebuild_all_workspaces(
+            config.shared_dir, config.iter_workspace_dirs(), config.recent_memory_days
+        )
         await safe_reply(
             update.message,
             f"✅ 已更新 {field} = {value}\n\n"
@@ -67,9 +64,9 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # Show current profile
-    content = read_profile_raw(config.workspace_dir)
+    content = read_profile_raw(config.shared_dir)
     if content:
-        profile = read_profile(config.workspace_dir)
+        profile = read_profile(config.shared_dir)
         await safe_reply(
             update.message,
             f"👤 **USER.md**\n\n"

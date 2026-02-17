@@ -15,10 +15,25 @@ from typing import Any
 BAOBAOBOT_DIR_ENV = "BAOBAOBOT_DIR"
 
 
+_DIR_POINTER_FILE = Path.home() / ".config" / "baobaobot" / "dir"
+
+
 def baobaobot_dir() -> Path:
-    """Resolve config directory from BAOBAOBOT_DIR env var or default ~/.baobaobot."""
+    """Resolve config directory: env var → pointer file → default ~/.baobaobot."""
     raw = os.environ.get(BAOBAOBOT_DIR_ENV, "")
-    return Path(raw) if raw else Path.home() / ".baobaobot"
+    if raw:
+        return Path(raw)
+    if _DIR_POINTER_FILE.is_file():
+        saved = _DIR_POINTER_FILE.read_text().strip()
+        if saved:
+            return Path(saved)
+    return Path.home() / ".baobaobot"
+
+
+def save_dir_pointer(config_dir: Path) -> None:
+    """Persist custom config directory path to ~/.config/baobaobot/dir."""
+    _DIR_POINTER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _DIR_POINTER_FILE.write_text(str(config_dir) + "\n")
 
 
 def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:

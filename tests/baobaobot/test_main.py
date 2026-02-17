@@ -110,7 +110,7 @@ class TestMainSubcommands:
             patch("baobaobot.main.print"),
         ):
             main()
-            mock_wm.return_value.init.assert_called_once()
+            mock_wm.return_value.init_shared.assert_called_once()
             mock_tmux.assert_not_called()
 
     def test_setup_subcommand_bypasses_tmux(self, monkeypatch):

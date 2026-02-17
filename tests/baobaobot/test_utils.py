@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from baobaobot.utils import atomic_write_json, baobaobot_dir, read_cwd_from_jsonl
+from baobaobot.utils import (
+    atomic_write_json,
+    baobaobot_dir,
+    read_cwd_from_jsonl,
+    save_dir_pointer,
+)
 
 
 class TestBaobaoDir:
@@ -13,9 +18,33 @@ class TestBaobaoDir:
         monkeypatch.setenv("BAOBAOBOT_DIR", "/custom/config")
         assert baobaobot_dir() == Path("/custom/config")
 
-    def test_returns_default_without_env(self, monkeypatch: pytest.MonkeyPatch):
+    def test_returns_default_without_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch.delenv("BAOBAOBOT_DIR", raising=False)
+        monkeypatch.setattr("baobaobot.utils._DIR_POINTER_FILE", tmp_path / "nonexistent")
         assert baobaobot_dir() == Path.home() / ".baobaobot"
+
+    def test_returns_pointer_file_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.delenv("BAOBAOBOT_DIR", raising=False)
+        pointer = tmp_path / "dir"
+        pointer.write_text("/custom/from/pointer\n")
+        monkeypatch.setattr("baobaobot.utils._DIR_POINTER_FILE", pointer)
+        assert baobaobot_dir() == Path("/custom/from/pointer")
+
+    def test_env_var_takes_precedence_over_pointer(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("BAOBAOBOT_DIR", "/from/env")
+        pointer = tmp_path / "dir"
+        pointer.write_text("/from/pointer\n")
+        monkeypatch.setattr("baobaobot.utils._DIR_POINTER_FILE", pointer)
+        assert baobaobot_dir() == Path("/from/env")
+
+
+class TestSaveDirPointer:
+    def test_saves_and_reads(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        pointer = tmp_path / "config" / "baobaobot" / "dir"
+        monkeypatch.setattr("baobaobot.utils._DIR_POINTER_FILE", pointer)
+        monkeypatch.delenv("BAOBAOBOT_DIR", raising=False)
+        save_dir_pointer(Path("/my/custom/dir"))
+        assert baobaobot_dir() == Path("/my/custom/dir")
 
 
 class TestAtomicWriteJson:
