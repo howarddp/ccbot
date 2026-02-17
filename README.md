@@ -76,7 +76,15 @@ uv sync
 
 **2. 配置環境變數：**
 
-創建 `~/.baobaobot/.env`：
+使用互動式設置（推薦）：
+
+```bash
+baobaobot setup
+```
+
+會依序引導你輸入 Bot Token、用戶 ID、Claude 命令，並自動建立 `.env`、初始化工作空間、安裝 Hook。
+
+或手動創建 `~/.baobaobot/.env`：
 
 ```ini
 TELEGRAM_BOT_TOKEN=your_bot_token_here
@@ -108,9 +116,11 @@ ALLOWED_USERS=your_telegram_user_id
 > CLAUDE_COMMAND=IS_SANDBOX=1 claude --dangerously-skip-permissions
 > ```
 
-## Hook 設置（推薦）
+## Hook 設置
 
-通過 CLI 自動安裝：
+> 如果已通過 `baobaobot setup` 完成設置，Hook 已自動安裝，可跳過此段。
+
+手動安裝：
 
 ```bash
 baobaobot hook --install
@@ -135,8 +145,8 @@ Hook 會將視窗-會話映射寫入 `$BAOBAOBOT_DIR/session_map.json`（預設 
 ## 使用方法
 
 ```bash
-# 初始化工作空間（首次使用）
-baobaobot init
+# 首次設置（互動式引導，含初始化 + Hook 安裝）
+baobaobot setup
 
 # 啟動 Bot
 baobaobot
@@ -146,6 +156,15 @@ uv run baobaobot
 ```
 
 ### 命令
+
+**CLI 命令：**
+
+| 命令 | 說明 |
+|---|---|
+| `baobaobot setup` | 互動式首次設置（建 `.env`、初始化工作空間、安裝 Hook） |
+| `baobaobot init` | 初始化工作空間目錄 |
+| `baobaobot hook --install` | 安裝 Claude Code SessionStart Hook |
+| `baobaobot` | 啟動 Telegram Bot |
 
 **Bot 命令：**
 
@@ -296,7 +315,7 @@ claude
 ```
 src/baobaobot/
 ├── __init__.py              # 套件入口
-├── main.py                  # CLI 調度器（hook / init / bot 啟動）
+├── main.py                  # CLI 調度器（setup / hook / init / bot 啟動）
 ├── hook.py                  # Hook 子命令，用於會話追蹤（+ --install）
 ├── config.py                # 環境變數配置（含工作空間設定）
 ├── bot.py                   # Telegram Bot 設置、命令處理、話題路由

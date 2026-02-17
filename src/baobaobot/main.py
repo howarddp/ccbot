@@ -1,14 +1,88 @@
 """Application entry point — CLI dispatcher and bot bootstrap.
 
-Handles three execution modes:
+Handles four execution modes:
   1. `baobaobot hook` — delegates to hook.hook_main() for Claude Code hook processing.
   2. `baobaobot init` — initializes workspace directory with default templates.
-  3. Default — configures logging, initializes workspace + tmux session, and starts
+  3. `baobaobot setup` — interactive first-time setup (create .env, init workspace,
+     install hook).
+  4. Default — configures logging, initializes workspace + tmux session, and starts
      the Telegram bot polling loop via bot.create_bot().
 """
 
+import json
 import logging
+import os
 import sys
+
+
+def _setup() -> None:
+    """Interactive first-time setup."""
+    from .utils import baobaobot_dir
+
+    config_dir = baobaobot_dir()
+    env_file = config_dir / ".env"
+
+    if env_file.exists():
+        resp = input(f"{env_file} already exists. Overwrite? [y/N] ")
+        if resp.lower() != "y":
+            print("Setup cancelled.")
+            return
+
+    print("=== BaoBaoClaude Setup ===\n")
+
+    token = input("Telegram Bot Token (from @BotFather): ").strip()
+    if not token:
+        print("Error: Token is required.")
+        sys.exit(1)
+
+    users = input(
+        "Allowed Telegram User IDs (comma-separated, from @userinfobot): "
+    ).strip()
+    if not users:
+        print("Error: At least one user ID is required.")
+        sys.exit(1)
+
+    # Validate user IDs are numeric
+    for uid in users.split(","):
+        uid = uid.strip()
+        if uid and not uid.isdigit():
+            print(f"Error: '{uid}' is not a valid numeric user ID.")
+            sys.exit(1)
+
+    claude_cmd = input("Claude command [claude]: ").strip()
+    if not claude_cmd:
+        claude_cmd = "claude"
+
+    # Write .env
+    config_dir.mkdir(parents=True, exist_ok=True)
+    env_file.write_text(
+        f"TELEGRAM_BOT_TOKEN={token}\n"
+        f"ALLOWED_USERS={users}\n"
+        f"CLAUDE_COMMAND={claude_cmd}\n"
+    )
+    print(f"\nConfig written to {env_file}")
+
+    # Set env so Config can load without re-reading the file
+    os.environ["TELEGRAM_BOT_TOKEN"] = token
+    os.environ["ALLOWED_USERS"] = users
+    os.environ["CLAUDE_COMMAND"] = claude_cmd
+
+    # Init workspace
+    from .config import Config
+
+    cfg = Config()
+    from .workspace.manager import WorkspaceManager
+
+    wm = WorkspaceManager(cfg.workspace_dir)
+    wm.init()
+    print(f"Workspace initialized at {cfg.workspace_dir}")
+
+    # Install hook
+    from .hook import _install_hook
+
+    _install_hook()
+
+    print("\nSetup complete! Run 'baobaobot' to start the bot.")
 
 
 def main() -> None:
@@ -19,14 +93,33 @@ def main() -> None:
         hook_main()
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        _setup()
+        return
+
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         # Standalone workspace initialization
-        from .workspace.manager import WorkspaceManager
         from .config import config
+        from .workspace.manager import WorkspaceManager
 
         wm = WorkspaceManager(config.workspace_dir)
         wm.init()
         print(f"Workspace initialized at {config.workspace_dir}")
+
+        # Suggest hook install if not yet configured
+        from .hook import _is_hook_installed, _CLAUDE_SETTINGS_FILE
+
+        try:
+            settings: dict = {}
+            if _CLAUDE_SETTINGS_FILE.exists():
+                settings = json.loads(_CLAUDE_SETTINGS_FILE.read_text())
+            if not _is_hook_installed(settings):
+                print(
+                    "\nHint: Run 'baobaobot hook --install' to set up "
+                    "Claude Code session tracking."
+                )
+        except (OSError, json.JSONDecodeError):
+            pass  # Non-critical hint — don't fail init
         return
 
     logging.basicConfig(
@@ -38,17 +131,8 @@ def main() -> None:
     try:
         from .config import config
     except ValueError as e:
-        from .utils import baobaobot_dir
-
-        config_dir = baobaobot_dir()
-        env_path = config_dir / ".env"
         print(f"Error: {e}\n")
-        print(f"Create {env_path} with the following content:\n")
-        print("  TELEGRAM_BOT_TOKEN=your_bot_token_here")
-        print("  ALLOWED_USERS=your_telegram_user_id")
-        print()
-        print("Get your bot token from @BotFather on Telegram.")
-        print("Get your user ID from @userinfobot on Telegram.")
+        print("Run 'baobaobot setup' for interactive first-time configuration.")
         sys.exit(1)
 
     logging.getLogger("baobaobot").setLevel(logging.DEBUG)
