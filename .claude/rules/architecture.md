@@ -69,7 +69,7 @@
 
 Additional modules:
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
-  main.py             ─ CLI entry point
+  main.py             ─ CLI entry point (auto-launches in tmux, --foreground to skip)
   utils.py            ─ Shared utilities (baobaobot_dir, atomic_write_json)
 
 Handler modules (handlers/):
@@ -78,7 +78,7 @@ Handler modules (handlers/):
   status_polling.py   ─ Background status line polling (1s interval)
   response_builder.py ─ Response pagination and formatting
   interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI
-  directory_browser.py─ Directory selection UI for new topics
+  directory_browser.py─ Directory selection UI for new topics (restricted to workspace)
   cleanup.py          ─ Topic state cleanup on close/delete
   callback_data.py    ─ Callback data constants
 
@@ -92,6 +92,9 @@ State files (~/.baobaobot/ or $BAOBAOBOT_DIR/):
 
 - **Topic-centric** — Each Telegram topic binds to one tmux window. No centralized session list; topics *are* the session list.
 - **Window ID-centric** — All internal state keyed by tmux window ID (e.g. `@0`, `@12`), not window names. Window IDs are guaranteed unique within a tmux server session. Window names are kept as display names via `window_display_names` map. Same directory can have multiple windows.
+- **Topic name = Window name** — When creating a new session, the Telegram topic name is used as the tmux window name (not the directory name). Cached via `topic_created_handler` in `bot_data["_topic_names"]`.
+- **Workspace-restricted browsing** — Directory browser only allows selecting directories under `~/.baobaobot/workspace/`, ensuring Claude Code finds the workspace's CLAUDE.md by walking up directories.
+- **Auto-tmux launch** — `baobaobot` auto-creates a tmux session and runs inside it. Use `--foreground` / `-f` to run in current terminal.
 - **Hook-based session tracking** — Claude Code `SessionStart` hook writes `session_map.json`; monitor reads it each poll cycle to auto-detect session changes.
 - **Tool use ↔ tool result pairing** — `tool_use_id` tracked across poll cycles; tool result edits the original tool_use Telegram message in-place.
 - **MarkdownV2 with fallback** — All messages go through `safe_reply`/`safe_edit`/`safe_send` which convert via `telegramify-markdown` and fall back to plain text on parse failure.

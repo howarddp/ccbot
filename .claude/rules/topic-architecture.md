@@ -13,7 +13,7 @@ The bot operates exclusively in Telegram Forum (topics) mode. There is **no** `a
      (state.json)         (written by hook)
 ```
 
-Window IDs (e.g. `@0`, `@12`) are guaranteed unique within a tmux server session. Window names are stored separately as display names (`window_display_names` map).
+Window IDs (e.g. `@0`, `@12`) are guaranteed unique within a tmux server session. Window names are stored separately as display names (`window_display_names` map). When a new topic is created, its name is cached via `topic_created_handler` and used as the tmux window name (instead of the directory name).
 
 ## Mapping 1: Topic → Window ID (thread_bindings)
 
@@ -58,9 +58,11 @@ SessionMonitor reads new message (session_id = "uuid-xxx")
   → Deliver message to user in the correct topic (thread_id)
 ```
 
-**New topic flow**: First message in an unbound topic → directory browser → select directory → create window → bind topic → forward pending message.
+**New topic flow**: First message in an unbound topic → directory browser (restricted to `~/.baobaobot/workspace/`) → select directory → create window (named after topic) → bind topic → forward pending message.
 
-**Topic lifecycle**: Closing/deleting a topic auto-kills the associated tmux window and unbinds the thread. Stale bindings (window deleted externally) are cleaned up by the status polling loop.
+**Window naming**: Topic name → tmux window name. When a topic is created, the name is cached in `bot_data["_topic_names"]`. When creating a new window or binding an existing one, the topic name is used as the window name. This ensures `tmux list-windows` shows meaningful names matching Telegram topics.
+
+**Topic lifecycle**: Closing a topic auto-kills the associated tmux window and unbinds the thread (via `topic_closed_handler`). Stale bindings (window deleted externally) are cleaned up by the status polling loop. The polling loop also periodically probes topic existence and cleans up deleted topics.
 
 ## Session Lifecycle
 

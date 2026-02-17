@@ -138,6 +138,30 @@ class TmuxManager:
         logger.debug("Window not found by name: %s", window_name)
         return None
 
+    async def rename_window(self, window_id: str, new_name: str) -> bool:
+        """Rename a tmux window.
+
+        Args:
+            window_id: The tmux window ID (e.g. '@0')
+            new_name: The new window name
+
+        Returns:
+            True if renamed successfully, False otherwise
+        """
+        session = self.get_session()
+        if not session:
+            return False
+
+        def _sync_rename() -> bool:
+            for window in session.windows:
+                if window.window_id == window_id:
+                    window.rename_window(new_name)
+                    logger.debug("Renamed window %s to '%s'", window_id, new_name)
+                    return True
+            return False
+
+        return await asyncio.to_thread(_sync_rename)
+
     async def find_window_by_id(self, window_id: str) -> TmuxWindow | None:
         """Find a window by its tmux window ID (e.g. '@0', '@12').
 

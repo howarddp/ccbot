@@ -148,12 +148,18 @@ Hook 會將視窗-會話映射寫入 `$BAOBAOBOT_DIR/session_map.json`（預設 
 # 首次設置（互動式引導，含初始化 + Hook 安裝）
 baobaobot setup
 
-# 啟動 Bot
+# 啟動 Bot（自動在 tmux session 中運行，終端可關閉）
 baobaobot
 
 # 從源碼安裝的
 uv run baobaobot
+
+# 在前台運行（不自動建立 tmux，用於除錯）
+baobaobot --foreground
+baobaobot -f
 ```
+
+啟動時，`baobaobot` 會自動建立 tmux session `baobaobot` 並在其中運行，這樣關閉終端後 Bot 仍會持續運行。使用 `--foreground` / `-f` 可在當前終端直接運行。
 
 ### 命令
 
@@ -164,7 +170,8 @@ uv run baobaobot
 | `baobaobot setup` | 互動式首次設置（建 `.env`、初始化工作空間、安裝 Hook） |
 | `baobaobot init` | 初始化工作空間目錄 |
 | `baobaobot hook --install` | 安裝 Claude Code SessionStart Hook |
-| `baobaobot` | 啟動 Telegram Bot |
+| `baobaobot` | 啟動 Telegram Bot（自動在 tmux 中運行） |
+| `baobaobot --foreground` | 在前台啟動（不建立 tmux） |
 
 **Bot 命令：**
 
@@ -199,9 +206,9 @@ uv run baobaobot
 
 **創建新會話：**
 
-1. 在 Telegram 群組中創建新話題
+1. 在 Telegram 群組中創建新話題（話題名稱會自動成為 tmux 視窗名稱）
 2. 在話題中發送任意訊息
-3. 彈出目錄瀏覽器 — 選擇專案目錄
+3. 彈出目錄瀏覽器 — 在工作空間目錄（`~/.baobaobot/workspace/`）下選擇專案目錄
 4. 自動創建 tmux 視窗，啟動 `claude`，並轉發待處理的訊息
 
 **發送訊息：**
@@ -315,7 +322,7 @@ claude
 ```
 src/baobaobot/
 ├── __init__.py              # 套件入口
-├── main.py                  # CLI 調度器（setup / hook / init / bot 啟動）
+├── main.py                  # CLI 調度器（setup / hook / init / bot 啟動 + 自動 tmux）
 ├── hook.py                  # Hook 子命令，用於會話追蹤（+ --install）
 ├── config.py                # 環境變數配置（含工作空間設定）
 ├── bot.py                   # Telegram Bot 設置、命令處理、話題路由

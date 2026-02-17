@@ -382,6 +382,20 @@ def _build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
     )
 
 
+async def topic_created_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Cache topic name when a new topic is created."""
+    if not update.message or not update.message.forum_topic_created:
+        return
+    ftc = update.message.forum_topic_created
+    thread_id = update.message.message_thread_id
+    if thread_id and ftc.name:
+        topic_names: dict[int, str] = context.bot_data.setdefault("_topic_names", {})
+        topic_names[thread_id] = ftc.name
+        logger.debug("Cached topic name: thread=%d, name=%s", thread_id, ftc.name)
+
+
 async def topic_closed_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -613,6 +627,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         clear_window_picker_state(context.user_data)
         context.user_data.pop("_pending_thread_id", None)
         context.user_data.pop("_pending_thread_text", None)
+        context.user_data.pop("_pending_topic_name", None)
 
     # Ignore text in directory browsing mode (only for the same thread)
     if (
@@ -630,6 +645,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         clear_browse_state(context.user_data)
         context.user_data.pop("_pending_thread_id", None)
         context.user_data.pop("_pending_thread_text", None)
+        context.user_data.pop("_pending_topic_name", None)
 
     # Must be in a named topic
     if thread_id is None:
@@ -656,6 +672,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             [name for _, name, _ in unbound],
         )
 
+        # Resolve topic name for use as window name
+        topic_names: dict[int, str] = context.bot_data.get("_topic_names", {})
+        topic_name = topic_names.get(thread_id)
+
         if unbound:
             # Show window picker
             logger.info(
@@ -670,6 +690,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
                 context.user_data["_pending_thread_id"] = thread_id
                 context.user_data["_pending_thread_text"] = text
+                if topic_name:
+                    context.user_data["_pending_topic_name"] = topic_name
             await safe_reply(update.message, msg_text, reply_markup=keyboard)
             return
 
@@ -679,8 +701,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             user.id,
             thread_id,
         )
-        start_path = str(Path.cwd())
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        start_path = str(config.workspace_dir)
+        msg_text, keyboard, subdirs = build_directory_browser(start_path, root_path=start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
@@ -688,6 +710,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context.user_data[BROWSE_DIRS_KEY] = subdirs
             context.user_data["_pending_thread_id"] = thread_id
             context.user_data["_pending_thread_text"] = text
+            if topic_name:
+                context.user_data["_pending_topic_name"] = topic_name
         await safe_reply(update.message, msg_text, reply_markup=keyboard)
         return
 
@@ -823,7 +847,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         subdir_name = cached_dirs[idx]
 
-        default_path = str(Path.cwd())
+        default_path = str(config.workspace_dir)
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -840,7 +864,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PATH_KEY] = new_path_str
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
+        msg_text, keyboard, subdirs = build_directory_browser(new_path_str, root_path=str(config.workspace_dir))
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -853,22 +877,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
-        default_path = str(Path.cwd())
+        default_path = str(config.workspace_dir)
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
             else default_path
         )
         current = Path(current_path).resolve()
+        workspace_root = config.workspace_dir.resolve()
         parent = current.parent
-        # No restriction - allow navigating anywhere
+        # Don't allow navigating above workspace root
+        if not str(parent).startswith(str(workspace_root)):
+            parent = workspace_root
 
         parent_path = str(parent)
         if context.user_data is not None:
             context.user_data[BROWSE_PATH_KEY] = parent_path
             context.user_data[BROWSE_PAGE_KEY] = 0
 
-        msg_text, keyboard, subdirs = build_directory_browser(parent_path)
+        msg_text, keyboard, subdirs = build_directory_browser(parent_path, root_path=str(config.workspace_dir))
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -886,7 +913,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except ValueError:
             await query.answer("Invalid data")
             return
-        default_path = str(Path.cwd())
+        default_path = str(config.workspace_dir)
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -895,14 +922,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data[BROWSE_PAGE_KEY] = pg
 
-        msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
+        msg_text, keyboard, subdirs = build_directory_browser(current_path, pg, root_path=str(config.workspace_dir))
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     elif data == CB_DIR_CONFIRM:
-        default_path = str(Path.cwd())
+        default_path = str(config.workspace_dir)
         selected_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -925,8 +952,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         clear_browse_state(context.user_data)
 
+        # Use topic name as window name if available
+        pending_topic_name: str | None = (
+            context.user_data.pop("_pending_topic_name", None)
+            if context.user_data
+            else None
+        )
+
         success, message, created_wname, created_wid = await tmux_manager.create_window(
-            selected_path
+            selected_path, window_name=pending_topic_name
         )
         if success:
             logger.info(
@@ -945,18 +979,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 session_manager.bind_thread(
                     user.id, pending_thread_id, created_wid, window_name=created_wname
                 )
-
-                # Rename the topic to match the window name
-                try:
-                    await context.bot.edit_forum_topic(
-                        chat_id=session_manager.resolve_chat_id(
-                            user.id, pending_thread_id
-                        ),
-                        message_thread_id=pending_thread_id,
-                        name=created_wname,
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to rename topic: {e}")
 
                 await safe_edit(
                     query,
@@ -1000,6 +1022,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if pending_thread_id is not None and context.user_data is not None:
                 context.user_data.pop("_pending_thread_id", None)
                 context.user_data.pop("_pending_thread_text", None)
+                context.user_data.pop("_pending_topic_name", None)
         await query.answer("Created" if success else "Failed")
 
     elif data == CB_DIR_CANCEL:
@@ -1013,6 +1036,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data.pop("_pending_thread_id", None)
             context.user_data.pop("_pending_thread_text", None)
+            context.user_data.pop("_pending_topic_name", None)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
@@ -1050,21 +1074,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Not in a topic", show_alert=True)
             return
 
-        display = w.window_name
+        # Use topic name as display name if available
+        pending_topic_name: str | None = (
+            context.user_data.pop("_pending_topic_name", None)
+            if context.user_data
+            else None
+        )
+        display = pending_topic_name or w.window_name
         clear_window_picker_state(context.user_data)
         session_manager.bind_thread(
             user.id, thread_id, selected_wid, window_name=display
         )
 
-        # Rename the topic to match the window name
-        try:
-            await context.bot.edit_forum_topic(
-                chat_id=session_manager.resolve_chat_id(user.id, thread_id),
-                message_thread_id=thread_id,
-                name=display,
-            )
-        except Exception as e:
-            logger.debug(f"Failed to rename topic: {e}")
+        # Rename the tmux window to match the topic name
+        if pending_topic_name:
+            await tmux_manager.rename_window(selected_wid, pending_topic_name)
 
         await safe_edit(
             query,
@@ -1102,8 +1126,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         # Preserve pending thread info, clear only picker state
         clear_window_picker_state(context.user_data)
-        start_path = str(Path.cwd())
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        start_path = str(config.workspace_dir)
+        msg_text, keyboard, subdirs = build_directory_browser(start_path, root_path=start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
@@ -1124,6 +1148,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data.pop("_pending_thread_id", None)
             context.user_data.pop("_pending_thread_text", None)
+            context.user_data.pop("_pending_topic_name", None)
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
@@ -1491,6 +1516,13 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
+    # Topic created event — cache topic name for window naming
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.FORUM_TOPIC_CREATED,
+            topic_created_handler,
+        )
+    )
     # Topic closed event — auto-kill associated window
     application.add_handler(
         MessageHandler(

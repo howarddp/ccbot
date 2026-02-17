@@ -103,15 +103,20 @@ def build_window_picker(
 
 
 def build_directory_browser(
-    current_path: str, page: int = 0
+    current_path: str, page: int = 0, root_path: str | None = None
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     """Build directory browser UI.
+
+    Args:
+        current_path: Directory to display.
+        page: Pagination page number.
+        root_path: If set, the browser cannot navigate above this directory.
 
     Returns: (text, keyboard, subdirs) where subdirs is the full list for caching.
     """
     path = Path(current_path).expanduser().resolve()
     if not path.exists() or not path.is_dir():
-        path = Path.cwd()
+        path = Path(root_path).resolve() if root_path else Path.cwd()
 
     try:
         subdirs = sorted(
@@ -159,8 +164,11 @@ def build_directory_browser(
         buttons.append(nav)
 
     action_row: list[InlineKeyboardButton] = []
-    # Allow going up unless at filesystem root
-    if path != path.parent:
+    # Allow going up unless at root_path boundary or filesystem root
+    at_root = path == path.parent
+    if root_path:
+        at_root = at_root or path == Path(root_path).resolve()
+    if not at_root:
         action_row.append(InlineKeyboardButton("..", callback_data=CB_DIR_UP))
     action_row.append(InlineKeyboardButton("Select", callback_data=CB_DIR_CONFIRM))
     action_row.append(InlineKeyboardButton("Cancel", callback_data=CB_DIR_CANCEL))

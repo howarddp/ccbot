@@ -36,7 +36,7 @@ uv sync                                    # Install dependencies
 
 ```
 src/baobaobot/
-├── main.py                  # CLI entry: hook / init / bot start
+├── main.py                  # CLI entry: hook / init / bot start + auto-tmux launch
 ├── config.py                # Config singleton (workspace settings added)
 ├── bot.py                   # Telegram bot (new: /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild)
 ├── workspace/               # Workspace system

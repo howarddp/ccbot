@@ -7,11 +7,16 @@ Handles four execution modes:
      install hook).
   4. Default — configures logging, initializes workspace + tmux session, and starts
      the Telegram bot polling loop via bot.create_bot().
+
+By default, the bot auto-launches inside a tmux session so it survives terminal
+closure. Use `--foreground` / `-f` to run in the current terminal instead.
 """
 
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 
 
@@ -85,6 +90,71 @@ def _setup() -> None:
     print("\nSetup complete! Run 'baobaobot' to start the bot.")
 
 
+def _launch_in_tmux() -> None:
+    """Create a tmux session and re-launch baobaobot inside it."""
+    session_name = os.getenv("TMUX_SESSION_NAME", "baobaobot")
+    window_name = "__main__"
+    target = f"{session_name}:{window_name}"
+
+    if not shutil.which("tmux"):
+        print("Error: tmux is not installed.")
+        print("Install tmux, or run with --foreground to skip tmux.")
+        sys.exit(1)
+
+    # Check if session already exists
+    session_exists = (
+        subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+    if session_exists:
+        # Check if __main__ window already has baobaobot running
+        result = subprocess.run(
+            [
+                "tmux",
+                "list-panes",
+                "-t",
+                target,
+                "-F",
+                "#{pane_current_command}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            pane_cmd = result.stdout.strip()
+            if pane_cmd not in ("bash", "zsh", "sh", "fish", ""):
+                print(
+                    f"baobaobot is already running in tmux session '{session_name}'."
+                )
+                print(f"  View logs:  tmux attach -t {session_name}")
+                print("  Restart:    scripts/restart.sh")
+                return
+    else:
+        # Create new session with __main__ window
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", session_name, "-n", window_name],
+            check=True,
+        )
+
+    # Find the baobaobot command to re-exec
+    baobaobot_cmd = shutil.which("baobaobot") or sys.argv[0]
+
+    # Send command into the __main__ window with marker env var
+    full_cmd = f"_BAOBAOBOT_TMUX=1 {baobaobot_cmd}"
+    subprocess.run(
+        ["tmux", "send-keys", "-t", target, full_cmd, "Enter"],
+        check=True,
+    )
+
+    print(f"baobaobot started in tmux session '{session_name}'.")
+    print(f"  View logs:  tmux attach -t {session_name}")
+    print("  Detach:     Ctrl-B, D")
+
+
 def main() -> None:
     """Main entry point."""
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
@@ -121,6 +191,17 @@ def main() -> None:
         except (OSError, json.JSONDecodeError):
             pass  # Non-critical hint — don't fail init
         return
+
+    # Check if we should auto-launch inside tmux
+    foreground = "--foreground" in sys.argv or "-f" in sys.argv
+    inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1" or "TMUX" in os.environ
+
+    if not foreground and not inside_tmux:
+        _launch_in_tmux()
+        return
+
+    # Strip --foreground / -f from argv so they don't confuse anything downstream
+    sys.argv = [a for a in sys.argv if a not in ("--foreground", "-f")]
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
