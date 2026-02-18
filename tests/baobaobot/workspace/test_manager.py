@@ -22,7 +22,7 @@ class TestInitShared:
 
     def test_deploys_shared_templates(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
-        for filename in ["SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md"]:
+        for filename in ["SOUL.md", "IDENTITY.md", "AGENTS.md"]:
             assert (manager.shared_dir / filename).is_file()
 
     def test_does_not_deploy_memory_md(self, manager: WorkspaceManager) -> None:
@@ -51,7 +51,7 @@ class TestInitWorkspace:
 
     def test_does_not_deploy_shared_templates(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
-        for filename in ["SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md"]:
+        for filename in ["SOUL.md", "IDENTITY.md", "AGENTS.md"]:
             assert not (manager.workspace_dir / filename).is_file()
 
     def test_idempotent(self, manager: WorkspaceManager) -> None:

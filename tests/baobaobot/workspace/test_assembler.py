@@ -33,7 +33,6 @@ class TestAssemble:
         content = assembler.assemble()
         assert "人格 (SOUL)" in content
         assert "身份 (IDENTITY)" in content
-        assert "用戶資訊 (USER)" in content
         assert "工作指令 (AGENTS)" in content
         assert "記憶 (MEMORY)" in content
 
