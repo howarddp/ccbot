@@ -116,6 +116,7 @@ from .handlers.persona_handler import (
 )
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
+from .memory.daily import save_attachment
 from .handlers.cron_handler import cron_command
 from .cron.service import cron_service
 from .persona.profile import convert_user_mentions, ensure_user_profile
@@ -123,6 +124,8 @@ from .workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
 from .workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
+
+_MEMORY_TRIGGERS = ("記住", "remember", "記憶")
 
 
 def _ensure_user_and_prefix(user: User, text: str) -> str:
@@ -644,8 +647,29 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
             return
 
-    # Build text to send to Claude Code with user prefix
+    # Check caption for memory trigger words
     caption = msg.caption or ""
+    if caption and any(t in caption.lower() for t in _MEMORY_TRIGGERS):
+        display_name = session_manager.get_display_name(wid)
+        ws_dir = config.workspace_dir_for(display_name)
+        user_name = user.first_name or str(user.id)
+        # Remove only the first matched trigger word from description
+        desc = caption
+        for t in _MEMORY_TRIGGERS:
+            idx = desc.lower().find(t)
+            if idx >= 0:
+                desc = (desc[:idx] + desc[idx + len(t) :]).strip()
+                break
+        if not desc:
+            desc = filename
+        rel = save_attachment(ws_dir, dest, desc, user_name)
+        if rel:
+            await safe_reply(update.message, f"💾 已存入記憶: {dest.name}")
+        else:
+            await safe_reply(update.message, "❌ 無法存入記憶。")
+        # Still forward to Claude below
+
+    # Build text to send to Claude Code with user prefix
     lines = [f"[收到檔案] {dest}"]
     if caption:
         lines.append(caption)
@@ -848,6 +872,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     thread_id = _get_thread_id(update)
     if chat.type in ("group", "supergroup") and thread_id is not None:
         session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    # Backfill topic name from reply_to_message if not already persisted
+    if thread_id is not None and not session_manager.get_topic_name(thread_id):
+        rtm = update.message.reply_to_message
+        if rtm and rtm.forum_topic_created and rtm.forum_topic_created.name:
+            session_manager.set_topic_name(thread_id, rtm.forum_topic_created.name)
+            logger.debug(
+                "Backfilled topic name from reply_to_message: thread=%d, name=%s",
+                thread_id,
+                rtm.forum_topic_created.name,
+            )
 
     text = update.message.text
 

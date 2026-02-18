@@ -39,6 +39,7 @@ _WORKSPACE_TEMPLATE_FILES = [
 _BIN_SCRIPTS = [
     "memory-search",
     "memory-list",
+    "memory-save",
     "cron-add",
     "cron-list",
     "cron-remove",
@@ -48,6 +49,7 @@ _BIN_SCRIPTS = [
 _SKILL_NAMES = [
     "memory-search",
     "memory-list",
+    "memory-save",
     "cron-add",
     "cron-list",
     "cron-remove",
@@ -104,6 +106,7 @@ class WorkspaceManager:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         (self.workspace_dir / "projects").mkdir(exist_ok=True)
         self.memory_dir.mkdir(exist_ok=True)
+        (self.memory_dir / "attachments").mkdir(exist_ok=True)
         (self.workspace_dir / "tmp").mkdir(exist_ok=True)
 
         for filename in _WORKSPACE_TEMPLATE_FILES:

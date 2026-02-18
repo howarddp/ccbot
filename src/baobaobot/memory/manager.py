@@ -85,11 +85,12 @@ class MemoryManager:
         return get_daily(self.workspace_dir, date_str)
 
     def delete_daily(self, date_str: str) -> bool:
-        """Delete a specific daily memory file."""
+        """Delete a specific daily memory file and its attachments."""
+        self._cleanup_attachments_for_date(date_str)
         return delete_daily(self.workspace_dir, date_str)
 
     def delete_all_daily(self) -> int:
-        """Delete all daily memory files. Returns count of deleted files."""
+        """Delete all daily memory files and all attachments. Returns count of deleted files."""
         if not self.memory_dir.exists():
             return 0
 
@@ -100,6 +101,15 @@ class MemoryManager:
                 count += 1
             except OSError:
                 continue
+
+        # Clean up all attachments
+        att_dir = self.memory_dir / "attachments"
+        if att_dir.exists():
+            for f in att_dir.iterdir():
+                try:
+                    f.unlink()
+                except OSError:
+                    continue
 
         logger.info("Deleted %d daily memory files", count)
         return count
@@ -131,7 +141,7 @@ class MemoryManager:
             return ""
 
     def cleanup(self, keep_days: int = 30) -> int:
-        """Remove daily memory files older than keep_days.
+        """Remove daily memory files older than keep_days, including their attachments.
 
         Returns:
             Number of files deleted.
@@ -149,6 +159,7 @@ class MemoryManager:
                 continue
 
             if file_date < cutoff:
+                self._cleanup_attachments_for_date(f.stem)
                 try:
                     f.unlink()
                     count += 1
@@ -158,4 +169,26 @@ class MemoryManager:
 
         if count:
             logger.info("Cleaned up %d old daily memories (cutoff: %s)", count, cutoff)
+        return count
+
+    def _cleanup_attachments_for_date(self, date_str: str) -> int:
+        """Delete all attachments prefixed with the given date.
+
+        Attachment filenames are formatted as {YYYY-MM-DD}_{HHMMSS}_{original}.
+        Returns the number of files deleted.
+        """
+        att_dir = self.memory_dir / "attachments"
+        if not att_dir.exists():
+            return 0
+
+        prefix = f"{date_str}_"
+        count = 0
+        for f in att_dir.iterdir():
+            if f.name.startswith(prefix):
+                try:
+                    f.unlink()
+                    count += 1
+                    logger.debug("Cleaned up attachment: %s", f.name)
+                except OSError:
+                    continue
         return count

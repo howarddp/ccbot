@@ -4,11 +4,12 @@ Each daily memory file captures conversation highlights, decisions, and
 observations from a single day. Files are created by Claude Code during
 sessions and managed by MemoryManager for lifecycle operations.
 
-Key functions: get_daily(), write_daily(), delete_daily().
+Key functions: get_daily(), write_daily(), delete_daily(), save_attachment().
 """
 
 import logging
-from datetime import date
+import shutil
+from datetime import date, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -68,3 +69,73 @@ def delete_daily(workspace_dir: Path, date_str: str) -> bool:
         return True
     except OSError:
         return False
+
+
+# --- Attachment support ---
+
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+
+def _attachments_dir(workspace_dir: Path) -> Path:
+    """Get the memory attachments directory path."""
+    return _memory_dir(workspace_dir) / "attachments"
+
+
+def append_to_daily(workspace_dir: Path, line: str) -> None:
+    """Append a single line to today's daily memory file."""
+    mem_dir = _memory_dir(workspace_dir)
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    path = _daily_path(workspace_dir, date.today().isoformat())
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line.rstrip("\n") + "\n")
+
+
+def save_attachment(
+    workspace_dir: Path,
+    source_path: Path,
+    description: str,
+    user_name: str | None = None,
+) -> str | None:
+    """Copy a file into memory/attachments/ and record it in today's daily memory.
+
+    Args:
+        workspace_dir: Workspace root path.
+        source_path: Absolute path to the source file.
+        description: Human-readable description of the attachment.
+        user_name: Optional user name to tag in the memory entry.
+
+    Returns:
+        Relative path (from workspace) of the saved attachment, or None on failure.
+    """
+    if not source_path.is_file():
+        logger.warning("save_attachment: source not found: %s", source_path)
+        return None
+
+    att_dir = _attachments_dir(workspace_dir)
+    att_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use local time so date prefix matches date.today() used for daily .md filenames.
+    # This ensures _cleanup_attachments_for_date() can find attachments by date prefix.
+    now = datetime.now()
+    ts = now.strftime("%Y-%m-%d_%H%M%S")
+    dest_name = f"{ts}_{source_path.name}"
+    dest = att_dir / dest_name
+    shutil.copy2(source_path, dest)
+
+    # Build relative path from workspace root
+    rel_path = f"memory/attachments/{dest_name}"
+
+    # Build Markdown reference
+    suffix = source_path.suffix.lower()
+    if suffix in _IMAGE_EXTENSIONS:
+        ref = f"![{description}]({rel_path})"
+    else:
+        ref = f"[{description}]({rel_path})"
+
+    # Build the memory line
+    tag = f"[{user_name}] " if user_name else ""
+    line = f"- {tag}{ref}"
+    append_to_daily(workspace_dir, line)
+
+    logger.info("Saved attachment: %s -> %s", source_path.name, rel_path)
+    return rel_path

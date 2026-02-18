@@ -55,3 +55,17 @@
 - 標記會被自動偵測並透過 Telegram 傳送給用戶
 - 可以在同一則訊息中包含多個 `[SEND_FILE:...]` 標記
 - 用戶透過 Telegram 傳送的檔案會存放在 `tmp/` 目錄，你會收到檔案路徑通知
+
+## 檔案記憶
+
+當需要將檔案存入記憶時，使用 `/memory-save` skill：
+
+```
+{{BIN_DIR}}/memory-save /path/to/file "描述"
+{{BIN_DIR}}/memory-save /path/to/file "描述" --user Alice
+```
+
+- 檔案會被複製到 `memory/attachments/`，並在今日的每日記憶中加入 Markdown 引用
+- 圖片（`.jpg/.png/.gif/.webp`）使用 `![描述](路徑)` 格式，其他檔案使用 `[描述](路徑)` 格式
+- 用戶透過 Telegram 傳送檔案時，若 caption 包含「記住」或「remember」，會自動存入記憶
+- 附件隨每日記憶一同清理（刪除某天的記憶會同步刪除該天的附件）

@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Save a file as a memory attachment.
+
+Copies the file to memory/attachments/ and appends a Markdown reference
+to today's daily memory file (memory/YYYY-MM-DD.md).
+
+NOTE: The core logic (timestamp format, image extensions, Markdown reference
+format) is duplicated from baobaobot.memory.daily.save_attachment because
+bin scripts run standalone without access to the package. Keep both in sync.
+
+Usage:
+    memory-save <file> <description> [--user NAME] [--workspace PATH]
+
+Examples:
+    memory-save /path/to/screenshot.png "系統架構圖"
+    memory-save report.pdf "月報" --user Alice
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import sys
+from datetime import date, datetime
+from pathlib import Path
+from typing import Optional
+
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+
+def resolve_workspace() -> Path:
+    """Resolve workspace directory: --workspace > cwd (if has memory/) > error."""
+    cwd = Path.cwd()
+    if (cwd / "memory").is_dir() or (cwd / "MEMORY.md").is_file():
+        return cwd
+    print(
+        "Cannot determine workspace. Use --workspace or run from a workspace dir.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def save_attachment(
+    workspace: Path, source: Path, description: str, user_name: Optional[str] = None
+) -> str:
+    """Copy file to memory/attachments/ and append reference to daily memory.
+
+    Returns the relative path of the saved attachment.
+    """
+    att_dir = workspace / "memory" / "attachments"
+    att_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    ts = now.strftime("%Y-%m-%d_%H%M%S")
+    dest_name = f"{ts}_{source.name}"
+    dest = att_dir / dest_name
+    shutil.copy2(source, dest)
+
+    rel_path = f"memory/attachments/{dest_name}"
+
+    # Markdown reference: image vs file
+    suffix = source.suffix.lower()
+    if suffix in _IMAGE_EXTENSIONS:
+        ref = f"![{description}]({rel_path})"
+    else:
+        ref = f"[{description}]({rel_path})"
+
+    # Append to today's daily memory
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    daily_path = memory_dir / f"{date.today().isoformat()}.md"
+    tag = f"[{user_name}] " if user_name else ""
+    line = f"- {tag}{ref}\n"
+    with daily_path.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+    return rel_path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Save a file as a memory attachment")
+    parser.add_argument("file", help="Path to the file to save")
+    parser.add_argument("description", help="Description of the attachment")
+    parser.add_argument("--user", type=str, default=None, help="User name to tag")
+    parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
+    args = parser.parse_args()
+
+    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
+    if not workspace.exists():
+        print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    source = Path(args.file)
+    if not source.is_file():
+        print(f"File not found: {source}", file=sys.stderr)
+        sys.exit(1)
+
+    rel_path = save_attachment(workspace, source, args.description, args.user)
+    print(f"💾 Saved to memory: {rel_path}")
+
+
+if __name__ == "__main__":
+    main()
