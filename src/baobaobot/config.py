@@ -86,6 +86,9 @@ class Config:
             "yes",
         )
 
+        # Voice transcription model (used by faster-whisper if installed)
+        self.whisper_model: str = os.getenv("WHISPER_MODEL", "base")
+
         # Cron default timezone (env CRON_DEFAULT_TZ, default empty = system tz)
         self.cron_default_tz: str = os.getenv("CRON_DEFAULT_TZ", "")
 
@@ -123,7 +126,8 @@ class Config:
         if not self.config_dir.is_dir():
             return []
         return sorted(
-            p for p in self.config_dir.iterdir()
+            p
+            for p in self.config_dir.iterdir()
             if p.is_dir() and p.name.startswith("workspace_")
         )
 

@@ -594,6 +594,30 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await file_obj.download_to_drive(str(dest))
     logger.info("Downloaded file to %s (user=%d, thread=%d)", dest, user.id, thread_id)
 
+    # Voice message: attempt transcription before sending to Claude
+    if msg.voice:
+        from .transcribe import transcribe_voice
+
+        transcript = await transcribe_voice(dest)
+        if transcript:
+            caption = msg.caption or ""
+            lines = [f"[語音訊息] {dest}", f"語音轉文字: {transcript}"]
+            if caption:
+                lines.append(caption)
+            raw_text = "\n".join(lines)
+            text_to_send = _ensure_user_and_prefix(user, raw_text)
+
+            await msg.chat.send_action(ChatAction.TYPING)
+            success, message = await session_manager.send_to_window(wid, text_to_send)
+            if success:
+                await safe_reply(update.message, f"🎤 語音轉文字: {transcript}")
+            else:
+                await safe_reply(
+                    update.message,
+                    f"❌ 檔案已儲存但無法送達 Claude: {message}",
+                )
+            return
+
     # Build text to send to Claude Code with user prefix
     caption = msg.caption or ""
     lines = [f"[收到檔案] {dest}"]

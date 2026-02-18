@@ -39,9 +39,7 @@ def _setup() -> None:
     print("=== BaoBaoClaude Setup ===\n")
 
     # Allow custom BAOBAOBOT_DIR (always show ~/.baobaobot as default)
-    custom_dir = input(
-        f"Config directory [{default_dir}]: "
-    ).strip()
+    custom_dir = input(f"Config directory [{default_dir}]: ").strip()
     if custom_dir:
         config_dir = Path(os.path.expanduser(custom_dir))
     else:
@@ -77,13 +75,25 @@ def _setup() -> None:
     if not claude_cmd:
         claude_cmd = "claude"
 
+    # Optional: voice transcription
+    whisper_model = ""
+    voice_resp = input(
+        "Enable voice transcription? (requires faster-whisper + model download) [y/N] "
+    ).strip()
+    enable_voice = voice_resp.lower() in ("y", "yes")
+    if enable_voice:
+        whisper_model = input("Whisper model size [base]: ").strip() or "base"
+
     # Write .env
     config_dir.mkdir(parents=True, exist_ok=True)
-    env_file.write_text(
-        f"TELEGRAM_BOT_TOKEN={token}\n"
-        f"ALLOWED_USERS={users}\n"
-        f"CLAUDE_COMMAND={claude_cmd}\n"
-    )
+    env_lines = [
+        f"TELEGRAM_BOT_TOKEN={token}",
+        f"ALLOWED_USERS={users}",
+        f"CLAUDE_COMMAND={claude_cmd}",
+    ]
+    if whisper_model:
+        env_lines.append(f"WHISPER_MODEL={whisper_model}")
+    env_file.write_text("\n".join(env_lines) + "\n")
     print(f"\nConfig written to {env_file}")
 
     # Set env so Config can load without re-reading the file
@@ -105,6 +115,24 @@ def _setup() -> None:
     from .hook import _install_hook
 
     _install_hook()
+
+    # Install voice transcription dependency
+    if enable_voice:
+        print("\nInstalling faster-whisper...")
+        uv = shutil.which("uv")
+        if uv:
+            cmd = [uv, "pip", "install", "faster-whisper>=1.0.0"]
+        else:
+            cmd = [sys.executable, "-m", "pip", "install", "faster-whisper>=1.0.0"]
+        result = subprocess.run(cmd)
+        if result.returncode == 0:
+            print("Voice transcription enabled.")
+        else:
+            print(
+                "Warning: faster-whisper installation failed. "
+                "Voice transcription will be disabled.\n"
+                "You can install it later: uv pip install faster-whisper"
+            )
 
     print("\nSetup complete! Run 'baobaobot' to start the bot.")
 
@@ -146,9 +174,7 @@ def _launch_in_tmux() -> None:
         if result.returncode == 0:
             pane_cmd = result.stdout.strip()
             if pane_cmd not in ("bash", "zsh", "sh", "fish", ""):
-                print(
-                    f"baobaobot is already running in tmux session '{session_name}'."
-                )
+                print(f"baobaobot is already running in tmux session '{session_name}'.")
                 print(f"  View logs:  tmux attach -t {session_name}")
                 print("  Restart:    scripts/restart.sh")
                 return
