@@ -85,6 +85,7 @@ class CronJob:
     message: str = ""  # text to send to tmux
     enabled: bool = True
     delete_after_run: bool = False  # at type defaults True
+    creator_user_id: int = 0  # Telegram user ID of the job creator
     created_at: float = 0.0
     updated_at: float = 0.0
     state: CronJobState = field(default_factory=CronJobState)
@@ -97,6 +98,7 @@ class CronJob:
             "message": self.message,
             "enabled": self.enabled,
             "delete_after_run": self.delete_after_run,
+            "creator_user_id": self.creator_user_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "state": self.state.to_dict(),
@@ -111,6 +113,7 @@ class CronJob:
             message=data.get("message", ""),
             enabled=data.get("enabled", True),
             delete_after_run=data.get("delete_after_run", False),
+            creator_user_id=data.get("creator_user_id", 0),
             created_at=data.get("created_at", 0.0),
             updated_at=data.get("updated_at", 0.0),
             state=CronJobState.from_dict(data.get("state", {})),

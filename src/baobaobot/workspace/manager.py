@@ -1,7 +1,7 @@
 """Workspace directory initialization and project management.
 
 Manages a two-tier layout:
-  - Shared dir (config_dir): SOUL.md, IDENTITY.md, USER.md, AGENTS.md, bin/
+  - Shared dir (config_dir): SOUL.md, IDENTITY.md, AGENTS.md, bin/, users/
   - Per-topic workspace (workspace_<topic>): MEMORY.md, memory/, projects/, CLAUDE.md
 
 Key class: WorkspaceManager.
@@ -27,7 +27,6 @@ _SKILLS_DIR = Path(__file__).parent / "skills"
 _SHARED_TEMPLATE_FILES = [
     "SOUL.md",
     "IDENTITY.md",
-    "USER.md",
     "AGENTS.md",
 ]
 
@@ -81,6 +80,18 @@ class WorkspaceManager:
                     logger.info("Deployed shared template: %s", dest)
                 else:
                     logger.warning("Template not found: %s", src)
+
+        # Create users/ directory for multi-user profiles
+        (self.shared_dir / "users").mkdir(exist_ok=True)
+
+        # Warn about legacy USER.md (replaced by per-user profiles in users/)
+        legacy_user_md = self.shared_dir / "USER.md"
+        if legacy_user_md.exists():
+            logger.info(
+                "Legacy USER.md found at %s (no longer used; "
+                "per-user profiles are now in users/)",
+                legacy_user_md,
+            )
 
         self._install_bin_scripts()
         logger.debug("Shared files initialized at %s", self.shared_dir)
