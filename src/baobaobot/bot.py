@@ -4,7 +4,7 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
-  - Command handlers: /start, /history, /screenshot, /esc, /kill,
+  - Command handlers: /history, /screenshot, /esc, /forcekill,
     /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: history pagination,
@@ -70,6 +70,7 @@ from .handlers.callback_data import (
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
+    CB_RESTART_SESSION,
     CB_SCREENSHOT_REFRESH,
 )
 from .handlers.cleanup import clear_topic_state
@@ -97,7 +98,7 @@ from .handlers.message_sender import (
 )
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import status_poll_loop
+from .handlers.status_polling import clear_window_health, status_poll_loop
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
@@ -134,7 +135,9 @@ def _ensure_user_and_prefix(user: User, text: str) -> str:
     username = user.username or ""
 
     profile = ensure_user_profile(config.users_dir, user.id, first_name, username)
-    display = profile.name if profile.name and profile.name != "（待設定）" else first_name
+    display = (
+        profile.name if profile.name and profile.name != "（待設定）" else first_name
+    )
     return f"[{display}|{user.id}] {text}"
 
 
@@ -191,19 +194,37 @@ def _resolve_workspace_dir(update: Update) -> Path | None:
 # --- Command handlers ---
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def forcekill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kill the Claude process in the current session and restart it."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
-        if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+    if not update.message:
         return
 
-    if update.message:
-        await safe_reply(
-            update.message,
-            "🤖 *Claude Code Monitor*\n\n"
-            "Each topic is a session. Create a new topic to start.",
-        )
+    thread_id = _get_thread_id(update)
+    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        return
+
+    display = session_manager.get_display_name(wid)
+    await safe_reply(update.message, f"🔄 Restarting Claude in *{display}*…")
+
+    success = await tmux_manager.restart_claude(wid)
+    clear_window_health(wid)
+    session_manager.clear_window_session(wid)
+
+    if success:
+        await safe_reply(update.message, f"✅ Claude restarted in *{display}*.")
+    else:
+        await safe_reply(update.message, f"❌ Failed to restart Claude in *{display}*.")
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -420,6 +441,7 @@ async def topic_closed_handler(
                 user.id,
                 thread_id,
             )
+        clear_window_health(wid)
         session_manager.unbind_thread(user.id, thread_id)
         # Clean up all memory state for this topic
         await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
@@ -975,6 +997,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             logger.error(f"Failed to refresh screenshot: {e}")
             await query.answer("Failed to refresh", show_alert=True)
 
+    # Restart session (freeze recovery)
+    elif data.startswith(CB_RESTART_SESSION):
+        window_id = data[len(CB_RESTART_SESSION) :]
+        w = await tmux_manager.find_window_by_id(window_id)
+        if not w:
+            await query.answer("Window no longer exists", show_alert=True)
+            try:
+                await query.edit_message_text("❌ Window no longer exists.")
+            except Exception:
+                pass
+            return
+
+        display = session_manager.get_display_name(window_id)
+        success = await tmux_manager.restart_claude(window_id)
+        clear_window_health(window_id)
+        session_manager.clear_window_session(window_id)
+
+        if success:
+            try:
+                await query.edit_message_text(f"✅ Claude restarted in {display}.")
+            except Exception:
+                pass
+            await query.answer("Restarted")
+        else:
+            try:
+                await query.edit_message_text(
+                    f"❌ Failed to restart Claude in {display}."
+                )
+            except Exception:
+                pass
+            await query.answer("Restart failed", show_alert=True)
+
     elif data == "noop":
         await query.answer()
 
@@ -1285,11 +1339,10 @@ async def post_init(application: Application) -> None:
     await application.bot.delete_my_commands()
 
     bot_commands = [
-        BotCommand("start", "Show welcome message"),
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
-        BotCommand("kill", "Kill session and delete topic"),
+        BotCommand("forcekill", "Kill & restart Claude in this session"),
         BotCommand("soul", "View/edit personality (SOUL.md)"),
         BotCommand("identity", "View/set identity fields"),
         BotCommand("profile", "View/set user profile"),
@@ -1372,8 +1425,8 @@ def create_bot() -> Application:
         .build()
     )
 
-    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))
+    application.add_handler(CommandHandler("forcekill", forcekill_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     # BaoBao persona/memory/workspace commands

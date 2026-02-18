@@ -46,6 +46,32 @@ class TestParseStatusLine:
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
 
+    def test_idle_prompt_before_spinner_returns_none(self):
+        """❯ prompt found before spinner (bottom-up) → idle, return None."""
+        pane = (
+            "Some output\n"
+            "✻ Reading file src/main.py\n"
+            "──────────────────────────────\n"
+            "❯\n"
+            "──────────────────────────────\n"
+            "  [Opus 4.6] Context: 34%\n"
+        )
+        assert parse_status_line(pane) is None
+
+    def test_lone_idle_prompt_returns_none(self):
+        """Just a ❯ prompt, no spinner at all → None."""
+        pane = "Some output\n❯\n"
+        assert parse_status_line(pane) is None
+
+    def test_spinner_below_prompt_returns_status(self):
+        """Spinner below ❯ prompt → active status (unusual but valid)."""
+        pane = "Some output\n❯\n✻ Working on task\n"
+        assert parse_status_line(pane) == "Working on task"
+
+    def test_frozen_fixture(self, sample_pane_frozen: str):
+        """Frozen pane (prompt below spinner) returns None."""
+        assert parse_status_line(sample_pane_frozen) is None
+
 
 # ── extract_interactive_content ──────────────────────────────────────────
 

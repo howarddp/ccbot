@@ -17,22 +17,26 @@ Key components:
 """
 
 import asyncio
+import hashlib
 import logging
 import time
+from dataclasses import dataclass
 
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 from ..session import session_manager
-from ..terminal_parser import is_interactive_ui, parse_status_line
+from ..terminal_parser import STATUS_SPINNERS, is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
+from .callback_data import CB_RESTART_SESSION
+from .cleanup import clear_topic_state
 from .interactive_ui import (
     clear_interactive_msg,
     get_interactive_window,
     handle_interactive_ui,
 )
-from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
+from .message_sender import rate_limit_send_message
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,81 @@ STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send l
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
+
+# Freeze detection
+FREEZE_TIMEOUT = 60.0  # seconds of unchanged pane + stale spinner → freeze
+
+
+@dataclass
+class _WindowHealth:
+    """Per-window health tracking for freeze detection."""
+
+    last_pane_hash: str = ""
+    unchanged_since: float = 0.0
+    notified: bool = False
+
+
+_window_health: dict[str, _WindowHealth] = {}
+
+
+def clear_window_health(window_id: str) -> None:
+    """Reset health tracking for a window (call after restart)."""
+    _window_health.pop(window_id, None)
+
+
+def _check_freeze(
+    window_id: str,
+    pane_text: str,
+) -> bool:
+    """Check if a window appears frozen.
+
+    A freeze is detected when:
+      1. Pane content is unchanged for FREEZE_TIMEOUT seconds
+      2. Both ``❯`` prompt AND a spinner character are visible
+         (spinner above the prompt = stale status from before freeze)
+
+    Returns True if freeze detected (and not yet notified).
+    """
+    h = pane_text.encode()
+    pane_hash = hashlib.md5(h).hexdigest()
+
+    health = _window_health.get(window_id)
+    if health is None:
+        health = _WindowHealth()
+        _window_health[window_id] = health
+
+    now = time.monotonic()
+
+    if pane_hash != health.last_pane_hash:
+        # Content changed — reset
+        health.last_pane_hash = pane_hash
+        health.unchanged_since = now
+        health.notified = False
+        return False
+
+    if health.notified:
+        return False  # Already sent notification
+
+    elapsed = now - health.unchanged_since
+    if elapsed < FREEZE_TIMEOUT:
+        return False
+
+    # Check both indicators: ❯ prompt AND spinner in the pane
+    lines = pane_text.strip().split("\n")
+    has_prompt = False
+    has_spinner = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("❯"):
+            has_prompt = True
+        if stripped and stripped[0] in STATUS_SPINNERS:
+            has_spinner = True
+
+    if has_prompt and has_spinner:
+        health.notified = True
+        return True
+
+    return False
 
 
 async def update_status_message(
@@ -90,6 +169,30 @@ async def update_status_message(
     # Normal status line check
     status_line = parse_status_line(pane_text)
 
+    # Freeze detection: unchanged pane + stale spinner → notify user
+    if _check_freeze(window_id, pane_text):
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        display = session_manager.get_display_name(window_id)
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔄 Restart Session",
+                        callback_data=f"{CB_RESTART_SESSION}{window_id}"[:64],
+                    )
+                ]
+            ]
+        )
+        await rate_limit_send_message(
+            bot,
+            chat_id,
+            f"⚠️ Session *{display}* appears frozen.\n"
+            "No activity for 60s. Tap to restart.",
+            message_thread_id=thread_id,
+            reply_markup=keyboard,
+        )
+        logger.warning("Freeze detected for window %s (%s)", window_id, display)
+
     if status_line:
         await enqueue_status_update(
             bot,
@@ -125,6 +228,7 @@ async def status_poll_loop(bot: Bot) -> None:
                             w = await tmux_manager.find_window_by_id(wid)
                             if w:
                                 await tmux_manager.kill_window(w.window_id)
+                            clear_window_health(wid)
                             session_manager.unbind_thread(user_id, thread_id)
                             await clear_topic_state(user_id, thread_id, bot)
                             logger.info(
@@ -152,6 +256,7 @@ async def status_poll_loop(bot: Bot) -> None:
                     # Clean up stale bindings (window no longer exists)
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
+                        clear_window_health(wid)
                         session_manager.unbind_thread(user_id, thread_id)
                         await clear_topic_state(user_id, thread_id, bot)
                         logger.info(

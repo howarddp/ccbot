@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -332,6 +335,109 @@ class TmuxManager:
                 return False
 
         return await asyncio.to_thread(_sync_send_keys)
+
+    async def get_pane_pid(self, window_id: str) -> int | None:
+        """Get the shell PID of the active pane in the given window.
+
+        Returns:
+            The PID as int, or None if not found.
+        """
+
+        def _sync_get_pid() -> int | None:
+            session = self.get_session()
+            if not session:
+                return None
+            try:
+                window = session.windows.get(window_id=window_id)
+                if not window:
+                    return None
+                pane = window.active_pane
+                if not pane:
+                    return None
+                pid_str = pane.pane_pid
+                return int(pid_str) if pid_str else None
+            except Exception as e:
+                logger.error(f"Failed to get pane PID for {window_id}: {e}")
+                return None
+
+        return await asyncio.to_thread(_sync_get_pid)
+
+    async def restart_claude(self, window_id: str) -> bool:
+        """Kill the Claude Code process in a window and restart it.
+
+        Finds the claude child process of the shell, sends SIGTERM,
+        waits up to 3s, then SIGKILL if still alive.  Finally sends
+        the configured claude_command to restart.
+
+        Returns:
+            True if restart was initiated, False on failure.
+        """
+        shell_pid = await self.get_pane_pid(window_id)
+        if shell_pid is None:
+            logger.error("Cannot restart: no shell PID for window %s", window_id)
+            return False
+
+        def _kill_claude() -> bool:
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-P", str(shell_pid), "-f", "claude"],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0 or not result.stdout.strip():
+                    logger.info("No claude child process found under PID %d", shell_pid)
+                    return True  # Nothing to kill, proceed to restart
+
+                for pid_str in result.stdout.strip().split("\n"):
+                    pid = int(pid_str.strip())
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        logger.info("Sent SIGTERM to claude PID %d", pid)
+                    except OSError as e:
+                        logger.warning("SIGTERM failed for PID %d: %s", pid, e)
+                return True
+            except Exception as e:
+                logger.error("Failed to find/kill claude process: %s", e)
+                return False
+
+        killed = await asyncio.to_thread(_kill_claude)
+        if not killed:
+            return False
+
+        # Wait for process to die
+        await asyncio.sleep(3.0)
+
+        # Check if still alive and SIGKILL if needed
+        def _force_kill() -> None:
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-P", str(shell_pid), "-f", "claude"],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    for pid_str in result.stdout.strip().split("\n"):
+                        pid = int(pid_str.strip())
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            logger.info("Sent SIGKILL to claude PID %d", pid)
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+
+        await asyncio.to_thread(_force_kill)
+        await asyncio.sleep(0.5)
+
+        # Restart Claude Code
+        success = await self.send_keys(
+            window_id, config.claude_command, enter=True, literal=True
+        )
+        if success:
+            logger.info("Restarted Claude Code in window %s", window_id)
+        else:
+            logger.error("Failed to restart Claude Code in window %s", window_id)
+        return success
 
     async def kill_window(self, window_id: str) -> bool:
         """Kill a tmux window by its ID."""

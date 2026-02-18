@@ -136,3 +136,16 @@ def sample_pane_status_line():
 @pytest.fixture
 def sample_pane_no_ui():
     return "$ echo hello\nhello\n$\n"
+
+
+@pytest.fixture
+def sample_pane_frozen():
+    """Pane with both ❯ prompt and stale spinner — freeze indicator."""
+    return (
+        "Some previous output\n"
+        "✻ Reading file src/main.py\n"
+        "──────────────────────────────\n"
+        "❯\n"
+        "──────────────────────────────\n"
+        "  [Opus 4.6] Context: 34%\n"
+    )

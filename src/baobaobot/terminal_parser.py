@@ -184,11 +184,15 @@ def parse_status_line(pane_text: str) -> str | None:
 
     # Search from bottom up — status line is near the bottom but may have
     # separator lines, prompts, etc. below it.
+    # If we hit the ❯ idle prompt before finding a spinner, Claude is idle
+    # and any spinner above is stale.
     lines = pane_text.strip().split("\n")
     for line in reversed(lines[-15:]):
         line = line.strip()
         if not line:
             continue
+        if line.startswith("❯"):
+            return None  # idle prompt → no active status
         if line[0] in STATUS_SPINNERS:
             return line[1:].strip()
     return None
