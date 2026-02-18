@@ -49,6 +49,9 @@ TOPIC_CHECK_INTERVAL = 60.0  # seconds
 # Freeze detection
 FREEZE_TIMEOUT = 60.0  # seconds of unchanged pane + stale spinner → freeze
 
+# Shutdown guard — prevents destructive cleanup during bot shutdown
+_shutting_down = False
+
 
 @dataclass
 class _WindowHealth:
@@ -60,6 +63,16 @@ class _WindowHealth:
 
 
 _window_health: dict[str, _WindowHealth] = {}
+
+
+def signal_shutdown() -> None:
+    """Signal that the bot is shutting down.
+
+    Once set, the poll loop skips all destructive operations (unbinding
+    threads, killing windows) to avoid corrupting state during restart.
+    """
+    global _shutting_down
+    _shutting_down = True
 
 
 def clear_window_health(window_id: str) -> None:
@@ -75,8 +88,9 @@ def _check_freeze(
 
     A freeze is detected when:
       1. Pane content is unchanged for FREEZE_TIMEOUT seconds
-      2. Both ``❯`` prompt AND a spinner character are visible
-         (spinner above the prompt = stale status from before freeze)
+      2. There is an **active** spinner in the status area (detected by
+         ``parse_status_line``) — this excludes stale spinners from old
+         output and the ``✻`` in Claude Code's welcome banner.
 
     Returns True if freeze detected (and not yet notified).
     """
@@ -104,18 +118,11 @@ def _check_freeze(
     if elapsed < FREEZE_TIMEOUT:
         return False
 
-    # Check both indicators: ❯ prompt AND spinner in the pane
-    lines = pane_text.strip().split("\n")
-    has_prompt = False
-    has_spinner = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("❯"):
-            has_prompt = True
-        if stripped and stripped[0] in STATUS_SPINNERS:
-            has_spinner = True
-
-    if has_prompt and has_spinner:
+    # Only flag as frozen if there's an active spinner in the status area.
+    # parse_status_line() scans from bottom up through the last 15 lines and
+    # returns None once it hits the ❯ idle prompt — so stale spinners from
+    # old output or the Claude Code banner are correctly ignored.
+    if parse_status_line(pane_text) is not None:
         health.notified = True
         return True
 
@@ -210,6 +217,9 @@ async def status_poll_loop(bot: Bot) -> None:
     last_topic_check = 0.0
     while True:
         try:
+            if _shutting_down:
+                break
+
             # Periodic topic existence probe
             now = time.monotonic()
             if now - last_topic_check >= TOPIC_CHECK_INTERVAL:

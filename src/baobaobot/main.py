@@ -264,7 +264,7 @@ def main() -> None:
 
     # Check if we should auto-launch inside tmux
     foreground = "--foreground" in sys.argv or "-f" in sys.argv
-    inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1" or "TMUX" in os.environ
+    inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1"
 
     if not foreground and not inside_tmux:
         _launch_in_tmux()

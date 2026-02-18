@@ -74,8 +74,12 @@ class TestMainTmuxAutoLaunch:
             for p in exits:
                 p.stop()
 
-    def test_tmux_env_var_skips_launch(self, monkeypatch):
-        """TMUX env var present skips auto-launch."""
+    def test_tmux_env_var_still_launches(self, monkeypatch):
+        """TMUX env var alone does NOT skip auto-launch (only _BAOBAOBOT_TMUX does).
+
+        Running from inside tmux (e.g. a Claude Code session) should still
+        trigger _launch_in_tmux() so the old instance gets restarted.
+        """
         monkeypatch.setattr(sys, "argv", ["baobaobot"])
         monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
         monkeypatch.delenv("_BAOBAOBOT_TMUX", raising=False)
@@ -83,7 +87,7 @@ class TestMainTmuxAutoLaunch:
         try:
             with patch("baobaobot.main._launch_in_tmux") as mock_tmux:
                 main()
-                mock_tmux.assert_not_called()
+                mock_tmux.assert_called_once()
         finally:
             for p in exits:
                 p.stop()

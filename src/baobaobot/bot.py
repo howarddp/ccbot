@@ -98,7 +98,11 @@ from .handlers.message_sender import (
 )
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import clear_window_health, status_poll_loop
+from .handlers.status_polling import (
+    clear_window_health,
+    signal_shutdown,
+    status_poll_loop,
+)
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
@@ -1393,6 +1397,10 @@ async def post_init(application: Application) -> None:
 
 async def post_shutdown(application: Application) -> None:
     global _status_poll_task
+
+    # Signal shutdown immediately to prevent destructive cleanup
+    # (unbinding threads, killing windows) during the shutdown window.
+    signal_shutdown()
 
     # Stop status polling
     if _status_poll_task:
