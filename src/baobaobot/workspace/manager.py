@@ -20,6 +20,9 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Bin scripts bundled with the package
 _BIN_DIR = Path(__file__).parent / "bin"
 
+# Skill templates bundled with the package
+_SKILLS_DIR = Path(__file__).parent / "skills"
+
 # Files deployed to the shared dir (config_dir)
 _SHARED_TEMPLATE_FILES = [
     "SOUL.md",
@@ -35,6 +38,15 @@ _WORKSPACE_TEMPLATE_FILES = [
 
 # Scripts deployed to shared bin/
 _BIN_SCRIPTS = [
+    "memory-search",
+    "memory-list",
+    "cron-add",
+    "cron-list",
+    "cron-remove",
+]
+
+# Skills deployed to each per-topic workspace
+_SKILL_NAMES = [
     "memory-search",
     "memory-list",
     "cron-add",
@@ -77,6 +89,7 @@ class WorkspaceManager:
         """Initialize per-topic workspace directory structure.
 
         Safe to call multiple times — only creates missing directories and files.
+        Skill files (.claude/skills/) are always overwritten to stay current.
         """
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.projects_dir.mkdir(exist_ok=True)
@@ -93,7 +106,27 @@ class WorkspaceManager:
                 else:
                     logger.warning("Template not found: %s", src)
 
+        self._install_skills()
         logger.debug("Workspace initialized at %s", self.workspace_dir)
+
+    def _install_skills(self) -> None:
+        """Deploy SKILL.md files to workspace/.claude/skills/ with resolved paths.
+
+        Always overwrites existing files (like bin scripts, not like templates).
+        """
+        bin_path = str(self.bin_dir)
+        for skill_name in _SKILL_NAMES:
+            src = _SKILLS_DIR / skill_name / "SKILL.md"
+            if not src.exists():
+                logger.warning("Skill template not found: %s", src)
+                continue
+            dest_dir = self.workspace_dir / ".claude" / "skills" / skill_name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            content = src.read_text(encoding="utf-8")
+            content = content.replace("{{BIN_DIR}}", bin_path)
+            dest = dest_dir / "SKILL.md"
+            dest.write_text(content, encoding="utf-8")
+            logger.debug("Installed skill: %s", dest)
 
     def _install_bin_scripts(self) -> None:
         """Copy bin/ scripts to shared_dir/bin/ and make them executable."""

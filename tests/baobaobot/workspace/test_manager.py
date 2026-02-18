@@ -164,3 +164,51 @@ class TestBinScripts:
     def test_bin_dir_is_under_shared_dir(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
         assert manager.bin_dir.parent == manager.shared_dir
+
+
+class TestSkills:
+    def test_installs_skills(self, manager: WorkspaceManager) -> None:
+        manager.init_shared()
+        manager.init_workspace()
+        skills_dir = manager.workspace_dir / ".claude" / "skills"
+        assert skills_dir.is_dir()
+        for name in [
+            "memory-search",
+            "memory-list",
+            "cron-add",
+            "cron-list",
+            "cron-remove",
+        ]:
+            assert (skills_dir / name / "SKILL.md").is_file()
+
+    def test_skills_contain_resolved_paths(self, manager: WorkspaceManager) -> None:
+        manager.init_shared()
+        manager.init_workspace()
+        skill_file = (
+            manager.workspace_dir / ".claude" / "skills" / "memory-search" / "SKILL.md"
+        )
+        content = skill_file.read_text()
+        assert "{{BIN_DIR}}" not in content
+        assert str(manager.bin_dir) in content
+
+    def test_skills_updated_on_reinit(self, manager: WorkspaceManager) -> None:
+        manager.init_shared()
+        manager.init_workspace()
+        skill_file = (
+            manager.workspace_dir / ".claude" / "skills" / "memory-search" / "SKILL.md"
+        )
+        skill_file.write_text("old content")
+
+        manager.init_workspace()  # Should overwrite
+        assert skill_file.read_text() != "old content"
+
+    def test_skills_have_frontmatter(self, manager: WorkspaceManager) -> None:
+        manager.init_shared()
+        manager.init_workspace()
+        skill_file = (
+            manager.workspace_dir / ".claude" / "skills" / "memory-search" / "SKILL.md"
+        )
+        content = skill_file.read_text()
+        assert content.startswith("---\n")
+        assert "name: memory-search" in content
+        assert "description:" in content

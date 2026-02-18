@@ -96,7 +96,7 @@ class ClaudeMdAssembler:
             parts.append(recent)
 
         result = "\n\n".join(parts) + "\n"
-        # Replace template variables
+        # Replace template variables (safety net for old AGENTS.md with {{BIN_DIR}})
         result = result.replace("{{BIN_DIR}}", str(self.shared_dir / "bin"))
         return result
 

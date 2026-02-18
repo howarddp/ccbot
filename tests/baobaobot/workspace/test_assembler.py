@@ -65,6 +65,12 @@ class TestAssemble:
         assert "近期記憶" in content
         assert "Something happened" in content
 
+    def test_no_bin_dir_template_variable(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "{{BIN_DIR}}" not in content
+
 
 class TestWrite:
     def test_creates_file(self, dirs: tuple[Path, Path]) -> None:
@@ -104,9 +110,7 @@ class TestNeedsRebuild:
         (shared / "SOUL.md").write_text("# Soul\n\nUpdated")
         assert assembler.needs_rebuild() is True
 
-    def test_true_after_workspace_memory_change(
-        self, dirs: tuple[Path, Path]
-    ) -> None:
+    def test_true_after_workspace_memory_change(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
