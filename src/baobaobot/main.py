@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 
 def _setup() -> None:
@@ -174,10 +175,34 @@ def _launch_in_tmux() -> None:
         if result.returncode == 0:
             pane_cmd = result.stdout.strip()
             if pane_cmd not in ("bash", "zsh", "sh", "fish", ""):
-                print(f"baobaobot is already running in tmux session '{session_name}'.")
-                print(f"  View logs:  tmux attach -t {session_name}")
-                print("  Restart:    scripts/restart.sh")
-                return
+                print(f"Restarting baobaobot in tmux session '{session_name}'...")
+                # Send C-c to stop the running process, wait for shell prompt
+                subprocess.run(
+                    ["tmux", "send-keys", "-t", target, "C-c", ""],
+                    capture_output=True,
+                )
+                time.sleep(2)
+                # Verify process stopped; send another C-c if needed
+                check = subprocess.run(
+                    [
+                        "tmux",
+                        "list-panes",
+                        "-t",
+                        target,
+                        "-F",
+                        "#{pane_current_command}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if check.returncode == 0:
+                    cmd_after = check.stdout.strip()
+                    if cmd_after not in ("bash", "zsh", "sh", "fish", ""):
+                        subprocess.run(
+                            ["tmux", "send-keys", "-t", target, "C-c", ""],
+                            capture_output=True,
+                        )
+                        time.sleep(1)
     else:
         # Create new session with __main__ window
         subprocess.run(
