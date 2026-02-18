@@ -46,6 +46,9 @@ _SENDABLE_EXTENSIONS = {
     ".png",
     ".gif",
     ".webp",
+    ".svg",
+    # Web
+    ".html",
     # Documents
     ".pdf",
     ".docx",
