@@ -87,7 +87,7 @@ class Config:
         )
 
         # Voice transcription model (used by faster-whisper if installed)
-        self.whisper_model: str = os.getenv("WHISPER_MODEL", "base")
+        self.whisper_model: str = os.getenv("WHISPER_MODEL", "small")
 
         # Cron default timezone (env CRON_DEFAULT_TZ, default empty = system tz)
         self.cron_default_tz: str = os.getenv("CRON_DEFAULT_TZ", "")

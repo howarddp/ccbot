@@ -83,7 +83,7 @@ def _setup() -> None:
     ).strip()
     enable_voice = voice_resp.lower() in ("y", "yes")
     if enable_voice:
-        whisper_model = input("Whisper model size [base]: ").strip() or "base"
+        whisper_model = input("Whisper model size [small]: ").strip() or "small"
 
     # Write .env
     config_dir.mkdir(parents=True, exist_ok=True)
