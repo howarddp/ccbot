@@ -22,8 +22,11 @@ import sys
 
 def _setup() -> None:
     """Interactive first-time setup."""
+    from pathlib import Path
+
     from .utils import baobaobot_dir
 
+    default_dir = Path.home() / ".baobaobot"
     config_dir = baobaobot_dir()
     env_file = config_dir / ".env"
 
@@ -35,20 +38,21 @@ def _setup() -> None:
 
     print("=== BaoBaoClaude Setup ===\n")
 
-    # Allow custom BAOBAOBOT_DIR
+    # Allow custom BAOBAOBOT_DIR (always show ~/.baobaobot as default)
     custom_dir = input(
-        f"Config directory [{config_dir}]: "
+        f"Config directory [{default_dir}]: "
     ).strip()
     if custom_dir:
-        custom_path = os.path.expanduser(custom_dir)
-        os.environ["BAOBAOBOT_DIR"] = custom_path
-        config_dir = baobaobot_dir()
-        env_file = config_dir / ".env"
+        config_dir = Path(os.path.expanduser(custom_dir))
+    else:
+        config_dir = default_dir
+    env_file = config_dir / ".env"
 
-        from .utils import save_dir_pointer
+    # Always persist chosen directory so baobaobot_dir() resolves it on next run
+    from .utils import save_dir_pointer
 
-        save_dir_pointer(config_dir)
-        print("Custom path saved to ~/.config/baobaobot/dir")
+    save_dir_pointer(config_dir)
+    print(f"Config directory: {config_dir}")
 
     token = input("Telegram Bot Token (from @BotFather): ").strip()
     if not token:

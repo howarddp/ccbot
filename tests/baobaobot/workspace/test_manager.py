@@ -42,7 +42,7 @@ class TestInitWorkspace:
     def test_creates_directories(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
         assert manager.workspace_dir.is_dir()
-        assert manager.projects_dir.is_dir()
+        assert (manager.workspace_dir / "projects").is_dir()
         assert manager.memory_dir.is_dir()
 
     def test_deploys_memory_md(self, manager: WorkspaceManager) -> None:
@@ -61,80 +61,6 @@ class TestInitWorkspace:
 
         manager.init_workspace()  # Should NOT overwrite
         assert memory.read_text() == "custom memory"
-
-
-class TestEnsureProject:
-    def test_creates_symlink(self, manager: WorkspaceManager, tmp_path: Path) -> None:
-        manager.init_workspace()
-        project = tmp_path / "my-project"
-        project.mkdir()
-
-        link = manager.ensure_project(str(project))
-        assert link.is_symlink()
-        assert link.resolve() == project.resolve()
-        assert link.name == "my-project"
-
-    def test_idempotent(self, manager: WorkspaceManager, tmp_path: Path) -> None:
-        manager.init_workspace()
-        project = tmp_path / "my-project"
-        project.mkdir()
-
-        link1 = manager.ensure_project(str(project))
-        link2 = manager.ensure_project(str(project))
-        assert link1 == link2
-
-    def test_name_collision(self, manager: WorkspaceManager, tmp_path: Path) -> None:
-        manager.init_workspace()
-        project1 = tmp_path / "a" / "my-project"
-        project1.mkdir(parents=True)
-        project2 = tmp_path / "b" / "my-project"
-        project2.mkdir(parents=True)
-
-        link1 = manager.ensure_project(str(project1))
-        link2 = manager.ensure_project(str(project2))
-        assert link1.name == "my-project"
-        assert link2.name == "my-project-2"
-
-    def test_invalid_path(self, manager: WorkspaceManager) -> None:
-        manager.init_workspace()
-        with pytest.raises(ValueError, match="Not a directory"):
-            manager.ensure_project("/nonexistent/path")
-
-
-class TestGetClaudeWorkDir:
-    def test_no_project(self, manager: WorkspaceManager) -> None:
-        manager.init_workspace()
-        assert manager.get_claude_work_dir() == manager.workspace_dir
-
-    def test_with_project(self, manager: WorkspaceManager, tmp_path: Path) -> None:
-        manager.init_workspace()
-        project = tmp_path / "my-project"
-        project.mkdir()
-        manager.ensure_project(str(project))
-
-        result = manager.get_claude_work_dir("my-project")
-        assert result == manager.projects_dir / "my-project"
-
-    def test_missing_project(self, manager: WorkspaceManager) -> None:
-        manager.init_workspace()
-        with pytest.raises(ValueError, match="Project not found"):
-            manager.get_claude_work_dir("nonexistent")
-
-
-class TestListProjects:
-    def test_empty(self, manager: WorkspaceManager) -> None:
-        manager.init_workspace()
-        assert manager.list_projects() == []
-
-    def test_with_projects(self, manager: WorkspaceManager, tmp_path: Path) -> None:
-        manager.init_workspace()
-        for name in ["beta", "alpha"]:
-            p = tmp_path / name
-            p.mkdir()
-            manager.ensure_project(str(p))
-
-        projects = manager.list_projects()
-        assert projects == ["alpha", "beta"]  # sorted
 
 
 class TestBinScripts:

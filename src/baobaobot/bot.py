@@ -300,38 +300,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
         return
 
-    text = (update.message.text or "").strip()
-    parts = text.split(maxsplit=2)
-
-    wm = WorkspaceManager(config.shared_dir, workspace_dir)
-
-    # /workspace link <path>
-    if len(parts) >= 3 and parts[1].lower() == "link":
-        project_path = parts[2]
-        try:
-            link_path = wm.ensure_project(project_path)
-            await safe_reply(
-                update.message, f"✅ 已連結專案: {link_path.name} → {project_path}"
-            )
-        except ValueError as e:
-            await safe_reply(update.message, f"❌ {e}")
-        return
-
-    # /workspace — show status
-    projects = wm.list_projects()
-    lines = [
-        "📁 **Workspace**\n",
-        f"路徑: `{workspace_dir}`\n",
-    ]
-    if projects:
-        lines.append(f"專案 ({len(projects)}):")
-        for p in projects:
-            lines.append(f"  • {p}")
-    else:
-        lines.append("尚無連結的專案。")
-
-    lines.append("\n使用 `/workspace link <path>` 連結專案")
-    await safe_reply(update.message, "\n".join(lines))
+    await safe_reply(update.message, f"📁 **Workspace**\n\n路徑: `{workspace_dir}`")
 
 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
