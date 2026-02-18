@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""Add a cron job to the workspace.
+
+Usage:
+    cron-add <schedule> <message> [--name NAME] [--tz TZ] [--workspace PATH]
+
+Schedule formats:
+    at:2026-02-28T09:00       One-shot at specific time
+    every:30m                 Every 30 minutes (s/m/h/d)
+    "0 9 * * *"              Cron expression (5 fields)
+
+Examples:
+    cron-add "at:2026-02-28T09:00" "去拿藥"
+    cron-add "every:1d" "每日站會提醒" --name daily-standup
+    cron-add "0 9 * * 1-5" "週報提醒" --tz Asia/Taipei
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Inline schedule parsing (mirrors cron/parse.py)
+# ---------------------------------------------------------------------------
+
+_EVERY_RE = re.compile(r"^every:(\d+)([smhd])$", re.IGNORECASE)
+_AT_RE = re.compile(r"^at:(.+)$", re.IGNORECASE)
+_CRON_RE = re.compile(
+    r'^["\']?'
+    r"([*/\d,\-]+\s+[*/\d,\-]+\s+[*/\d,\-]+\s+[*/\d,\-]+\s+[*/\d,\-]+)"
+    r'["\']?$'
+)
+
+_UNIT_TO_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_schedule(text):
+    """Parse schedule string -> (schedule_dict, error)."""
+    text = text.strip()
+    if not text:
+        return None, "Empty schedule string"
+
+    m = _EVERY_RE.match(text)
+    if m:
+        value = int(m.group(1))
+        unit = m.group(2).lower()
+        seconds = value * _UNIT_TO_SECONDS[unit]
+        if seconds <= 0:
+            return None, "Interval must be positive"
+        return {"kind": "every", "every_seconds": seconds}, ""
+
+    m = _AT_RE.match(text)
+    if m:
+        at_str = m.group(1).strip()
+        return {"kind": "at", "at": at_str}, ""
+
+    m = _CRON_RE.match(text)
+    if m:
+        expr = m.group(1).strip()
+        return {"kind": "cron", "expr": expr}, ""
+
+    return None, f"Unrecognized schedule format: {text}"
+
+
+# ---------------------------------------------------------------------------
+# Inline next_run computation (mirrors cron/schedule.py)
+# ---------------------------------------------------------------------------
+
+
+def compute_next_run(schedule, after_ts, tz_name=""):
+    """Compute next run Unix timestamp, or None."""
+    kind = schedule.get("kind")
+    if kind == "at":
+        return _compute_at(schedule, after_ts, tz_name)
+    elif kind == "every":
+        secs = schedule.get("every_seconds", 0)
+        return (after_ts + secs) if secs > 0 else None
+    elif kind == "cron":
+        return _compute_cron(schedule, after_ts, tz_name)
+    return None
+
+
+def _compute_at(schedule, after_ts, tz_name):
+    at_str = schedule.get("at", "")
+    if not at_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(at_str)
+        if dt.tzinfo is None:
+            tz = _resolve_tz(tz_name)
+            dt = dt.replace(tzinfo=tz or timezone.utc)
+        ts = dt.timestamp()
+        return ts if ts > after_ts else None
+    except ValueError:
+        return None
+
+
+def _compute_cron(schedule, after_ts, tz_name):
+    expr = schedule.get("expr", "")
+    if not expr:
+        return None
+    try:
+        from croniter import croniter
+    except ImportError:
+        # Fallback: return after_ts + 60 as placeholder
+        return after_ts + 60
+    tz = _resolve_tz(schedule.get("tz", "") or tz_name)
+    try:
+        if tz:
+            dt_after = datetime.fromtimestamp(after_ts, tz=tz)
+        else:
+            dt_after = datetime.fromtimestamp(after_ts, tz=timezone.utc)
+        cron = croniter(expr, dt_after)
+        next_dt = cron.get_next(datetime)
+        return next_dt.timestamp()
+    except (ValueError, KeyError):
+        return None
+
+
+def _resolve_tz(tz_name):
+    if not tz_name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(tz_name)
+    except (KeyError, ValueError, ImportError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Workspace resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_workspace():
+    """Find workspace dir: cwd or parent with cron/ or memory/ dir."""
+    cwd = Path.cwd()
+    for d in [cwd, *cwd.parents]:
+        if (d / "cron").is_dir() or (d / "memory").is_dir() or (d / "MEMORY.md").is_file():
+            return d
+    print(
+        "Cannot determine workspace. Use --workspace or run from a workspace dir.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Atomic JSON write (mirrors utils.atomic_write_json)
+# ---------------------------------------------------------------------------
+
+
+def atomic_write_json(path, data, indent=2):
+    """Write JSON atomically via temp file + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(data, indent=indent, ensure_ascii=False)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(path.parent), suffix=".tmp", prefix=f".{path.name}."
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def load_store(workspace):
+    """Load cron/jobs.json or return empty store."""
+    path = workspace / "cron" / "jobs.json"
+    if not path.is_file():
+        return {"version": 1, "workspace_meta": {"user_id": 0, "thread_id": 0, "chat_id": 0}, "jobs": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"version": 1, "workspace_meta": {"user_id": 0, "thread_id": 0, "chat_id": 0}, "jobs": []}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Add a cron job")
+    parser.add_argument("schedule", help="Schedule string (at:/every:/cron)")
+    parser.add_argument("message", help="Message to send when triggered")
+    parser.add_argument("--name", default="", help="Job name (default: auto)")
+    parser.add_argument("--tz", default="", help="Timezone (e.g. Asia/Taipei)")
+    parser.add_argument("--workspace", default=None, help="Workspace path")
+    args = parser.parse_args()
+
+    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
+    if not workspace.exists():
+        print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse schedule
+    schedule, err = parse_schedule(args.schedule)
+    if schedule is None:
+        print(f"Error: {err}", file=sys.stderr)
+        sys.exit(1)
+
+    # Apply timezone
+    if args.tz and schedule["kind"] == "cron":
+        schedule["tz"] = args.tz
+
+    # Compute next_run
+    now = time.time()
+    next_run = compute_next_run(schedule, now, args.tz)
+
+    # Build job
+    job_id = uuid.uuid4().hex[:8]
+    name = args.name or args.message[:30]
+    delete_after_run = schedule["kind"] == "at"
+
+    job = {
+        "id": job_id,
+        "name": name,
+        "schedule": schedule,
+        "message": args.message,
+        "enabled": True,
+        "delete_after_run": delete_after_run,
+        "created_at": now,
+        "updated_at": now,
+        "state": {
+            "next_run_at": next_run,
+            "running_at": None,
+            "last_run_at": None,
+            "last_status": "",
+            "last_error": "",
+            "last_duration_s": 0.0,
+            "consecutive_errors": 0,
+        },
+    }
+
+    # Load, append, save
+    store = load_store(workspace)
+    store["jobs"].append(job)
+    atomic_write_json(workspace / "cron" / "jobs.json", store)
+
+    # Output
+    print(f"✅ Job added: {job_id}")
+    print(f"   Name:     {name}")
+    print(f"   Schedule: {args.schedule}")
+    print(f"   Message:  {args.message}")
+    if next_run:
+        next_dt = datetime.fromtimestamp(next_run).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"   Next run: {next_dt}")
+    else:
+        print("   Next run: (none / already past)")
+    if delete_after_run:
+        print("   (one-shot, will be deleted after run)")
+
+
+if __name__ == "__main__":
+    main()

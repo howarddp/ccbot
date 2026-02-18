@@ -37,6 +37,9 @@ _WORKSPACE_TEMPLATE_FILES = [
 _BIN_SCRIPTS = [
     "memory-search",
     "memory-list",
+    "cron-add",
+    "cron-list",
+    "cron-remove",
 ]
 
 
