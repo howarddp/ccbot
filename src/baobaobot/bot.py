@@ -110,6 +110,8 @@ from .handlers.persona_handler import (
 )
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
+from .handlers.cron_handler import cron_command
+from .cron.service import cron_service
 from .workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
 from .workspace.manager import WorkspaceManager
 
@@ -1271,6 +1273,7 @@ async def post_init(application: Application) -> None:
         BotCommand("forget", "Delete memory entries"),
         BotCommand("workspace", "Workspace status & project linking"),
         BotCommand("rebuild", "Rebuild CLAUDE.md"),
+        BotCommand("cron", "Manage scheduled tasks"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1291,6 +1294,10 @@ async def post_init(application: Application) -> None:
             logger.info(
                 "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
             )
+
+    # Start cron service
+    await cron_service.start()
+    logger.info("Cron service started")
 
     monitor = SessionMonitor()
 
@@ -1323,6 +1330,10 @@ async def post_shutdown(application: Application) -> None:
     # Stop all queue workers
     await shutdown_workers()
 
+    # Stop cron service
+    await cron_service.stop()
+    logger.info("Cron service stopped")
+
     if session_monitor:
         session_monitor.stop()
         logger.info("Session monitor stopped")
@@ -1349,6 +1360,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("workspace", workspace_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
+    application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic created event — cache topic name for window naming

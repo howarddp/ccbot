@@ -86,6 +86,9 @@ class Config:
             "yes",
         )
 
+        # Cron default timezone (env CRON_DEFAULT_TZ, default empty = system tz)
+        self.cron_default_tz: str = os.getenv("CRON_DEFAULT_TZ", "")
+
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
             "tmux_session=%s",
