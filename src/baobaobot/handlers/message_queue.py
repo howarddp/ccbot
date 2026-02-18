@@ -217,8 +217,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     remaining -= chunk
                     if remaining > 0:
                         logger.warning(
-                            f"Flood control for user {user_id}, "
-                            f"{remaining}s remaining"
+                            f"Flood control for user {user_id}, {remaining}s remaining"
                         )
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")

@@ -73,9 +73,7 @@ def parse_profile(content: str) -> UserProfile:
             setattr(profile, field, value)
 
     # Extract context section
-    context_match = re.search(
-        r"## Context\s*\n(.*?)(?:\n## |\Z)", content, re.DOTALL
-    )
+    context_match = re.search(r"## Context\s*\n(.*?)(?:\n## |\Z)", content, re.DOTALL)
     if context_match:
         ctx = context_match.group(1).strip()
         # Strip HTML comments
@@ -239,9 +237,7 @@ def read_user_profile_raw(users_dir: Path, user_id: int) -> str:
         return ""
 
 
-def update_user_profile(
-    users_dir: Path, user_id: int, **kwargs: str
-) -> UserProfile:
+def update_user_profile(users_dir: Path, user_id: int, **kwargs: str) -> UserProfile:
     """Update specific fields in a user's profile.
 
     Args:

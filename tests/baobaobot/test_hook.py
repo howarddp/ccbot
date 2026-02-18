@@ -43,7 +43,11 @@ class TestIsHookInstalled:
                 "SessionStart": [
                     {
                         "hooks": [
-                            {"type": "command", "command": "baobaobot hook", "timeout": 5}
+                            {
+                                "type": "command",
+                                "command": "baobaobot hook",
+                                "timeout": 5,
+                            }
                         ]
                     }
                 ]

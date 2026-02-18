@@ -6,10 +6,18 @@ import sys
 import time
 from pathlib import Path
 
-BIN_DIR = Path(__file__).resolve().parent.parent.parent.parent / "src" / "baobaobot" / "workspace" / "bin"
+BIN_DIR = (
+    Path(__file__).resolve().parent.parent.parent.parent
+    / "src"
+    / "baobaobot"
+    / "workspace"
+    / "bin"
+)
 
 
-def run_script(name: str, args: list[str], workspace: Path) -> subprocess.CompletedProcess:
+def run_script(
+    name: str, args: list[str], workspace: Path
+) -> subprocess.CompletedProcess:
     """Run a bin script as a subprocess."""
     script = BIN_DIR / name
     return subprocess.run(
@@ -37,7 +45,9 @@ class TestCronAdd:
     def test_add_at_schedule(self, tmp_path: Path):
         """at: schedule creates a one-shot job with delete_after_run=True."""
         (tmp_path / "memory").mkdir()
-        result = run_script("cron-add", ["at:2099-12-31T23:59", "test message"], tmp_path)
+        result = run_script(
+            "cron-add", ["at:2099-12-31T23:59", "test message"], tmp_path
+        )
         assert result.returncode == 0
         assert "Job added" in result.stdout
 
@@ -67,7 +77,9 @@ class TestCronAdd:
     def test_add_cron_schedule(self, tmp_path: Path):
         """Cron expression schedule."""
         (tmp_path / "memory").mkdir()
-        result = run_script("cron-add", ["0 9 * * *", "morning", "--name", "wake-up"], tmp_path)
+        result = run_script(
+            "cron-add", ["0 9 * * *", "morning", "--name", "wake-up"], tmp_path
+        )
         assert result.returncode == 0
 
         jobs = load_jobs(tmp_path)
@@ -150,7 +162,11 @@ class TestCronAdd:
     def test_add_default_name_from_message(self, tmp_path: Path):
         """Default name is derived from message when --name not given."""
         (tmp_path / "memory").mkdir()
-        run_script("cron-add", ["every:1h", "a very long message that exceeds thirty characters limit"], tmp_path)
+        run_script(
+            "cron-add",
+            ["every:1h", "a very long message that exceeds thirty characters limit"],
+            tmp_path,
+        )
 
         jobs = load_jobs(tmp_path)
         assert len(jobs[0]["name"]) <= 30
@@ -179,8 +195,14 @@ class TestCronList:
     def test_list_with_jobs(self, tmp_path: Path):
         """Lists jobs in human-readable format."""
         (tmp_path / "memory").mkdir()
-        run_script("cron-add", ["every:1h", "hourly check", "--name", "hourly"], tmp_path)
-        run_script("cron-add", ["at:2099-06-15T10:00", "dentist", "--name", "dentist"], tmp_path)
+        run_script(
+            "cron-add", ["every:1h", "hourly check", "--name", "hourly"], tmp_path
+        )
+        run_script(
+            "cron-add",
+            ["at:2099-06-15T10:00", "dentist", "--name", "dentist"],
+            tmp_path,
+        )
 
         result = run_script("cron-list", [], tmp_path)
         assert result.returncode == 0

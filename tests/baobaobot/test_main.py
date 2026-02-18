@@ -25,9 +25,9 @@ def _enter_bot_patches():
         exits.append(p)
     # create_bot must return a mock application
     mocks["baobaobot.bot.create_bot"].return_value = MagicMock()
-    mocks["baobaobot.tmux_manager.tmux_manager"].get_or_create_session.return_value = (
-        MagicMock(session_name="test")
-    )
+    mocks[
+        "baobaobot.tmux_manager.tmux_manager"
+    ].get_or_create_session.return_value = MagicMock(session_name="test")
     return mocks, exits
 
 

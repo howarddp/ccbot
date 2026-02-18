@@ -56,14 +56,11 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if field not in field_map:
             await safe_reply(
                 update.message,
-                f"❌ 不認識的欄位: {field}\n"
-                "可用欄位: name, telegram, tz, lang, notes",
+                f"❌ 不認識的欄位: {field}\n可用欄位: name, telegram, tz, lang, notes",
             )
             return
 
-        updated = update_user_profile(
-            users_dir, user.id, **{field_map[field]: value}
-        )
+        updated = update_user_profile(users_dir, user.id, **{field_map[field]: value})
         await safe_reply(
             update.message,
             f"✅ 已更新 {field} = {value}\n\n"

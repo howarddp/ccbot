@@ -74,7 +74,5 @@ class TestBuildDirectoryBrowser:
         shown = sum(len(row) for row in folder_rows)
         assert shown == DIRS_PER_PAGE
         # Nav row should have a "▶" button
-        all_labels = [
-            btn.text for row in keyboard.inline_keyboard for btn in row
-        ]
+        all_labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
         assert "▶" in all_labels

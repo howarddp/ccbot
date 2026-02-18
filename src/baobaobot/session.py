@@ -180,8 +180,7 @@ class SessionManager:
                 self.group_chat_ids = state.get("group_chat_ids", {})
                 self.window_display_names = state.get("window_display_names", {})
                 self.topic_names = {
-                    int(tid): name
-                    for tid, name in state.get("topic_names", {}).items()
+                    int(tid): name for tid, name in state.get("topic_names", {}).items()
                 }
 
                 # Detect old format: keys that don't look like window IDs
@@ -389,7 +388,9 @@ class SessionManager:
         for key in old_keys:
             del session_map[key]
         atomic_write_json(config.session_map_file, session_map)
-        logger.info("Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys)
+        logger.info(
+            "Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys
+        )
 
     # --- Topic name management ---
 
@@ -508,9 +509,7 @@ class SessionManager:
                     changed = True
 
         # Clean up window_states entries not in current session_map.
-        stale_wids = [
-            w for w in self.window_states if w and w not in valid_wids
-        ]
+        stale_wids = [w for w in self.window_states if w and w not in valid_wids]
         for wid in stale_wids:
             logger.info("Removing stale window_state: %s", wid)
             del self.window_states[wid]

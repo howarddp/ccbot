@@ -368,7 +368,8 @@ class TestCronServiceExecuteDueJobs:
             message="msg",
             enabled=True,
             state=CronJobState(
-                running_at=now - 8000, next_run_at=now - 100  # stuck > 7200s
+                running_at=now - 8000,
+                next_run_at=now - 100,  # stuck > 7200s
             ),
         )
         service._stores["test"].jobs.append(job)

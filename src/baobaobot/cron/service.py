@@ -246,9 +246,7 @@ class CronService:
 
                 self._wake_event.clear()
                 try:
-                    await asyncio.wait_for(
-                        self._wake_event.wait(), timeout=sleep_for
-                    )
+                    await asyncio.wait_for(self._wake_event.wait(), timeout=sleep_for)
                 except asyncio.TimeoutError:
                     pass
 

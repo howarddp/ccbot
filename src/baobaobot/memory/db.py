@@ -97,7 +97,9 @@ class MemoryDB:
         now = datetime.now().isoformat()
 
         # Remove old rows for this file
-        conn.execute("DELETE FROM memories WHERE source = ? AND date = ?", (source, date))
+        conn.execute(
+            "DELETE FROM memories WHERE source = ? AND date = ?", (source, date)
+        )
 
         # Insert lines
         try:
@@ -191,8 +193,7 @@ class MemoryDB:
         conn = self.connect()
 
         sql = (
-            "SELECT source, date, line_num, content FROM memories "
-            "WHERE content LIKE ?"
+            "SELECT source, date, line_num, content FROM memories WHERE content LIKE ?"
         )
         params: list[str | int] = [f"%{query}%"]
 
@@ -229,9 +230,12 @@ class MemoryDB:
         daily_count = conn.execute(
             "SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'daily'"
         ).fetchone()[0]
-        has_longterm = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE source = 'memory_md'"
-        ).fetchone()[0] > 0
+        has_longterm = (
+            conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE source = 'memory_md'"
+            ).fetchone()[0]
+            > 0
+        )
 
         return {
             "total_lines": total_rows,

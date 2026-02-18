@@ -153,4 +153,3 @@ class WorkspaceManager:
                 logger.debug("Installed script: %s", dest)
             else:
                 logger.warning("Script not found: %s", src)
-
