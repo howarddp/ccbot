@@ -44,6 +44,7 @@ from telegram import (
     InlineKeyboardMarkup,
     InputMediaDocument,
     Update,
+    User,
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -112,10 +113,30 @@ from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
 from .handlers.cron_handler import cron_command
 from .cron.service import cron_service
+from .persona.profile import convert_user_mentions, ensure_user_profile
 from .workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
 from .workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_user_and_prefix(user: User, text: str) -> str:
+    """Ensure user profile exists and return text with [Name|user_id] prefix.
+
+    Args:
+        user: Telegram User object.
+        text: Original message text.
+
+    Returns:
+        Prefixed text like "[Alice|12345] original text".
+    """
+    first_name = user.first_name or ""
+    username = user.username or ""
+
+    profile = ensure_user_profile(config.users_dir, user.id, first_name, username)
+    display = profile.name if profile.name and profile.name != "（待設定）" else first_name
+    return f"[{display}|{user.id}] {text}"
+
 
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
@@ -604,14 +625,15 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await file_obj.download_to_drive(str(dest))
     logger.info("Downloaded file to %s (user=%d, thread=%d)", dest, user.id, thread_id)
 
-    # Build text to send to Claude Code
+    # Build text to send to Claude Code with user prefix
     caption = msg.caption or ""
     lines = [f"[收到檔案] {dest}"]
     if caption:
         lines.append(caption)
     else:
         lines.append("請查看這個檔案。")
-    text_to_send = "\n".join(lines)
+    raw_text = "\n".join(lines)
+    text_to_send = _ensure_user_and_prefix(user, raw_text)
 
     await msg.chat.send_action(ChatAction.TYPING)
     success, message = await session_manager.send_to_window(wid, text_to_send)
@@ -777,8 +799,12 @@ async def _auto_create_session(
     if chat.type in ("group", "supergroup"):
         session_manager.set_group_chat_id(user_id, thread_id, chat.id)
 
-    # Forward the pending message
-    send_ok, send_msg = await session_manager.send_to_window(created_wid, text)
+    # Forward the pending message with user prefix
+    # user is guaranteed non-None here (caller already checked)
+    user_obj = update.effective_user
+    assert user_obj is not None
+    prefixed_text = _ensure_user_and_prefix(user_obj, text)
+    send_ok, send_msg = await session_manager.send_to_window(created_wid, prefixed_text)
     if not send_ok:
         logger.warning("Failed to forward pending text: %s", send_msg)
         await safe_reply(
@@ -848,7 +874,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(user.id, thread_id)
 
-    success, message = await session_manager.send_to_window(wid, text)
+    # Add [Name|user_id] prefix for multi-user identification
+    prefixed_text = _ensure_user_and_prefix(user, text)
+    success, message = await session_manager.send_to_window(wid, prefixed_text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1219,8 +1247,11 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             if not msg.text:
                 continue
 
+        # Convert @[user_id] markers to Telegram mentions
+        display_text = convert_user_mentions(msg.text, config.users_dir)
+
         parts = build_response_parts(
-            msg.text,
+            display_text,
             msg.is_complete,
             msg.content_type,
             msg.role,

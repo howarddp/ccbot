@@ -1,6 +1,6 @@
 """CLAUDE.md assembly — composes the root CLAUDE.md from shared + workspace files.
 
-Reads AGENTS.md, SOUL.md, IDENTITY.md, USER.md from shared_dir, and
+Reads AGENTS.md, SOUL.md, IDENTITY.md from shared_dir, and
 MEMORY.md + recent daily memory files from workspace_dir, then writes a
 single assembled CLAUDE.md in the workspace root.
 Claude Code reads this file automatically when starting in the workspace.
@@ -20,7 +20,6 @@ _SECTION_ORDER = [
     ("AGENTS.md", "工作指令 (AGENTS)", "shared"),
     ("SOUL.md", "人格 (SOUL)", "shared"),
     ("IDENTITY.md", "身份 (IDENTITY)", "shared"),
-    ("USER.md", "用戶資訊 (USER)", "shared"),
     ("MEMORY.md", "記憶 (MEMORY)", "workspace"),
 ]
 
@@ -98,6 +97,7 @@ class ClaudeMdAssembler:
         result = "\n\n".join(parts) + "\n"
         # Replace template variables
         result = result.replace("{{BIN_DIR}}", str(self.shared_dir / "bin"))
+        result = result.replace("{{USERS_DIR}}", str(self.shared_dir / "users"))
         return result
 
     def write(self) -> None:

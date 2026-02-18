@@ -127,6 +127,11 @@ class Config:
             if p.is_dir() and p.name.startswith("workspace_")
         )
 
+    @property
+    def users_dir(self) -> Path:
+        """Return the shared users/ directory path for multi-user profiles."""
+        return self.shared_dir / "users"
+
     def is_user_allowed(self, user_id: int) -> bool:
         """Check if a user is in the allowed list."""
         return user_id in self.allowed_users

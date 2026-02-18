@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from ..config import config
+from ..persona.profile import get_user_display_name
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 from .schedule import compute_next_run
@@ -129,6 +130,7 @@ class CronService:
         schedule: CronSchedule,
         message: str,
         meta: WorkspaceMeta | None = None,
+        creator_user_id: int = 0,
     ) -> CronJob:
         """Add a new cron job to a workspace."""
         store = self._ensure_store(workspace_name)
@@ -147,6 +149,7 @@ class CronService:
             message=message,
             enabled=True,
             delete_after_run=delete_after,
+            creator_user_id=creator_user_id,
             created_at=now,
             updated_at=now,
             state=CronJobState(next_run_at=next_run),
@@ -309,7 +312,20 @@ class CronService:
             if not window_id:
                 raise RuntimeError(f"Cannot find or create window for {workspace_name}")
 
-            ok, msg = await session_manager.send_to_window(window_id, job.message)
+            # Prefix cron message with creator info using same [Name|uid] format
+            send_text = job.message
+            if job.creator_user_id:
+                creator_name = get_user_display_name(
+                    config.users_dir, job.creator_user_id
+                )
+                if not creator_name:
+                    creator_name = str(job.creator_user_id)
+                send_text = (
+                    f"[{creator_name}|{job.creator_user_id}] [排程任務] {job.message}\n"
+                    f"(完成後請 @[{job.creator_user_id}] 告知結果)"
+                )
+
+            ok, msg = await session_manager.send_to_window(window_id, send_text)
             if not ok:
                 raise RuntimeError(f"send_to_window failed: {msg}")
 

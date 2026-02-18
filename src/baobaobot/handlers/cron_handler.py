@@ -186,7 +186,10 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
     name = message[:20].replace("\n", " ").strip()
 
     meta = _get_workspace_meta(update)
-    job = await cron_service.add_job(ws_name, name, schedule, message, meta=meta)
+    creator_id = update.effective_user.id if update.effective_user else 0
+    job = await cron_service.add_job(
+        ws_name, name, schedule, message, meta=meta, creator_user_id=creator_id
+    )
 
     next_info = ""
     if job.state.next_run_at:
