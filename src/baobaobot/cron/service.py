@@ -1,4 +1,4 @@
-"""CronService — global singleton managing all workspace cron jobs.
+"""CronService — manages all workspace cron jobs.
 
 Scans workspaces on startup, runs a single asyncio timer loop,
 and dispatches due jobs to tmux windows via session_manager.
@@ -11,14 +11,16 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
-from ..config import config
 from ..persona.profile import get_user_display_name
-from ..session import session_manager
-from ..tmux_manager import tmux_manager
 from .schedule import compute_next_run
 from .store import load_store, save_store, store_mtime
 from .types import CronJob, CronJobState, CronSchedule, CronStoreFile, WorkspaceMeta
+
+if TYPE_CHECKING:
+    from ..session import SessionManager
+    from ..tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,25 @@ def _backoff_delay(consecutive_errors: int) -> float:
 
 
 class CronService:
-    """Global singleton managing all workspace cron jobs."""
+    """Manages all workspace cron jobs for an agent."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        session_manager: SessionManager,
+        tmux_manager: TmuxManager,
+        cron_default_tz: str,
+        users_dir: Path,
+        workspace_dir_for: Callable[[str], Path],
+        iter_workspace_dirs: Callable[[], list[Path]],
+    ) -> None:
+        self._session_manager = session_manager
+        self._tmux_manager = tmux_manager
+        self._cron_default_tz = cron_default_tz
+        self._users_dir = users_dir
+        self._workspace_dir_for = workspace_dir_for
+        self._iter_workspace_dirs = iter_workspace_dirs
+
         self._stores: dict[str, CronStoreFile] = {}  # workspace_name → store
         self._workspace_dirs: dict[str, Path] = {}  # workspace_name → dir
         self._mtimes: dict[str, float] = {}  # workspace_name → last seen mtime
@@ -112,7 +130,7 @@ class CronService:
                     # System summary jobs: just reschedule, don't catch up
                     if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
                         job.state.next_run_at = compute_next_run(
-                            job.schedule, time.time(), config.cron_default_tz
+                            job.schedule, time.time(), self._cron_default_tz
                         )
                         continue
                     # Pre-resolve window once per workspace
@@ -175,7 +193,7 @@ class CronService:
         job_id = uuid.uuid4().hex[:8]
         delete_after = schedule.kind == "at"
 
-        next_run = compute_next_run(schedule, now, config.cron_default_tz)
+        next_run = compute_next_run(schedule, now, self._cron_default_tz)
         job = CronJob(
             id=job_id,
             name=name,
@@ -226,7 +244,7 @@ class CronService:
         job.updated_at = time.time()
         # Recompute next run
         job.state.next_run_at = compute_next_run(
-            job.schedule, time.time(), config.cron_default_tz
+            job.schedule, time.time(), self._cron_default_tz
         )
         job.state.consecutive_errors = 0
         self._save(workspace_name)
@@ -320,7 +338,7 @@ class CronService:
                     if not self._should_run_summary(ws_name, job):
                         # Skip but reschedule for next interval
                         job.state.next_run_at = compute_next_run(
-                            job.schedule, time.time(), config.cron_default_tz
+                            job.schedule, time.time(), self._cron_default_tz
                         )
                         job.state.last_status = "skipped"
                         continue
@@ -358,7 +376,7 @@ class CronService:
             send_text = job.message
             if not job.system and job.creator_user_id:
                 creator_name = get_user_display_name(
-                    config.users_dir, job.creator_user_id
+                    self._users_dir, job.creator_user_id
                 )
                 if not creator_name:
                     creator_name = str(job.creator_user_id)
@@ -367,7 +385,7 @@ class CronService:
                     f"(When done, please @[{job.creator_user_id}] with the result)"
                 )
 
-            ok, msg = await session_manager.send_to_window(window_id, send_text)
+            ok, msg = await self._session_manager.send_to_window(window_id, send_text)
             if not ok:
                 raise RuntimeError(f"send_to_window failed: {msg}")
 
@@ -412,7 +430,7 @@ class CronService:
             job.state.next_run_at = None
         else:
             job.state.next_run_at = compute_next_run(
-                job.schedule, time.time(), config.cron_default_tz
+                job.schedule, time.time(), self._cron_default_tz
             )
             if job.state.next_run_at is None:
                 logger.warning("Cron job %s: no next run computed, disabling", job.id)
@@ -423,7 +441,7 @@ class CronService:
 
     def get_jsonl_path_for_window(self, window_id: str) -> Path | None:
         """Find the JSONL transcript file for a window's current session."""
-        state = session_manager.get_window_state(window_id)
+        state = self._session_manager.get_window_state(window_id)
         if not state.session_id:
             return None
 
@@ -491,8 +509,12 @@ class CronService:
 
     def _resolve_window(self, workspace_name: str) -> str | None:
         """Find the tmux window_id for a workspace via thread_bindings."""
-        for _user_id, _thread_id, window_id in session_manager.iter_thread_bindings():
-            display = session_manager.get_display_name(window_id)
+        for (
+            _user_id,
+            _thread_id,
+            window_id,
+        ) in self._session_manager.iter_thread_bindings():
+            display = self._session_manager.get_display_name(window_id)
             if display == workspace_name:
                 return window_id
         return None
@@ -512,7 +534,7 @@ class CronService:
             return None
 
         # Create tmux window
-        success, message, wname, wid = await tmux_manager.create_window(
+        success, message, wname, wid = await self._tmux_manager.create_window(
             str(ws_dir), window_name=workspace_name
         )
         if not success:
@@ -522,14 +544,14 @@ class CronService:
             return None
 
         # Wait for hook to register session
-        await session_manager.wait_for_session_map_entry(wid)
+        await self._session_manager.wait_for_session_map_entry(wid)
 
         # Rebind thread
-        session_manager.bind_thread(
+        self._session_manager.bind_thread(
             meta.user_id, meta.thread_id, wid, window_name=wname
         )
         if meta.chat_id:
-            session_manager.set_group_chat_id(
+            self._session_manager.set_group_chat_id(
                 meta.user_id, meta.thread_id, meta.chat_id
             )
 
@@ -545,7 +567,7 @@ class CronService:
 
     def _scan_workspaces(self) -> None:
         """Scan config_dir for all workspace directories."""
-        for ws_dir in config.iter_workspace_dirs():
+        for ws_dir in self._iter_workspace_dirs():
             ws_name = ws_dir.name.removeprefix("workspace_")
             if ws_name in self._stores:
                 continue
@@ -571,7 +593,7 @@ class CronService:
                 continue
 
             schedule = CronSchedule(kind="every", every_seconds=3600)
-            next_run = compute_next_run(schedule, now, config.cron_default_tz)
+            next_run = compute_next_run(schedule, now, self._cron_default_tz)
             job = CronJob(
                 id=uuid.uuid4().hex[:8],
                 name=_SYSTEM_SUMMARY_JOB_NAME,
@@ -602,7 +624,7 @@ class CronService:
     def _ensure_store(self, workspace_name: str) -> CronStoreFile:
         """Get or create store for a workspace name."""
         if workspace_name not in self._stores:
-            ws_dir = config.workspace_dir_for(workspace_name)
+            ws_dir = self._workspace_dir_for(workspace_name)
             self._stores[workspace_name] = CronStoreFile()
             self._workspace_dirs[workspace_name] = ws_dir
         return self._stores[workspace_name]
@@ -714,7 +736,3 @@ class CronService:
     @property
     def workspace_count(self) -> int:
         return len(self._stores)
-
-
-# Global singleton
-cron_service = CronService()

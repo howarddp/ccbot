@@ -14,15 +14,15 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ..config import config
 from ..handlers.message_sender import safe_reply
 from ..memory.manager import MemoryManager
-from ..session import session_manager
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_workspace_for_thread(update: Update) -> Path | None:
+def _resolve_workspace_for_thread(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> Path | None:
     """Resolve the per-topic workspace directory for the current thread.
 
     Returns None if the thread has no bound window / no workspace.
@@ -38,12 +38,16 @@ def _resolve_workspace_for_thread(update: Update) -> Path | None:
     if thread_id is None or thread_id == 1:
         return None
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    agent_ctx = context.bot_data["agent_ctx"]
+    sm = agent_ctx.session_manager
+    cfg = agent_ctx.config
+
+    wid = sm.get_window_for_thread(user.id, thread_id)
     if not wid:
         return None
 
-    display_name = session_manager.get_display_name(wid)
-    return config.workspace_dir_for(display_name)
+    display_name = sm.get_display_name(wid)
+    return cfg.workspace_dir_for(display_name)
 
 
 def _get_memory_manager(workspace_dir: Path) -> MemoryManager:
@@ -57,7 +61,7 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not update.message:
         return
 
-    workspace_dir = _resolve_workspace_for_thread(update)
+    workspace_dir = _resolve_workspace_for_thread(update, context)
     if workspace_dir is None:
         await safe_reply(update.message, "❌ No workspace for this topic.")
         return
@@ -105,7 +109,8 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # /memory — list recent memories
-    memories = mm.list_daily(days=config.recent_memory_days)
+    cfg = context.bot_data["agent_ctx"].config
+    memories = mm.list_daily(days=cfg.recent_memory_days)
     if not memories:
         await safe_reply(update.message, "📝 No daily memories yet.")
         return
@@ -124,7 +129,7 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not update.message:
         return
 
-    workspace_dir = _resolve_workspace_for_thread(update)
+    workspace_dir = _resolve_workspace_for_thread(update, context)
     if workspace_dir is None:
         await safe_reply(update.message, "❌ No workspace for this topic.")
         return

@@ -11,7 +11,6 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ..config import config
 from ..handlers.message_sender import safe_reply
 from ..persona.profile import (
     ensure_user_profile,
@@ -28,7 +27,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not user or not update.message:
         return
 
-    users_dir = config.users_dir
+    users_dir = context.bot_data["agent_ctx"].config.users_dir
 
     # Ensure profile exists
     first_name = user.first_name or ""

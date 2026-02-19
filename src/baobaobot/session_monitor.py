@@ -11,21 +11,25 @@ Optimizations: mtime cache skips unchanged files; byte offset avoids re-reading.
 Key classes: SessionMonitor, NewMessage, SessionInfo.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 import aiofiles
 
-from .config import config
 from .monitor_state import MonitorState, TrackedSession
-from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import read_cwd_from_jsonl
+
+if TYPE_CHECKING:
+    from .session import SessionManager
+    from .tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
 
@@ -93,18 +97,25 @@ class SessionMonitor:
 
     def __init__(
         self,
-        projects_path: Path | None = None,
-        poll_interval: float | None = None,
-        state_file: Path | None = None,
+        *,
+        tmux_manager: TmuxManager,
+        session_manager: SessionManager,
+        session_map_file: Path,
+        tmux_session_name: str,
+        show_user_messages: bool = True,
+        projects_path: Path,
+        poll_interval: float,
+        state_file: Path,
     ):
-        self.projects_path = (
-            projects_path if projects_path is not None else config.claude_projects_path
-        )
-        self.poll_interval = (
-            poll_interval if poll_interval is not None else config.monitor_poll_interval
-        )
+        self._tmux_manager = tmux_manager
+        self._session_manager = session_manager
+        self._session_map_file = session_map_file
+        self._tmux_session_name = tmux_session_name
+        self._show_user_messages = show_user_messages
+        self.projects_path = projects_path
+        self.poll_interval = poll_interval
 
-        self.state = MonitorState(state_file=state_file or config.monitor_state_file)
+        self.state = MonitorState(state_file=state_file)
         self.state.load()
 
         self._running = False
@@ -126,7 +137,7 @@ class SessionMonitor:
     async def _get_active_cwds(self) -> set[str]:
         """Get normalized cwds of all active tmux windows."""
         cwds = set()
-        windows = await tmux_manager.list_windows()
+        windows = await self._tmux_manager.list_windows()
         for w in windows:
             try:
                 cwds.add(str(Path(w.cwd).resolve()))
@@ -359,7 +370,7 @@ class SessionMonitor:
                     if not entry.text:
                         continue
                     # Skip user messages unless show_user_messages is enabled
-                    if entry.role == "user" and not config.show_user_messages:
+                    if entry.role == "user" and not self._show_user_messages:
                         continue
                     # Extract [SEND_FILE:path] markers from assistant text
                     file_paths: list[str] = []
@@ -403,12 +414,12 @@ class SessionMonitor:
         Only entries matching our tmux_session_name are processed.
         """
         window_to_session: dict[str, str] = {}
-        if config.session_map_file.exists():
+        if self._session_map_file.exists():
             try:
-                async with aiofiles.open(config.session_map_file, "r") as f:
+                async with aiofiles.open(self._session_map_file, "r") as f:
                     content = await f.read()
                 session_map = json.loads(content)
-                prefix = f"{config.tmux_session_name}:"
+                prefix = f"{self._tmux_session_name}:"
                 for key, info in session_map.items():
                     # Only process entries for our tmux session
                     if not key.startswith(prefix):
@@ -494,9 +505,6 @@ class SessionMonitor:
         """
         logger.info("Session monitor started, polling every %ss", self.poll_interval)
 
-        # Deferred import to avoid circular dependency (cached once)
-        from .session import session_manager
-
         # Clean up all stale sessions on startup
         await self._cleanup_all_stale_sessions()
         # Initialize last known session_map
@@ -505,7 +513,7 @@ class SessionMonitor:
         while self._running:
             try:
                 # Load hook-based session map updates
-                await session_manager.load_session_map()
+                await self._session_manager.load_session_map()
 
                 # Detect session_map changes and cleanup replaced/removed sessions
                 current_map = await self._detect_and_cleanup_changes()

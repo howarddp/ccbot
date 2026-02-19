@@ -8,7 +8,7 @@ Wraps libtmux to provide async-friendly operations on a single tmux session:
 
 All blocking libtmux calls are wrapped in asyncio.to_thread().
 
-Key class: TmuxManager (singleton instantiated as `tmux_manager`).
+Key class: TmuxManager.
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import libtmux
-
-from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +39,22 @@ class TmuxWindow:
 class TmuxManager:
     """Manages tmux windows for Claude Code sessions."""
 
-    def __init__(self, session_name: str | None = None):
+    def __init__(
+        self,
+        session_name: str = "baobaobot",
+        claude_command: str = "claude",
+        main_window_name: str = "__main__",
+    ):
         """Initialize tmux manager.
 
         Args:
-            session_name: Name of the tmux session to use (default from config)
+            session_name: Name of the tmux session to use.
+            claude_command: Command to start Claude Code in new windows.
+            main_window_name: Name of the placeholder main window.
         """
-        self.session_name = session_name or config.tmux_session_name
+        self.session_name = session_name
+        self.claude_command = claude_command
+        self.main_window_name = main_window_name
         self._server: libtmux.Server | None = None
 
     @property
@@ -77,7 +84,7 @@ class TmuxManager:
         )
         # Rename the default window to the main window name
         if session.windows:
-            session.windows[0].rename_window(config.tmux_main_window_name)
+            session.windows[0].rename_window(self.main_window_name)
         return session
 
     async def list_windows(self) -> list[TmuxWindow]:
@@ -97,7 +104,7 @@ class TmuxManager:
             for window in session.windows:
                 name = window.window_name or ""
                 # Skip the main window (placeholder window)
-                if name == config.tmux_main_window_name:
+                if name == self.main_window_name:
                     continue
 
                 try:
@@ -431,7 +438,7 @@ class TmuxManager:
 
         # Restart Claude Code
         success = await self.send_keys(
-            window_id, config.claude_command, enter=True, literal=True
+            window_id, self.claude_command, enter=True, literal=True
         )
         if success:
             logger.info("Restarted Claude Code in window %s", window_id)
@@ -508,7 +515,7 @@ class TmuxManager:
                 if start_claude:
                     pane = window.active_pane
                     if pane:
-                        pane.send_keys(config.claude_command, enter=True)
+                        pane.send_keys(self.claude_command, enter=True)
 
                 logger.info(
                     "Created window '%s' (id=%s) at %s",
@@ -528,7 +535,3 @@ class TmuxManager:
                 return False, f"Failed to create window: {e}", "", ""
 
         return await asyncio.to_thread(_create_and_start)
-
-
-# Global instance with default session name
-tmux_manager = TmuxManager()

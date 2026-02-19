@@ -5,7 +5,7 @@ Manages the key mappings:
   User→Thread→Window (thread_bindings): topic-to-window bindings (1 topic = 1 window_id).
 
 Responsibilities:
-  - Persist/load state to ~/.baobaobot/state.json.
+  - Persist/load state to state.json.
   - Sync window↔session bindings from session_map.json (written by hook).
   - Resolve window IDs to ClaudeSession objects (JSONL file reading).
   - Track per-user read offsets for unread-message detection.
@@ -14,27 +14,30 @@ Responsibilities:
   - Maintain window_id→display name mapping for UI display.
   - Re-resolve stale window IDs on startup (tmux server restart recovery).
 
-Key class: SessionManager (singleton instantiated as `session_manager`).
+Key class: SessionManager.
 Key methods for thread binding access:
   - resolve_window_for_thread: Get window_id for a user's thread
   - iter_thread_bindings: Generator for iterating all (user_id, thread_id, window_id)
   - find_users_for_session: Find all users bound to a session_id
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiofiles
 
-from .config import config
-from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
+
+if TYPE_CHECKING:
+    from .tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +99,6 @@ class UnreadInfo:
     end_offset: int  # Current file size
 
 
-@dataclass
 class SessionManager:
     """Manages session state for Claude Code.
 
@@ -109,22 +111,34 @@ class SessionManager:
     window_display_names: window_id -> window_name (for display)
     """
 
-    window_states: dict[str, WindowState] = field(default_factory=dict)
-    user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
-    thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
-    # group_chat_ids: "user_id:thread_id" -> chat_id (supports multiple groups per user)
-    group_chat_ids: dict[str, int] = field(default_factory=dict)
-    # window_id -> display name (window_name)
-    window_display_names: dict[str, str] = field(default_factory=dict)
-    # thread_id -> topic_name (persisted so topic names survive restarts)
-    topic_names: dict[int, str] = field(default_factory=dict)
+    def __init__(
+        self,
+        *,
+        state_file: Path,
+        session_map_file: Path,
+        tmux_session_name: str,
+        claude_projects_path: Path,
+        tmux_manager: TmuxManager,
+    ) -> None:
+        self._state_file = state_file
+        self._session_map_file = session_map_file
+        self._tmux_session_name = tmux_session_name
+        self._claude_projects_path = claude_projects_path
+        self._tmux_manager = tmux_manager
 
-    # Reverse index: (user_id, window_id) -> thread_id for O(1) inbound lookups
-    _window_to_thread: dict[tuple[int, str], int] = field(
-        default_factory=dict, repr=False
-    )
+        self.window_states: dict[str, WindowState] = {}
+        self.user_window_offsets: dict[int, dict[str, int]] = {}
+        self.thread_bindings: dict[int, dict[int, str]] = {}
+        # group_chat_ids: "user_id:thread_id" -> chat_id (supports multiple groups per user)
+        self.group_chat_ids: dict[str, int] = {}
+        # window_id -> display name (window_name)
+        self.window_display_names: dict[str, str] = {}
+        # thread_id -> topic_name (persisted so topic names survive restarts)
+        self.topic_names: dict[int, str] = {}
+        # Reverse index: (user_id, window_id) -> thread_id for O(1) inbound lookups
+        self._window_to_thread: dict[tuple[int, str], int] = {}
+        self._needs_migration: bool = False
 
-    def __post_init__(self) -> None:
         self._load_state()
         self._rebuild_reverse_index()
 
@@ -149,8 +163,8 @@ class SessionManager:
             "window_display_names": self.window_display_names,
             "topic_names": {str(tid): name for tid, name in self.topic_names.items()},
         }
-        atomic_write_json(config.state_file, state)
-        logger.debug("State saved to %s", config.state_file)
+        atomic_write_json(self._state_file, state)
+        logger.debug("State saved to %s", self._state_file)
 
     def _is_window_id(self, key: str) -> bool:
         """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
@@ -162,9 +176,9 @@ class SessionManager:
         Detects old-format state (window_name keys without '@' prefix) and
         marks for migration on next startup re-resolution.
         """
-        if config.state_file.exists():
+        if self._state_file.exists():
             try:
-                state = json.loads(config.state_file.read_text())
+                state = json.loads(self._state_file.read_text())
                 self.window_states = {
                     k: WindowState.from_dict(v)
                     for k, v in state.get("window_states", {}).items()
@@ -228,7 +242,7 @@ class SessionManager:
 
         Builds {window_name: window_id} from live windows, then remaps or drops entries.
         """
-        windows = await tmux_manager.list_windows()
+        windows = await self._tmux_manager.list_windows()
         live_by_name: dict[str, str] = {}  # window_name -> window_id
         live_ids: set[str] = set()
         for w in windows:
@@ -367,16 +381,16 @@ class SessionManager:
 
     async def _cleanup_old_format_session_map_keys(self) -> None:
         """Remove old-format keys (window_name instead of @window_id) from session_map.json."""
-        if not config.session_map_file.exists():
+        if not self._session_map_file.exists():
             return
         try:
-            async with aiofiles.open(config.session_map_file, "r") as f:
+            async with aiofiles.open(self._session_map_file, "r") as f:
                 content = await f.read()
             session_map = json.loads(content)
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
+        prefix = f"{self._tmux_session_name}:"
         old_keys = [
             key
             for key in session_map
@@ -387,7 +401,7 @@ class SessionManager:
 
         for key in old_keys:
             del session_map[key]
-        atomic_write_json(config.session_map_file, session_map)
+        atomic_write_json(self._session_map_file, session_map)
         logger.info(
             "Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys
         )
@@ -432,12 +446,12 @@ class SessionManager:
             window_id,
             timeout,
         )
-        key = f"{config.tmux_session_name}:{window_id}"
+        key = f"{self._tmux_session_name}:{window_id}"
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             try:
-                if config.session_map_file.exists():
-                    async with aiofiles.open(config.session_map_file, "r") as f:
+                if self._session_map_file.exists():
+                    async with aiofiles.open(self._session_map_file, "r") as f:
                         content = await f.read()
                     session_map = json.loads(content)
                     info = session_map.get(key, {})
@@ -464,16 +478,16 @@ class SessionManager:
         Also cleans up window_states entries not in current session_map.
         Updates window_display_names from the "window_name" field in values.
         """
-        if not config.session_map_file.exists():
+        if not self._session_map_file.exists():
             return
         try:
-            async with aiofiles.open(config.session_map_file, "r") as f:
+            async with aiofiles.open(self._session_map_file, "r") as f:
                 content = await f.read()
             session_map = json.loads(content)
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
+        prefix = f"{self._tmux_session_name}:"
         valid_wids: set[str] = set()
         changed = False
 
@@ -539,7 +553,7 @@ class SessionManager:
             return None
         # Encode cwd: /data/code/baobaobot -> -data-code-baobaobot
         encoded_cwd = cwd.replace("/", "-")
-        return config.claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
+        return self._claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
 
     async def _get_session_direct(
         self, session_id: str, cwd: str
@@ -550,7 +564,7 @@ class SessionManager:
         # Fallback: glob search if direct path doesn't exist
         if not file_path or not file_path.exists():
             pattern = f"*/{session_id}.jsonl"
-            matches = list(config.claude_projects_path.glob(pattern))
+            matches = list(self._claude_projects_path.glob(pattern))
             if matches:
                 file_path = matches[0]
                 logger.debug("Found session via glob: %s", file_path)
@@ -830,10 +844,10 @@ class SessionManager:
             display,
             len(text),
         )
-        window = await tmux_manager.find_window_by_id(window_id)
+        window = await self._tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
-        success = await tmux_manager.send_keys(window.window_id, text)
+        success = await self._tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"
         return False, "Failed to send keys"
@@ -898,6 +912,3 @@ class SessionManager:
         ]
 
         return all_messages, len(all_messages)
-
-
-session_manager = SessionManager()

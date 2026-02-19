@@ -14,21 +14,27 @@ Key components:
   - Message queue worker: Background task processing user's queue
   - Content task processing with tool_use/tool_result handling
   - Status message tracking and conversion (keyed by (user_id, thread_id))
+
+All per-user state is stored on AgentContext.queue_state to ensure
+multi-agent isolation (no module-level globals keyed by user_id).
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from telegram import Bot
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
-from ..session import session_manager
 from ..terminal_parser import parse_status_line
-from ..tmux_manager import tmux_manager
 from .message_sender import NO_LINK_PREVIEW, rate_limit_send_message
+
+if TYPE_CHECKING:
+    from ..agent_context import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -50,34 +56,28 @@ class MessageTask:
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
 
 
-# Per-user message queues and worker tasks
-_message_queues: dict[int, asyncio.Queue[MessageTask]] = {}
-_queue_workers: dict[int, asyncio.Task[None]] = {}
-_queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
-
-# Map (tool_use_id, user_id, thread_id_or_0) -> telegram message_id
-# for editing tool_use messages with results
-_tool_msg_ids: dict[tuple[str, int, int], int] = {}
-
-# Status message tracking: (user_id, thread_id_or_0) -> (message_id, window_id, last_text)
-_status_msg_info: dict[tuple[int, int], tuple[int, str, str]] = {}
-
-
-def get_message_queue(user_id: int) -> asyncio.Queue[MessageTask] | None:
+def get_message_queue(
+    agent_ctx: AgentContext, user_id: int
+) -> asyncio.Queue[MessageTask] | None:
     """Get the message queue for a user (if exists)."""
-    return _message_queues.get(user_id)
+    return agent_ctx.queue_state.queues.get(user_id)
 
 
-def get_or_create_queue(bot: Bot, user_id: int) -> asyncio.Queue[MessageTask]:
+def get_or_create_queue(
+    bot: Bot,
+    user_id: int,
+    agent_ctx: AgentContext,
+) -> asyncio.Queue[MessageTask]:
     """Get or create message queue and worker for a user."""
-    if user_id not in _message_queues:
-        _message_queues[user_id] = asyncio.Queue()
-        _queue_locks[user_id] = asyncio.Lock()
+    qs = agent_ctx.queue_state
+    if user_id not in qs.queues:
+        qs.queues[user_id] = asyncio.Queue()
+        qs.locks[user_id] = asyncio.Lock()
         # Start worker task for this user
-        _queue_workers[user_id] = asyncio.create_task(
-            _message_queue_worker(bot, user_id)
+        qs.workers[user_id] = asyncio.create_task(
+            _message_queue_worker(bot, user_id, agent_ctx)
         )
-    return _message_queues[user_id]
+    return qs.queues[user_id]
 
 
 def _inspect_queue(queue: asyncio.Queue[MessageTask]) -> list[MessageTask]:
@@ -175,10 +175,13 @@ async def _merge_content_tasks(
     )
 
 
-async def _message_queue_worker(bot: Bot, user_id: int) -> None:
+async def _message_queue_worker(
+    bot: Bot, user_id: int, agent_ctx: AgentContext
+) -> None:
     """Process message tasks for a user sequentially."""
-    queue = _message_queues[user_id]
-    lock = _queue_locks[user_id]
+    qs = agent_ctx.queue_state
+    queue = qs.queues[user_id]
+    lock = qs.locks[user_id]
     logger.info(f"Message queue worker started for user {user_id}")
 
     while True:
@@ -195,11 +198,13 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                         # Mark merged tasks as done
                         for _ in range(merge_count):
                             queue.task_done()
-                    await _process_content_task(bot, user_id, merged_task)
+                    await _process_content_task(bot, user_id, merged_task, agent_ctx)
                 elif task.task_type == "status_update":
-                    await _process_status_update_task(bot, user_id, task)
+                    await _process_status_update_task(bot, user_id, task, agent_ctx)
                 elif task.task_type == "status_clear":
-                    await _do_clear_status_message(bot, user_id, task.thread_id or 0)
+                    await _do_clear_status_message(
+                        bot, user_id, task.thread_id or 0, agent_ctx
+                    )
             except RetryAfter as e:
                 retry_secs = (
                     e.retry_after
@@ -237,19 +242,23 @@ def _send_kwargs(thread_id: int | None) -> dict[str, int]:
     return {}
 
 
-async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
+async def _process_content_task(
+    bot: Bot, user_id: int, task: MessageTask, agent_ctx: AgentContext
+) -> None:
     """Process a content message task."""
+    sm = agent_ctx.session_manager
+    qs = agent_ctx.queue_state
     wid = task.window_id or ""
     tid = task.thread_id or 0
-    chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
+    chat_id = sm.resolve_chat_id(user_id, task.thread_id)
 
     # 1. Handle tool_result editing (merged parts are edited together)
     if task.content_type == "tool_result" and task.tool_use_id:
         _tkey = (task.tool_use_id, user_id, tid)
-        edit_msg_id = _tool_msg_ids.pop(_tkey, None)
+        edit_msg_id = qs.tool_msg_ids.pop(_tkey, None)
         if edit_msg_id is not None:
             # Clear status message first
-            await _do_clear_status_message(bot, user_id, tid)
+            await _do_clear_status_message(bot, user_id, tid, agent_ctx)
             # Join all parts for editing (merged content goes together)
             full_text = "\n\n".join(task.parts)
             try:
@@ -260,7 +269,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     parse_mode="MarkdownV2",
                     link_preview_options=NO_LINK_PREVIEW,
                 )
-                await _check_and_send_status(bot, user_id, wid, task.thread_id)
+                await _check_and_send_status(bot, user_id, wid, task.thread_id, agent_ctx)
                 return
             except RetryAfter:
                 raise
@@ -273,7 +282,9 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                         text=full_text,
                         link_preview_options=NO_LINK_PREVIEW,
                     )
-                    await _check_and_send_status(bot, user_id, wid, task.thread_id)
+                    await _check_and_send_status(
+                        bot, user_id, wid, task.thread_id, agent_ctx
+                    )
                     return
                 except RetryAfter:
                     raise
@@ -296,6 +307,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 tid,
                 wid,
                 part,
+                agent_ctx,
             )
             if converted_msg_id is not None:
                 last_msg_id = converted_msg_id
@@ -313,10 +325,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
 
     # 3. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
-        _tool_msg_ids[(task.tool_use_id, user_id, tid)] = last_msg_id
+        qs.tool_msg_ids[(task.tool_use_id, user_id, tid)] = last_msg_id
 
     # 4. After content, check and send status
-    await _check_and_send_status(bot, user_id, wid, task.thread_id)
+    await _check_and_send_status(bot, user_id, wid, task.thread_id, agent_ctx)
 
 
 async def _convert_status_to_content(
@@ -325,18 +337,21 @@ async def _convert_status_to_content(
     thread_id_or_0: int,
     window_id: str,
     content_text: str,
+    agent_ctx: AgentContext,
 ) -> int | None:
     """Convert status message to content message by editing it.
 
     Returns the message_id if converted successfully, None otherwise.
     """
+    sm = agent_ctx.session_manager
+    qs = agent_ctx.queue_state
     skey = (user_id, thread_id_or_0)
-    info = _status_msg_info.pop(skey, None)
+    info = qs.status_msg_info.pop(skey, None)
     if not info:
         return None
 
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = sm.resolve_chat_id(user_id, thread_id)
 
     msg_id, stored_wid, _last_text = info
     if stored_wid != window_id:
@@ -378,18 +393,20 @@ async def _convert_status_to_content(
 
 
 async def _process_status_update_task(
-    bot: Bot, user_id: int, task: MessageTask
+    bot: Bot, user_id: int, task: MessageTask, agent_ctx: AgentContext
 ) -> None:
     """Process a status update task."""
+    sm = agent_ctx.session_manager
+    qs = agent_ctx.queue_state
     wid = task.window_id or ""
     tid = task.thread_id or 0
-    chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
+    chat_id = sm.resolve_chat_id(user_id, task.thread_id)
     skey = (user_id, tid)
     status_text = task.text or ""
 
     if not status_text:
         # No status text means clear status
-        await _do_clear_status_message(bot, user_id, tid)
+        await _do_clear_status_message(bot, user_id, tid, agent_ctx)
         return
 
     # Send typing indicator if Claude is interruptible (working)
@@ -401,15 +418,15 @@ async def _process_status_update_task(
         except Exception:
             pass
 
-    current_info = _status_msg_info.get(skey)
+    current_info = qs.status_msg_info.get(skey)
 
     if current_info:
         msg_id, stored_wid, last_text = current_info
 
         if stored_wid != wid:
             # Window changed - delete old and send new
-            await _do_clear_status_message(bot, user_id, tid)
-            await _do_send_status_message(bot, user_id, tid, wid, status_text)
+            await _do_clear_status_message(bot, user_id, tid, agent_ctx)
+            await _do_send_status_message(bot, user_id, tid, wid, status_text, agent_ctx)
         elif status_text == last_text:
             # Same content, skip edit
             pass
@@ -423,7 +440,7 @@ async def _process_status_update_task(
                     parse_mode="MarkdownV2",
                     link_preview_options=NO_LINK_PREVIEW,
                 )
-                _status_msg_info[skey] = (msg_id, wid, status_text)
+                qs.status_msg_info[skey] = (msg_id, wid, status_text)
             except RetryAfter:
                 raise
             except Exception:
@@ -434,16 +451,18 @@ async def _process_status_update_task(
                         text=status_text,
                         link_preview_options=NO_LINK_PREVIEW,
                     )
-                    _status_msg_info[skey] = (msg_id, wid, status_text)
+                    qs.status_msg_info[skey] = (msg_id, wid, status_text)
                 except RetryAfter:
                     raise
                 except Exception as e:
                     logger.debug(f"Failed to edit status message: {e}")
-                    _status_msg_info.pop(skey, None)
-                    await _do_send_status_message(bot, user_id, tid, wid, status_text)
+                    qs.status_msg_info.pop(skey, None)
+                    await _do_send_status_message(
+                        bot, user_id, tid, wid, status_text, agent_ctx
+                    )
     else:
         # No existing status message, send new
-        await _do_send_status_message(bot, user_id, tid, wid, status_text)
+        await _do_send_status_message(bot, user_id, tid, wid, status_text, agent_ctx)
 
 
 async def _do_send_status_message(
@@ -452,11 +471,14 @@ async def _do_send_status_message(
     thread_id_or_0: int,
     window_id: str,
     text: str,
+    agent_ctx: AgentContext,
 ) -> None:
     """Send a new status message and track it (internal, called from worker)."""
+    sm = agent_ctx.session_manager
+    qs = agent_ctx.queue_state
     skey = (user_id, thread_id_or_0)
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    chat_id = sm.resolve_chat_id(user_id, thread_id)
     sent = await rate_limit_send_message(
         bot,
         chat_id,
@@ -464,21 +486,24 @@ async def _do_send_status_message(
         **_send_kwargs(thread_id),  # type: ignore[arg-type]
     )
     if sent:
-        _status_msg_info[skey] = (sent.message_id, window_id, text)
+        qs.status_msg_info[skey] = (sent.message_id, window_id, text)
 
 
 async def _do_clear_status_message(
     bot: Bot,
     user_id: int,
-    thread_id_or_0: int = 0,
+    thread_id_or_0: int,
+    agent_ctx: AgentContext,
 ) -> None:
     """Delete the status message for a user (internal, called from worker)."""
+    sm = agent_ctx.session_manager
+    qs = agent_ctx.queue_state
     skey = (user_id, thread_id_or_0)
-    info = _status_msg_info.pop(skey, None)
+    info = qs.status_msg_info.pop(skey, None)
     if info:
         msg_id = info[0]
         thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        chat_id = sm.resolve_chat_id(user_id, thread_id)
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception as e:
@@ -489,25 +514,28 @@ async def _check_and_send_status(
     bot: Bot,
     user_id: int,
     window_id: str,
-    thread_id: int | None = None,
+    thread_id: int | None,
+    agent_ctx: AgentContext,
 ) -> None:
     """Check terminal for status line and send status message if present."""
+    tm = agent_ctx.tmux_manager
+    qs = agent_ctx.queue_state
     # Skip if there are more messages pending in the queue
-    queue = _message_queues.get(user_id)
+    queue = qs.queues.get(user_id)
     if queue and not queue.empty():
         return
-    w = await tmux_manager.find_window_by_id(window_id)
+    w = await tm.find_window_by_id(window_id)
     if not w:
         return
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = await tm.capture_pane(w.window_id)
     if not pane_text:
         return
 
     tid = thread_id or 0
     status_line = parse_status_line(pane_text)
     if status_line:
-        await _do_send_status_message(bot, user_id, tid, window_id, status_line)
+        await _do_send_status_message(bot, user_id, tid, window_id, status_line, agent_ctx)
 
 
 async def enqueue_content_message(
@@ -519,6 +547,8 @@ async def enqueue_content_message(
     content_type: str = "text",
     text: str | None = None,
     thread_id: int | None = None,
+    *,
+    agent_ctx: AgentContext,
 ) -> None:
     """Enqueue a content message task."""
     logger.debug(
@@ -527,7 +557,7 @@ async def enqueue_content_message(
         window_id,
         content_type,
     )
-    queue = get_or_create_queue(bot, user_id)
+    queue = get_or_create_queue(bot, user_id, agent_ctx)
 
     task = MessageTask(
         task_type="content",
@@ -547,9 +577,11 @@ async def enqueue_status_update(
     window_id: str,
     status_text: str | None,
     thread_id: int | None = None,
+    *,
+    agent_ctx: AgentContext,
 ) -> None:
     """Enqueue status update."""
-    queue = get_or_create_queue(bot, user_id)
+    queue = get_or_create_queue(bot, user_id, agent_ctx)
 
     if status_text:
         task = MessageTask(
@@ -564,35 +596,45 @@ async def enqueue_status_update(
     queue.put_nowait(task)
 
 
-def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
+def clear_status_msg_info(
+    agent_ctx: AgentContext,
+    user_id: int,
+    thread_id: int | None = None,
+) -> None:
     """Clear status message tracking for a user (and optionally a specific thread)."""
     skey = (user_id, thread_id or 0)
-    _status_msg_info.pop(skey, None)
+    agent_ctx.queue_state.status_msg_info.pop(skey, None)
 
 
-def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> None:
+def clear_tool_msg_ids_for_topic(
+    agent_ctx: AgentContext,
+    user_id: int,
+    thread_id: int | None = None,
+) -> None:
     """Clear tool message ID tracking for a specific topic.
 
-    Removes all entries in _tool_msg_ids that match the given user and thread.
+    Removes all entries in tool_msg_ids that match the given user and thread.
     """
     tid = thread_id or 0
+    tool_msg_ids = agent_ctx.queue_state.tool_msg_ids
     # Find and remove all matching keys
     keys_to_remove = [
-        key for key in _tool_msg_ids if key[1] == user_id and key[2] == tid
+        key for key in tool_msg_ids if key[1] == user_id and key[2] == tid
     ]
     for key in keys_to_remove:
-        _tool_msg_ids.pop(key, None)
+        tool_msg_ids.pop(key, None)
 
 
-async def shutdown_workers() -> None:
-    """Stop all queue workers (called during bot shutdown)."""
-    for user_id, worker in list(_queue_workers.items()):
+async def shutdown_workers(agent_ctx: AgentContext) -> None:
+    """Stop all queue workers for this agent (called during bot shutdown)."""
+    qs = agent_ctx.queue_state
+    for user_id, worker in list(qs.workers.items()):
         worker.cancel()
         try:
             await worker
         except asyncio.CancelledError:
             pass
-    _queue_workers.clear()
-    _message_queues.clear()
-    _queue_locks.clear()
+    qs.workers.clear()
+    qs.queues.clear()
+    qs.locks.clear()
     logger.info("Message queue workers stopped")

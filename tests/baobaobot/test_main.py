@@ -9,7 +9,7 @@ from baobaobot.main import main
 _BOT_STARTUP_PATCHES = (
     "baobaobot.main.logging",
     "baobaobot.workspace.manager.WorkspaceManager",
-    "baobaobot.tmux_manager.tmux_manager",
+    "baobaobot.agent_context.create_agent_context",
     "baobaobot.bot.create_bot",
 )
 
@@ -25,9 +25,12 @@ def _enter_bot_patches():
         exits.append(p)
     # create_bot must return a mock application
     mocks["baobaobot.bot.create_bot"].return_value = MagicMock()
-    mocks[
-        "baobaobot.tmux_manager.tmux_manager"
-    ].get_or_create_session.return_value = MagicMock(session_name="test")
+    # create_agent_context must return a mock AgentContext with tmux_manager
+    mock_ctx = MagicMock()
+    mock_ctx.tmux_manager.get_or_create_session.return_value = MagicMock(
+        session_name="test"
+    )
+    mocks["baobaobot.agent_context.create_agent_context"].return_value = mock_ctx
     return mocks, exits
 
 

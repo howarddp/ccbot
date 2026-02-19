@@ -16,18 +16,19 @@ Key components:
   - update_status_message: Poll and enqueue status updates
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
-from ..session import session_manager
-from ..terminal_parser import STATUS_SPINNERS, is_interactive_ui, parse_status_line
-from ..tmux_manager import tmux_manager
+from ..terminal_parser import is_interactive_ui, parse_status_line
 from .callback_data import CB_RESTART_SESSION
 from .cleanup import clear_topic_state
 from .interactive_ui import (
@@ -37,6 +38,9 @@ from .interactive_ui import (
 )
 from .message_queue import enqueue_status_update, get_message_queue
 from .message_sender import rate_limit_send_message
+
+if TYPE_CHECKING:
+    from ..agent_context import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -134,24 +138,31 @@ async def update_status_message(
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
+    *,
+    agent_ctx: AgentContext,
 ) -> None:
     """Poll terminal and enqueue status update for user's active window.
 
     Also detects permission prompt UIs (not triggered via JSONL) and enters
     interactive mode when found.
     """
-    w = await tmux_manager.find_window_by_id(window_id)
+    sm = agent_ctx.session_manager
+    tm = agent_ctx.tmux_manager
+
+    w = await tm.find_window_by_id(window_id)
     if not w:
         # Window gone, enqueue clear
-        await enqueue_status_update(bot, user_id, window_id, None, thread_id=thread_id)
+        await enqueue_status_update(
+            bot, user_id, window_id, None, thread_id=thread_id, agent_ctx=agent_ctx
+        )
         return
 
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = await tm.capture_pane(w.window_id)
     if not pane_text:
         # Transient capture failure - keep existing status message
         return
 
-    interactive_window = get_interactive_window(user_id, thread_id)
+    interactive_window = get_interactive_window(agent_ctx, user_id, thread_id)
     should_check_new_ui = True
 
     if interactive_window == window_id:
@@ -161,16 +172,18 @@ async def update_status_message(
             return
         # Interactive UI gone — clear interactive mode, fall through to status check.
         # Don't re-check for new UI this cycle (the old one just disappeared).
-        await clear_interactive_msg(user_id, bot, thread_id)
+        await clear_interactive_msg(user_id, bot, thread_id, agent_ctx=agent_ctx)
         should_check_new_ui = False
     elif interactive_window is not None:
         # User is in interactive mode for a DIFFERENT window (window switched)
         # Clear stale interactive mode
-        await clear_interactive_msg(user_id, bot, thread_id)
+        await clear_interactive_msg(user_id, bot, thread_id, agent_ctx=agent_ctx)
 
     # Check for permission prompt (interactive UI not triggered via JSONL)
     if should_check_new_ui and is_interactive_ui(pane_text):
-        await handle_interactive_ui(bot, user_id, window_id, thread_id)
+        await handle_interactive_ui(
+            bot, user_id, window_id, thread_id, agent_ctx=agent_ctx
+        )
         return
 
     # Normal status line check
@@ -178,8 +191,8 @@ async def update_status_message(
 
     # Freeze detection: unchanged pane + stale spinner → notify user
     if _check_freeze(window_id, pane_text):
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-        display = session_manager.get_display_name(window_id)
+        chat_id = sm.resolve_chat_id(user_id, thread_id)
+        display = sm.get_display_name(window_id)
         keyboard = InlineKeyboardMarkup(
             [
                 [
@@ -207,12 +220,19 @@ async def update_status_message(
             window_id,
             status_line,
             thread_id=thread_id,
+            agent_ctx=agent_ctx,
         )
     # If no status line, keep existing status message (don't clear on transient state)
 
 
-async def status_poll_loop(bot: Bot) -> None:
+async def status_poll_loop(
+    bot: Bot,
+    agent_ctx: AgentContext,
+) -> None:
     """Background task to poll terminal status for all thread-bound windows."""
+    sm = agent_ctx.session_manager
+    tm = agent_ctx.tmux_manager
+
     logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
     last_topic_check = 0.0
     while True:
@@ -224,23 +244,23 @@ async def status_poll_loop(bot: Bot) -> None:
             now = time.monotonic()
             if now - last_topic_check >= TOPIC_CHECK_INTERVAL:
                 last_topic_check = now
-                for user_id, thread_id, wid in list(
-                    session_manager.iter_thread_bindings()
-                ):
+                for user_id, thread_id, wid in list(sm.iter_thread_bindings()):
                     try:
                         await bot.unpin_all_forum_topic_messages(
-                            chat_id=session_manager.resolve_chat_id(user_id, thread_id),
+                            chat_id=sm.resolve_chat_id(user_id, thread_id),
                             message_thread_id=thread_id,
                         )
                     except BadRequest as e:
                         if "Topic_id_invalid" in str(e):
                             # Topic deleted — kill window, unbind, and clean up state
-                            w = await tmux_manager.find_window_by_id(wid)
+                            w = await tm.find_window_by_id(wid)
                             if w:
-                                await tmux_manager.kill_window(w.window_id)
+                                await tm.kill_window(w.window_id)
                             clear_window_health(wid)
-                            session_manager.unbind_thread(user_id, thread_id)
-                            await clear_topic_state(user_id, thread_id, bot)
+                            sm.unbind_thread(user_id, thread_id)
+                            await clear_topic_state(
+                                user_id, thread_id, bot, agent_ctx=agent_ctx
+                            )
                             logger.info(
                                 "Topic deleted: killed window_id '%s' and "
                                 "unbound thread %d for user %d",
@@ -261,14 +281,16 @@ async def status_poll_loop(bot: Bot) -> None:
                             e,
                         )
 
-            for user_id, thread_id, wid in list(session_manager.iter_thread_bindings()):
+            for user_id, thread_id, wid in list(sm.iter_thread_bindings()):
                 try:
                     # Clean up stale bindings (window no longer exists)
-                    w = await tmux_manager.find_window_by_id(wid)
+                    w = await tm.find_window_by_id(wid)
                     if not w:
                         clear_window_health(wid)
-                        session_manager.unbind_thread(user_id, thread_id)
-                        await clear_topic_state(user_id, thread_id, bot)
+                        sm.unbind_thread(user_id, thread_id)
+                        await clear_topic_state(
+                            user_id, thread_id, bot, agent_ctx=agent_ctx
+                        )
                         logger.info(
                             "Cleaned up stale binding: user=%d thread=%d window_id=%s",
                             user_id,
@@ -277,7 +299,7 @@ async def status_poll_loop(bot: Bot) -> None:
                         )
                         continue
 
-                    queue = get_message_queue(user_id)
+                    queue = get_message_queue(agent_ctx, user_id)
                     if queue and not queue.empty():
                         continue
                     await update_status_message(
@@ -285,6 +307,7 @@ async def status_poll_loop(bot: Bot) -> None:
                         user_id,
                         wid,
                         thread_id=thread_id,
+                        agent_ctx=agent_ctx,
                     )
                 except Exception as e:
                     logger.debug(

@@ -278,38 +278,148 @@ def main() -> None:
         level=logging.WARNING,
     )
 
-    # Import config before enabling DEBUG — avoid leaking debug logs on config errors
-    try:
-        from .config import config
-    except ValueError as e:
-        print(f"Error: {e}\n")
-        print("Run 'baobaobot setup' for interactive first-time configuration.")
-        sys.exit(1)
+    from .agent_context import AgentContext, create_agent_context
+    from .utils import baobaobot_dir
 
-    logging.getLogger("baobaobot").setLevel(logging.DEBUG)
-    logger = logging.getLogger(__name__)
+    config_dir = baobaobot_dir()
+    toml_path = config_dir / "settings.toml"
 
-    # Initialize shared files on startup (persona + bin scripts)
-    from .workspace.manager import WorkspaceManager
+    agent_contexts: list[AgentContext] = []
 
-    wm = WorkspaceManager(config.shared_dir, config.shared_dir)
-    wm.init_shared()
-    logger.info("Shared files ready at %s", config.shared_dir)
+    if toml_path.is_file():
+        # New TOML-based configuration
+        from .settings import load_settings
 
-    from .tmux_manager import tmux_manager
+        try:
+            agent_configs = load_settings(config_dir=config_dir)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}\n")
+            print("Check your settings.toml configuration.")
+            sys.exit(1)
 
-    logger.info("Allowed users: %s", config.allowed_users)
-    logger.info("Claude projects path: %s", config.claude_projects_path)
+        logging.getLogger("baobaobot").setLevel(logging.DEBUG)
+        logger = logging.getLogger(__name__)
 
-    # Ensure tmux session exists
-    session = tmux_manager.get_or_create_session()
-    logger.info("Tmux session '%s' ready", session.session_name)
+        for cfg in agent_configs:
+            # Ensure agent directory exists
+            cfg.agent_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Starting Telegram bot...")
+            # Initialize shared files on startup (persona + bin scripts)
+            from .workspace.manager import WorkspaceManager
+
+            wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
+            wm.init_shared()
+            logger.info("Shared files ready at %s", cfg.shared_dir)
+
+            ctx = create_agent_context(cfg)
+            agent_contexts.append(ctx)
+            logger.info(
+                "Agent '%s': allowed_users=%s, tmux_session=%s",
+                cfg.name,
+                cfg.allowed_users,
+                cfg.tmux_session_name,
+            )
+    else:
+        # Legacy .env-based configuration — bridge to AgentConfig
+        try:
+            from .config import config
+        except ValueError as e:
+            print(f"Error: {e}\n")
+            print("Run 'baobaobot setup' for interactive first-time configuration.")
+            sys.exit(1)
+
+        logging.getLogger("baobaobot").setLevel(logging.DEBUG)
+        logger = logging.getLogger(__name__)
+
+        from .workspace.manager import WorkspaceManager
+
+        wm = WorkspaceManager(config.shared_dir, config.shared_dir)
+        wm.init_shared()
+        logger.info("Shared files ready at %s", config.shared_dir)
+
+        from .settings import AgentConfig
+
+        agent_cfg = AgentConfig(
+            name=config.tmux_session_name,
+            bot_token=config.telegram_bot_token,
+            allowed_users=frozenset(config.allowed_users),
+            tmux_session_name=config.tmux_session_name,
+            tmux_main_window_name=config.tmux_main_window_name,
+            claude_command=config.claude_command,
+            config_dir=config.config_dir,
+            agent_dir=config.config_dir,  # legacy: flat layout
+            claude_projects_path=config.claude_projects_path,
+            monitor_poll_interval=config.monitor_poll_interval,
+            show_user_messages=config.show_user_messages,
+            memory_keep_days=config.memory_keep_days,
+            recent_memory_days=config.recent_memory_days,
+            auto_assemble=config.auto_assemble,
+            whisper_model=config.whisper_model,
+            cron_default_tz=config.cron_default_tz,
+        )
+        agent_contexts.append(create_agent_context(agent_cfg))
+        logger.info("Allowed users: %s", config.allowed_users)
+
+    # Ensure tmux sessions exist for all agents
+    for ctx in agent_contexts:
+        session = ctx.tmux_manager.get_or_create_session()
+        logger.info("Tmux session '%s' ready", session.session_name)
+
     from .bot import create_bot
 
-    application = create_bot()
-    application.run_polling(allowed_updates=["message", "callback_query"])
+    if len(agent_contexts) == 1:
+        # Single agent: blocking run_polling
+        logger.info("Starting Telegram bot...")
+        application = create_bot(agent_contexts[0])
+        application.run_polling(allowed_updates=["message", "callback_query"])
+    else:
+        # Multiple agents: run concurrently with asyncio
+        import asyncio
+        import signal
+
+        logger.info("Starting %d Telegram bots...", len(agent_contexts))
+
+        async def _run_multi() -> None:
+            apps = []
+            for ctx in agent_contexts:
+                app = create_bot(ctx)
+                apps.append(app)
+
+            # Initialize and start all applications
+            for app in apps:
+                await app.initialize()
+                await app.start()
+                updater = app.updater
+                assert updater is not None
+                await updater.start_polling(
+                    allowed_updates=["message", "callback_query"]
+                )
+
+            logger.info("All %d bots started, waiting...", len(apps))
+
+            # Wait until interrupted via signal
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop_event.set)
+
+            await stop_event.wait()
+
+            # Shutdown all applications
+            for i, app in enumerate(apps):
+                try:
+                    updater = app.updater
+                    if updater:
+                        await updater.stop()
+                    await app.stop()
+                    await app.shutdown()
+                except Exception as e:
+                    logger.error("Error shutting down app %d: %s", i, e)
+
+        try:
+            asyncio.run(_run_multi())
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

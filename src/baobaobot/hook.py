@@ -227,10 +227,17 @@ def hook_main() -> None:
         cwd,
     )
 
-    # Read-modify-write with file locking to prevent concurrent hook races
+    # Read-modify-write with file locking to prevent concurrent hook races.
+    # Route to per-agent session_map.json when agents/ directory is in use.
     from .utils import baobaobot_dir
 
-    map_file = baobaobot_dir() / "session_map.json"
+    config_root = baobaobot_dir()
+    agent_dir = config_root / "agents" / tmux_session_name
+    if agent_dir.is_dir():
+        map_file = agent_dir / "session_map.json"
+    else:
+        # Legacy flat layout
+        map_file = config_root / "session_map.json"
     map_file.parent.mkdir(parents=True, exist_ok=True)
 
     lock_path = map_file.with_suffix(".lock")

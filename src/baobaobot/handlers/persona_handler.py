@@ -13,7 +13,6 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ..config import config
 from ..handlers.message_sender import safe_reply
 from ..persona.identity import read_identity, read_identity_raw, update_identity
 from ..persona.soul import read_soul, write_soul
@@ -23,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 # Track users in edit mode: user_id -> edit_target ("soul")
 _edit_mode: dict[int, str] = {}
+
+
+def _cfg(context: ContextTypes.DEFAULT_TYPE):
+    """Get AgentConfig from context."""
+    return context.bot_data["agent_ctx"].config
 
 
 async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -45,7 +49,8 @@ async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Show current soul
-    content = read_soul(config.shared_dir)
+    cfg = _cfg(context)
+    content = read_soul(cfg.shared_dir)
     if content:
         await safe_reply(update.message, f"🫀 **SOUL.md**\n\n{content}")
     else:
@@ -58,6 +63,7 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not user or not update.message:
         return
 
+    cfg = _cfg(context)
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=3)
 
@@ -74,9 +80,9 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             return
 
-        updated = update_identity(config.shared_dir, **{field_map[field]: value})
+        updated = update_identity(cfg.shared_dir, **{field_map[field]: value})
         rebuild_all_workspaces(
-            config.shared_dir, config.iter_workspace_dirs(), config.recent_memory_days
+            cfg.shared_dir, cfg.iter_workspace_dirs(), cfg.recent_memory_days
         )
         await safe_reply(
             update.message,
@@ -87,9 +93,9 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Show current identity
-    content = read_identity_raw(config.shared_dir)
+    content = read_identity_raw(cfg.shared_dir)
     if content:
-        identity = read_identity(config.shared_dir)
+        identity = read_identity(cfg.shared_dir)
         await safe_reply(
             update.message,
             f"🪪 **IDENTITY.md**\n\n"
@@ -124,9 +130,10 @@ async def handle_edit_mode_message(
         return True
 
     if target == "soul":
-        write_soul(config.shared_dir, text)
+        cfg = _cfg(context)
+        write_soul(cfg.shared_dir, text)
         rebuild_all_workspaces(
-            config.shared_dir, config.iter_workspace_dirs(), config.recent_memory_days
+            cfg.shared_dir, cfg.iter_workspace_dirs(), cfg.recent_memory_days
         )
         await safe_reply(update.message, "✅ SOUL.md updated!")
         return True

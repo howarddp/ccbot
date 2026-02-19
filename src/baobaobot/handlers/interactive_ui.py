@@ -14,13 +14,14 @@ Provides:
 State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
-from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -34,24 +35,26 @@ from .callback_data import (
 )
 from .message_sender import NO_LINK_PREVIEW, rate_limit_send_message
 
+if TYPE_CHECKING:
+    from ..agent_context import AgentContext
+
 logger = logging.getLogger(__name__)
 
 # Tool names that trigger interactive UI via JSONL (terminal capture + inline keyboard)
 INTERACTIVE_TOOL_NAMES = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
-# Track interactive UI message IDs: (user_id, thread_id_or_0) -> message_id
-_interactive_msgs: dict[tuple[int, int], int] = {}
 
-# Track interactive mode: (user_id, thread_id_or_0) -> window_id
-_interactive_mode: dict[tuple[int, int], str] = {}
-
-
-def get_interactive_window(user_id: int, thread_id: int | None = None) -> str | None:
+def get_interactive_window(
+    agent_ctx: AgentContext,
+    user_id: int,
+    thread_id: int | None = None,
+) -> str | None:
     """Get the window_id for user's interactive mode."""
-    return _interactive_mode.get((user_id, thread_id or 0))
+    return agent_ctx.ui_state.mode.get((user_id, thread_id or 0))
 
 
 def set_interactive_mode(
+    agent_ctx: AgentContext,
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
@@ -63,18 +66,26 @@ def set_interactive_mode(
         window_id,
         thread_id,
     )
-    _interactive_mode[(user_id, thread_id or 0)] = window_id
+    agent_ctx.ui_state.mode[(user_id, thread_id or 0)] = window_id
 
 
-def clear_interactive_mode(user_id: int, thread_id: int | None = None) -> None:
+def clear_interactive_mode(
+    agent_ctx: AgentContext,
+    user_id: int,
+    thread_id: int | None = None,
+) -> None:
     """Clear interactive mode for a user (without deleting message)."""
     logger.debug("Clear interactive mode: user=%d, thread=%s", user_id, thread_id)
-    _interactive_mode.pop((user_id, thread_id or 0), None)
+    agent_ctx.ui_state.mode.pop((user_id, thread_id or 0), None)
 
 
-def get_interactive_msg_id(user_id: int, thread_id: int | None = None) -> int | None:
+def get_interactive_msg_id(
+    agent_ctx: AgentContext,
+    user_id: int,
+    thread_id: int | None = None,
+) -> int | None:
     """Get the interactive message ID for a user."""
-    return _interactive_msgs.get((user_id, thread_id or 0))
+    return agent_ctx.ui_state.msgs.get((user_id, thread_id or 0))
 
 
 def _build_interactive_keyboard(
@@ -83,7 +94,7 @@ def _build_interactive_keyboard(
 ) -> InlineKeyboardMarkup:
     """Build keyboard for interactive UI navigation.
 
-    ``ui_name`` controls the layout: ``RestoreCheckpoint`` omits ←/→ keys
+    ``ui_name`` controls the layout: ``RestoreCheckpoint`` omits left/right keys
     since only vertical selection is needed.
     """
     vertical_only = ui_name == "RestoreCheckpoint"
@@ -145,6 +156,8 @@ async def handle_interactive_ui(
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
+    *,
+    agent_ctx: AgentContext,
 ) -> bool:
     """Capture terminal and send interactive UI content to user.
 
@@ -152,14 +165,18 @@ async def handle_interactive_ui(
     RestoreCheckpoint UIs. Returns True if UI was detected and sent,
     False otherwise.
     """
+    sm = agent_ctx.session_manager
+    tm = agent_ctx.tmux_manager
+    ui = agent_ctx.ui_state
+
     ikey = (user_id, thread_id or 0)
-    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-    w = await tmux_manager.find_window_by_id(window_id)
+    chat_id = sm.resolve_chat_id(user_id, thread_id)
+    w = await tm.find_window_by_id(window_id)
     if not w:
         return False
 
     # Capture plain text (no ANSI colors)
-    pane_text = await tmux_manager.capture_pane(w.window_id)
+    pane_text = await tm.capture_pane(w.window_id)
     if not pane_text:
         logger.debug("No pane text captured for window_id %s", window_id)
         return False
@@ -190,7 +207,7 @@ async def handle_interactive_ui(
         thread_kwargs["message_thread_id"] = thread_id
 
     # Check if we have an existing interactive message to edit
-    existing_msg_id = _interactive_msgs.get(ikey)
+    existing_msg_id = ui.msgs.get(ikey)
     if existing_msg_id:
         try:
             await bot.edit_message_text(
@@ -200,7 +217,7 @@ async def handle_interactive_ui(
                 reply_markup=keyboard,
                 link_preview_options=NO_LINK_PREVIEW,
             )
-            _interactive_mode[ikey] = window_id
+            ui.mode[ikey] = window_id
             return True
         except Exception:
             # Message unchanged or other error - silently ignore, don't send new
@@ -218,8 +235,8 @@ async def handle_interactive_ui(
         **thread_kwargs,  # type: ignore[arg-type]
     )
     if sent:
-        _interactive_msgs[ikey] = sent.message_id
-        _interactive_mode[ikey] = window_id
+        ui.msgs[ikey] = sent.message_id
+        ui.mode[ikey] = window_id
         return True
     return False
 
@@ -228,11 +245,16 @@ async def clear_interactive_msg(
     user_id: int,
     bot: Bot | None = None,
     thread_id: int | None = None,
+    *,
+    agent_ctx: AgentContext,
 ) -> None:
     """Clear tracked interactive message, delete from chat, and exit interactive mode."""
+    sm = agent_ctx.session_manager
+    ui = agent_ctx.ui_state
+
     ikey = (user_id, thread_id or 0)
-    msg_id = _interactive_msgs.pop(ikey, None)
-    _interactive_mode.pop(ikey, None)
+    msg_id = ui.msgs.pop(ikey, None)
+    ui.mode.pop(ikey, None)
     logger.debug(
         "Clear interactive msg: user=%d, thread=%s, msg_id=%s",
         user_id,
@@ -240,7 +262,7 @@ async def clear_interactive_msg(
         msg_id,
     )
     if bot and msg_id:
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        chat_id = sm.resolve_chat_id(user_id, thread_id)
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:

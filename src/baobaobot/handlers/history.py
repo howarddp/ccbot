@@ -7,17 +7,20 @@ Provides history viewing functionality for Claude Code sessions:
 Supports both full history and unread message range views.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-from ..config import config
-from ..session import session_manager
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
 from .message_sender import safe_edit, safe_reply, safe_send
+
+if TYPE_CHECKING:
+    from ..agent_context import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,7 @@ async def send_history(
     user_id: int | None = None,
     bot: Bot | None = None,
     message_thread_id: int | None = None,
+    agent_ctx: AgentContext,
 ) -> None:
     """Send or edit message history for a window's session.
 
@@ -92,8 +96,12 @@ async def send_history(
         user_id: User ID for updating read offset (required for unread mode).
         bot: Bot instance for direct send mode (when edit=False and bot is provided).
         message_thread_id: Telegram topic thread_id for targeted send.
+        agent_ctx: AgentContext for accessing services.
     """
-    display_name = session_manager.get_display_name(window_id)
+    sm = agent_ctx.session_manager
+    show_user_messages = agent_ctx.config.show_user_messages
+
+    display_name = sm.get_display_name(window_id)
     # Determine if this is unread mode (specific byte range)
     is_unread = start_byte > 0 or end_byte > 0
     logger.debug(
@@ -106,7 +114,7 @@ async def send_history(
         end_byte,
     )
 
-    messages, total = await session_manager.get_recent_messages(
+    messages, total = await sm.get_recent_messages(
         window_id,
         start_byte=start_byte,
         end_byte=end_byte if end_byte > 0 else None,
@@ -123,7 +131,7 @@ async def send_history(
         _end = TranscriptParser.EXPANDABLE_QUOTE_END
 
         # Filter messages based on config
-        if config.show_user_messages:
+        if show_user_messages:
             # Keep both user and assistant messages
             pass
         else:
@@ -141,7 +149,7 @@ async def send_history(
             elif bot is not None and user_id is not None:
                 await safe_send(
                     bot,
-                    session_manager.resolve_chat_id(user_id, message_thread_id),
+                    sm.resolve_chat_id(user_id, message_thread_id),
                     text,
                     message_thread_id=message_thread_id,
                     reply_markup=keyboard,
@@ -150,7 +158,7 @@ async def send_history(
                 await safe_reply(target, text, reply_markup=keyboard)
             # Update offset even if no assistant messages
             if user_id is not None and end_byte > 0:
-                session_manager.update_user_window_offset(user_id, window_id, end_byte)
+                sm.update_user_window_offset(user_id, window_id, end_byte)
             return
 
         if is_unread:
@@ -219,7 +227,7 @@ async def send_history(
         # Direct send mode (for unread catch-up after window switch)
         await safe_send(
             bot,
-            session_manager.resolve_chat_id(user_id, message_thread_id),
+            sm.resolve_chat_id(user_id, message_thread_id),
             text,
             message_thread_id=message_thread_id,
             reply_markup=keyboard,
@@ -229,4 +237,4 @@ async def send_history(
 
     # Update user's read offset after viewing unread
     if is_unread and user_id is not None and end_byte > 0:
-        session_manager.update_user_window_offset(user_id, window_id, end_byte)
+        sm.update_user_window_offset(user_id, window_id, end_byte)

@@ -17,17 +17,16 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ..config import config
 from ..cron.parse import format_schedule, parse_schedule
-from ..cron.service import cron_service
 from ..cron.types import WorkspaceMeta
 from ..handlers.message_sender import safe_reply
-from ..session import session_manager
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_workspace_for_thread(update: Update) -> tuple[Path | None, str]:
+def _resolve_workspace_for_thread(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> tuple[Path | None, str]:
     """Resolve workspace dir and name for the current thread.
 
     Returns (workspace_dir, workspace_name) or (None, "") if unresolvable.
@@ -43,12 +42,16 @@ def _resolve_workspace_for_thread(update: Update) -> tuple[Path | None, str]:
     if thread_id is None or thread_id == 1:
         return None, ""
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    agent_ctx = context.bot_data["agent_ctx"]
+    sm = agent_ctx.session_manager
+    cfg = agent_ctx.config
+
+    wid = sm.get_window_for_thread(user.id, thread_id)
     if not wid:
         return None, ""
 
-    display_name = session_manager.get_display_name(wid)
-    return config.workspace_dir_for(display_name), display_name
+    display_name = sm.get_display_name(wid)
+    return cfg.workspace_dir_for(display_name), display_name
 
 
 def _get_workspace_meta(update: Update) -> WorkspaceMeta:
@@ -71,7 +74,7 @@ async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not user or not update.message:
         return
 
-    workspace_dir, ws_name = _resolve_workspace_for_thread(update)
+    workspace_dir, ws_name = _resolve_workspace_for_thread(update, context)
     if workspace_dir is None:
         await safe_reply(update.message, "❌ No workspace for this topic.")
         return
@@ -79,25 +82,27 @@ async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=2)
 
+    cron_svc = context.bot_data["agent_ctx"].cron_service
+
     # /cron — list
     if len(parts) <= 1:
-        await _cmd_list(update, ws_name)
+        await _cmd_list(update, ws_name, cron_svc)
         return
 
     sub = parts[1].lower()
 
     if sub == "add" and len(parts) >= 3:
-        await _cmd_add(update, ws_name, parts[2])
+        await _cmd_add(update, ws_name, parts[2], cron_svc)
     elif sub == "remove" and len(parts) >= 3:
-        await _cmd_remove(update, ws_name, parts[2].strip())
+        await _cmd_remove(update, ws_name, parts[2].strip(), cron_svc)
     elif sub == "enable" and len(parts) >= 3:
-        await _cmd_enable(update, ws_name, parts[2].strip())
+        await _cmd_enable(update, ws_name, parts[2].strip(), cron_svc)
     elif sub == "disable" and len(parts) >= 3:
-        await _cmd_disable(update, ws_name, parts[2].strip())
+        await _cmd_disable(update, ws_name, parts[2].strip(), cron_svc)
     elif sub == "run" and len(parts) >= 3:
-        await _cmd_run(update, ws_name, parts[2].strip())
+        await _cmd_run(update, ws_name, parts[2].strip(), cron_svc)
     elif sub == "status":
-        await _cmd_status(update)
+        await _cmd_status(update, cron_svc)
     else:
         await safe_reply(
             update.message,
@@ -112,10 +117,10 @@ async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
-async def _cmd_list(update: Update, ws_name: str) -> None:
+async def _cmd_list(update: Update, ws_name: str, cron_svc) -> None:
     """List all cron jobs for this workspace."""
     assert update.message
-    jobs = await cron_service.list_jobs(ws_name)
+    jobs = await cron_svc.list_jobs(ws_name)
     if not jobs:
         await safe_reply(update.message, "⏰ No scheduled jobs for this workspace.")
         return
@@ -160,7 +165,7 @@ async def _cmd_list(update: Update, ws_name: str) -> None:
     await safe_reply(update.message, "\n".join(lines))
 
 
-async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
+async def _cmd_add(update: Update, ws_name: str, args: str, cron_svc) -> None:
     """Add a new cron job."""
     assert update.message
     # Parse: first token is schedule, rest is message
@@ -188,7 +193,7 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
 
     meta = _get_workspace_meta(update)
     creator_id = update.effective_user.id if update.effective_user else 0
-    job = await cron_service.add_job(
+    job = await cron_svc.add_job(
         ws_name, name, schedule, message, meta=meta, creator_user_id=creator_id
     )
 
@@ -206,10 +211,10 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
     )
 
 
-async def _cmd_remove(update: Update, ws_name: str, job_id: str) -> None:
+async def _cmd_remove(update: Update, ws_name: str, job_id: str, cron_svc) -> None:
     assert update.message
     # Block removal of system jobs
-    jobs = await cron_service.list_jobs(ws_name)
+    jobs = await cron_svc.list_jobs(ws_name)
     for j in jobs:
         if j.id == job_id and j.system:
             await safe_reply(
@@ -217,48 +222,48 @@ async def _cmd_remove(update: Update, ws_name: str, job_id: str) -> None:
                 f"❌ System job `{job_id}` cannot be removed. Use `/cron disable {job_id}` to disable it.",
             )
             return
-    ok = await cron_service.remove_job(ws_name, job_id)
+    ok = await cron_svc.remove_job(ws_name, job_id)
     if ok:
         await safe_reply(update.message, f"🗑️ Removed schedule `{job_id}`")
     else:
         await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
-async def _cmd_enable(update: Update, ws_name: str, job_id: str) -> None:
+async def _cmd_enable(update: Update, ws_name: str, job_id: str, cron_svc) -> None:
     assert update.message
-    job = await cron_service.enable_job(ws_name, job_id)
+    job = await cron_svc.enable_job(ws_name, job_id)
     if job:
         await safe_reply(update.message, f"✅ Enabled schedule `{job_id}`")
     else:
         await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
-async def _cmd_disable(update: Update, ws_name: str, job_id: str) -> None:
+async def _cmd_disable(update: Update, ws_name: str, job_id: str, cron_svc) -> None:
     assert update.message
-    job = await cron_service.disable_job(ws_name, job_id)
+    job = await cron_svc.disable_job(ws_name, job_id)
     if job:
         await safe_reply(update.message, f"⏸️ Disabled schedule `{job_id}`")
     else:
         await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
-async def _cmd_run(update: Update, ws_name: str, job_id: str) -> None:
+async def _cmd_run(update: Update, ws_name: str, job_id: str, cron_svc) -> None:
     assert update.message
-    ok = await cron_service.run_job_now(ws_name, job_id)
+    ok = await cron_svc.run_job_now(ws_name, job_id)
     if ok:
         await safe_reply(update.message, f"▶️ Triggered schedule `{job_id}`")
     else:
         await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
-async def _cmd_status(update: Update) -> None:
+async def _cmd_status(update: Update, cron_svc) -> None:
     assert update.message
-    running = "✅ Running" if cron_service.is_running else "❌ Stopped"
+    running = "✅ Running" if cron_svc.is_running else "❌ Stopped"
     await safe_reply(
         update.message,
         f"⏰ Cron Service: {running}\n"
-        f"Workspaces: {cron_service.workspace_count}\n"
-        f"Total jobs: {cron_service.total_jobs}",
+        f"Workspaces: {cron_svc.workspace_count}\n"
+        f"Total jobs: {cron_svc.total_jobs}",
     )
 
 

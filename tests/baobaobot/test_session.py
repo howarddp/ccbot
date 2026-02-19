@@ -1,15 +1,24 @@
 """Tests for SessionManager pure dict operations."""
 
+from pathlib import Path
+from unittest.mock import MagicMock
+
 import pytest
 
 from baobaobot.session import SessionManager
 
 
 @pytest.fixture
-def mgr(monkeypatch) -> SessionManager:
+def mgr(monkeypatch, tmp_path: Path) -> SessionManager:
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
     monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
-    return SessionManager()
+    return SessionManager(
+        state_file=tmp_path / "state.json",
+        session_map_file=tmp_path / "session_map.json",
+        tmux_session_name="test",
+        claude_projects_path=tmp_path / "projects",
+        tmux_manager=MagicMock(),
+    )
 
 
 class TestThreadBindings:

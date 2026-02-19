@@ -56,7 +56,7 @@ from telegram.ext import (
     filters,
 )
 
-from .config import config
+from .agent_context import AgentContext
 from .handlers.callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -107,10 +107,8 @@ from .handlers.status_polling import (
     status_poll_loop,
 )
 from .screenshot import text_to_image
-from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
 from .terminal_parser import extract_bash_output
-from .tmux_manager import tmux_manager
 from .handlers.persona_handler import (
     cancel_command,
     handle_edit_mode_message,
@@ -120,7 +118,6 @@ from .handlers.persona_handler import (
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
 from .handlers.cron_handler import cron_command
-from .cron.service import cron_service
 from .persona.profile import (
     NAME_NOT_SET_SENTINELS,
     convert_user_mentions,
@@ -134,10 +131,21 @@ logger = logging.getLogger(__name__)
 _MEMORY_TRIGGERS = ("記住", "remember", "記憶")
 
 
-def _ensure_user_and_prefix(user: User, text: str) -> str:
+def _ctx(context: ContextTypes.DEFAULT_TYPE) -> AgentContext:
+    """Retrieve the AgentContext stored in bot_data."""
+    return context.bot_data["agent_ctx"]
+
+
+def _agent_ctx(application: Application) -> AgentContext:
+    """Retrieve the AgentContext from an Application instance."""
+    return application.bot_data["agent_ctx"]
+
+
+def _ensure_user_and_prefix(users_dir: Path, user: User, text: str) -> str:
     """Ensure user profile exists and return text with [Name|user_id] prefix.
 
     Args:
+        users_dir: Path to users directory.
         user: Telegram User object.
         text: Original message text.
 
@@ -147,7 +155,7 @@ def _ensure_user_and_prefix(user: User, text: str) -> str:
     first_name = user.first_name or ""
     username = user.username or ""
 
-    profile = ensure_user_profile(config.users_dir, user.id, first_name, username)
+    profile = ensure_user_profile(users_dir, user.id, first_name, username)
     display = (
         profile.name
         if profile.name and profile.name not in NAME_NOT_SET_SENTINELS
@@ -155,12 +163,6 @@ def _ensure_user_and_prefix(user: User, text: str) -> str:
     )
     return f"[{display}|{user.id}] {text}"
 
-
-# Session monitor instance
-session_monitor: SessionMonitor | None = None
-
-# Status polling task
-_status_poll_task: asyncio.Task | None = None
 
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
@@ -171,8 +173,8 @@ CC_COMMANDS: dict[str, str] = {
 }
 
 
-def is_user_allowed(user_id: int | None) -> bool:
-    return user_id is not None and config.is_user_allowed(user_id)
+def _is_user_allowed(context: ContextTypes.DEFAULT_TYPE, user_id: int | None) -> bool:
+    return user_id is not None and _ctx(context).config.is_user_allowed(user_id)
 
 
 def _get_thread_id(update: Update) -> int | None:
@@ -188,7 +190,9 @@ def _get_thread_id(update: Update) -> int | None:
     return tid
 
 
-def _resolve_workspace_dir(update: Update) -> Path | None:
+def _resolve_workspace_dir(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> Path | None:
     """Resolve the per-topic workspace directory for the current thread.
 
     Returns None if thread has no bound window.
@@ -199,11 +203,12 @@ def _resolve_workspace_dir(update: Update) -> Path | None:
     thread_id = _get_thread_id(update)
     if thread_id is None:
         return None
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    ctx = _ctx(context)
+    wid = ctx.session_manager.get_window_for_thread(user.id, thread_id)
     if not wid:
         return None
-    display_name = session_manager.get_display_name(wid)
-    return config.workspace_dir_for(display_name)
+    display_name = ctx.session_manager.get_display_name(wid)
+    return ctx.config.workspace_dir_for(display_name)
 
 
 # --- Command handlers ---
@@ -212,29 +217,30 @@ def _resolve_workspace_dir(update: Update) -> Path | None:
 async def forcekill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kill the Claude process in the current session and restart it."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
+    ctx = _ctx(context)
     thread_id = _get_thread_id(update)
-    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
+    w = await ctx.tmux_manager.find_window_by_id(wid)
     if not w:
-        display = session_manager.get_display_name(wid)
+        display = ctx.session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
 
-    display = session_manager.get_display_name(wid)
+    display = ctx.session_manager.get_display_name(wid)
     await safe_reply(update.message, f"🔄 Restarting Claude in *{display}*…")
 
-    success = await tmux_manager.restart_claude(wid)
+    success = await ctx.tmux_manager.restart_claude(wid)
     clear_window_health(wid)
-    session_manager.clear_window_session(wid)
+    ctx.session_manager.clear_window_session(wid)
 
     if success:
         await safe_reply(update.message, f"✅ Claude restarted in *{display}*.")
@@ -245,18 +251,19 @@ async def forcekill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show message history for the active session or bound thread."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
+    ctx = _ctx(context)
     thread_id = _get_thread_id(update)
-    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    await send_history(update.message, wid)
+    await send_history(update.message, wid, agent_ctx=ctx)
 
 
 async def screenshot_command(
@@ -264,24 +271,25 @@ async def screenshot_command(
 ) -> None:
     """Capture the current tmux pane and send it as an image."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
+    ctx = _ctx(context)
     thread_id = _get_thread_id(update)
-    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
+    w = await ctx.tmux_manager.find_window_by_id(wid)
     if not w:
-        display = session_manager.get_display_name(wid)
+        display = ctx.session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
 
-    text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+    text = await ctx.tmux_manager.capture_pane(w.window_id, with_ansi=True)
     if not text:
         await safe_reply(update.message, "❌ Failed to capture pane content.")
         return
@@ -298,25 +306,26 @@ async def screenshot_command(
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send Escape key to interrupt Claude."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
+    ctx = _ctx(context)
     thread_id = _get_thread_id(update)
-    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
+    w = await ctx.tmux_manager.find_window_by_id(wid)
     if not w:
-        display = session_manager.get_display_name(wid)
+        display = ctx.session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
 
     # Send Escape control character (no enter)
-    await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
+    await ctx.tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
@@ -326,12 +335,12 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show workspace status for the current topic."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
-    workspace_dir = _resolve_workspace_dir(update)
+    workspace_dir = _resolve_workspace_dir(update, context)
     if workspace_dir is None:
         await safe_reply(update.message, "❌ No workspace for this topic.")
         return
@@ -342,18 +351,19 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
-    workspace_dir = _resolve_workspace_dir(update)
+    workspace_dir = _resolve_workspace_dir(update, context)
     if workspace_dir is None:
         await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
+    ctx = _ctx(context)
     assembler = ClaudeMdAssembler(
-        config.shared_dir, workspace_dir, config.recent_memory_days
+        ctx.config.shared_dir, workspace_dir, ctx.config.recent_memory_days
     )
     assembler.write()
     await safe_reply(
@@ -424,7 +434,7 @@ async def topic_created_handler(
     ftc = update.message.forum_topic_created
     thread_id = update.message.message_thread_id
     if thread_id and ftc.name:
-        session_manager.set_topic_name(thread_id, ftc.name)
+        _ctx(context).session_manager.set_topic_name(thread_id, ftc.name)
         logger.debug("Persisted topic name: thread=%d, name=%s", thread_id, ftc.name)
 
 
@@ -433,19 +443,20 @@ async def topic_closed_handler(
 ) -> None:
     """Handle topic closure — kill the associated tmux window and clean up state."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
 
     thread_id = _get_thread_id(update)
     if thread_id is None:
         return
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    ctx = _ctx(context)
+    wid = ctx.session_manager.get_window_for_thread(user.id, thread_id)
     if wid:
-        display = session_manager.get_display_name(wid)
-        w = await tmux_manager.find_window_by_id(wid)
+        display = ctx.session_manager.get_display_name(wid)
+        w = await ctx.tmux_manager.find_window_by_id(wid)
         if w:
-            await tmux_manager.kill_window(w.window_id)
+            await ctx.tmux_manager.kill_window(w.window_id)
             logger.info(
                 "Topic closed: killed window %s (user=%d, thread=%d)",
                 display,
@@ -460,9 +471,11 @@ async def topic_closed_handler(
                 thread_id,
             )
         clear_window_health(wid)
-        session_manager.unbind_thread(user.id, thread_id)
+        ctx.session_manager.unbind_thread(user.id, thread_id)
         # Clean up all memory state for this topic
-        await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+        await clear_topic_state(
+            user.id, thread_id, context.bot, context.user_data, agent_ctx=ctx
+        )
     else:
         logger.debug(
             "Topic closed: no binding (user=%d, thread=%d)", user.id, thread_id
@@ -474,41 +487,42 @@ async def forward_command_handler(
 ) -> None:
     """Forward any non-bot command as a slash command to the active Claude Code session."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
+    ctx = _ctx(context)
     # Store group chat_id for forum topic message routing
     chat = update.message.chat
     thread_id = _get_thread_id(update)
     if chat.type in ("group", "supergroup") and thread_id is not None:
-        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+        ctx.session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
-    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_id(wid)
+    w = await ctx.tmux_manager.find_window_by_id(wid)
     if not w:
-        display = session_manager.get_display_name(wid)
+        display = ctx.session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
 
-    display = session_manager.get_display_name(wid)
+    display = ctx.session_manager.get_display_name(wid)
 
     # Intercept /clear: trigger summary before clearing
-    if cc_slash.strip().lower() == "/clear":
+    if cc_slash.strip().lower() == "/clear" and ctx.cron_service:
         logger.info("Triggering pre-clear summary for window %s", display)
         await safe_reply(update.message, f"📋 [{display}] Summarizing before clear...")
         try:
-            summarized = await cron_service.trigger_summary(display)
+            summarized = await ctx.cron_service.trigger_summary(display)
             if summarized:
-                await cron_service.wait_for_idle(wid)
+                await ctx.cron_service.wait_for_idle(wid)
         except Exception as e:
             logger.warning("Pre-clear summary failed: %s", e)
 
@@ -516,27 +530,27 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await update.message.chat.send_action(ChatAction.TYPING)
-    success, message = await session_manager.send_to_window(wid, cc_slash)
+    success, message = await ctx.session_manager.send_to_window(wid, cc_slash)
     if success:
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
         # so we can detect the new session after first message
         if cc_slash.strip().lower() == "/clear":
             logger.info("Clearing session for window %s after /clear", display)
-            session_manager.clear_window_session(wid)
+            ctx.session_manager.clear_window_session(wid)
     else:
         await safe_reply(update.message, f"❌ {message}")
 
 
 async def unsupported_content_handler(
     update: Update,
-    _context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Reply to truly unsupported content (stickers, etc.)."""
     if not update.message:
         return
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         return
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
@@ -545,15 +559,18 @@ async def unsupported_content_handler(
     )
 
 
-def _resolve_tmp_dir(user_id: int, thread_id: int) -> Path | None:
+def _resolve_tmp_dir(
+    agent_ctx: AgentContext, user_id: int, thread_id: int
+) -> Path | None:
     """Resolve the tmp/ directory for the workspace bound to this thread.
 
     Returns None if thread has no bound window or cwd is unknown.
     """
-    wid = session_manager.get_window_for_thread(user_id, thread_id)
+    sm = agent_ctx.session_manager
+    wid = sm.get_window_for_thread(user_id, thread_id)
     if not wid:
         return None
-    state = session_manager.get_window_state(wid)
+    state = sm.get_window_state(wid)
     if not state.cwd:
         return None
     tmp_dir = Path(state.cwd) / "tmp"
@@ -564,7 +581,7 @@ def _resolve_tmp_dir(user_id: int, thread_id: int) -> Path | None:
 async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle photo/document/video/audio/voice — download to tmp/ and forward path to Claude."""
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         if update.message:
             await safe_reply(update.message, "You are not authorized to use this bot.")
         return
@@ -580,13 +597,14 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    ctx = _ctx(context)
     # Store group chat_id for forum topic message routing
     chat = update.message.chat
     if chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+        ctx.session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     # Check if topic is bound to a window
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
         await safe_reply(
             update.message,
@@ -595,7 +613,7 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Resolve tmp directory
-    tmp_dir = _resolve_tmp_dir(user.id, thread_id)
+    tmp_dir = _resolve_tmp_dir(ctx, user.id, thread_id)
     if tmp_dir is None:
         await safe_reply(update.message, "❌ Cannot resolve workspace path.")
         return
@@ -646,6 +664,8 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await file_obj.download_to_drive(str(dest))
     logger.info("Downloaded file to %s (user=%d, thread=%d)", dest, user.id, thread_id)
 
+    users_dir = ctx.config.users_dir
+
     # Voice message: attempt transcription before sending to Claude
     if msg.voice:
         from .transcribe import transcribe_voice
@@ -657,10 +677,12 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if caption:
                 lines.append(caption)
             raw_text = "\n".join(lines)
-            text_to_send = _ensure_user_and_prefix(user, raw_text)
+            text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
             await msg.chat.send_action(ChatAction.TYPING)
-            success, message = await session_manager.send_to_window(wid, text_to_send)
+            success, message = await ctx.session_manager.send_to_window(
+                wid, text_to_send
+            )
             if success:
                 await safe_reply(update.message, f"🎤 Transcript: {transcript}")
             else:
@@ -685,17 +707,18 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if desc:
             lines.append(f"User description: {desc}")
         raw_text = "\n".join(lines)
-        text_to_send = _ensure_user_and_prefix(user, raw_text)
+        text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
         await msg.chat.send_action(ChatAction.TYPING)
-        success, message = await session_manager.send_to_window(wid, text_to_send)
+        success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
         if success:
             await safe_reply(
                 update.message, f"💾 Sent for memory analysis: {dest.name}"
             )
         else:
             await safe_reply(
-                update.message, f"❌ File saved but failed to send to Claude: {message}"
+                update.message,
+                f"❌ File saved but failed to send to Claude: {message}",
             )
         return
 
@@ -738,10 +761,10 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     lines = [f"[Received File] {dest}"]
     lines.append(caption)
     raw_text = "\n".join(lines)
-    text_to_send = _ensure_user_and_prefix(user, raw_text)
+    text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
     await msg.chat.send_action(ChatAction.TYPING)
-    success, message = await session_manager.send_to_window(wid, text_to_send)
+    success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
     if success:
         await safe_reply(update.message, f"📎 File sent: {filename}")
     else:
@@ -750,20 +773,19 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
-# Active bash capture tasks: (user_id, thread_id) → asyncio.Task
-_bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
-
-
-def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
+def _cancel_bash_capture(bot_data: dict, user_id: int, thread_id: int) -> None:
     """Cancel any running bash capture for this topic."""
+    tasks: dict = bot_data.get("_bash_capture_tasks", {})
     key = (user_id, thread_id)
-    task = _bash_capture_tasks.pop(key, None)
+    task = tasks.pop(key, None)
     if task and not task.done():
         task.cancel()
 
 
 async def _capture_bash_output(
     bot: Bot,
+    agent_ctx: AgentContext,
+    bot_data: dict,
     user_id: int,
     thread_id: int,
     window_id: str,
@@ -779,12 +801,12 @@ async def _capture_bash_output(
         # Wait for the command to start producing output
         await asyncio.sleep(2.0)
 
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        chat_id = agent_ctx.session_manager.resolve_chat_id(user_id, thread_id)
         msg_id: int | None = None
         last_output: str = ""
 
         for _ in range(30):
-            raw = await tmux_manager.capture_pane(window_id)
+            raw = await agent_ctx.tmux_manager.capture_pane(window_id)
             if raw is None:
                 return
 
@@ -839,7 +861,8 @@ async def _capture_bash_output(
     except asyncio.CancelledError:
         return
     finally:
-        _bash_capture_tasks.pop((user_id, thread_id), None)
+        tasks: dict = bot_data.get("_bash_capture_tasks", {})
+        tasks.pop((user_id, thread_id), None)
 
 
 async def _auto_create_session(
@@ -861,22 +884,23 @@ async def _auto_create_session(
     if not update.message:
         return
 
+    ctx = _ctx(context)
     # Resolve topic name (persisted in state.json, survives restarts)
-    topic_name = session_manager.get_topic_name(thread_id) or f"topic-{thread_id}"
+    topic_name = ctx.session_manager.get_topic_name(thread_id) or f"topic-{thread_id}"
 
     # Create per-topic workspace
-    workspace_path = config.workspace_dir_for(topic_name)
-    wm = WorkspaceManager(config.shared_dir, workspace_path)
+    workspace_path = ctx.config.workspace_dir_for(topic_name)
+    wm = WorkspaceManager(ctx.config.shared_dir, workspace_path)
     wm.init_workspace()
 
     # Assemble CLAUDE.md
     assembler = ClaudeMdAssembler(
-        config.shared_dir, workspace_path, config.recent_memory_days
+        ctx.config.shared_dir, workspace_path, ctx.config.recent_memory_days
     )
     assembler.write()
 
     # Create tmux window
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
+    success, message, created_wname, created_wid = await ctx.tmux_manager.create_window(
         str(workspace_path), window_name=topic_name
     )
 
@@ -894,24 +918,26 @@ async def _auto_create_session(
     )
 
     # Wait for Claude Code's SessionStart hook to register in session_map
-    await session_manager.wait_for_session_map_entry(created_wid)
+    await ctx.session_manager.wait_for_session_map_entry(created_wid)
 
     # Bind thread to newly created window
-    session_manager.bind_thread(
+    ctx.session_manager.bind_thread(
         user_id, thread_id, created_wid, window_name=created_wname
     )
 
     # Store group chat_id for forum topic message routing
     chat = update.message.chat
     if chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user_id, thread_id, chat.id)
+        ctx.session_manager.set_group_chat_id(user_id, thread_id, chat.id)
 
     # Forward the pending message with user prefix
     # user is guaranteed non-None here (caller already checked)
     user_obj = update.effective_user
     assert user_obj is not None
-    prefixed_text = _ensure_user_and_prefix(user_obj, text)
-    send_ok, send_msg = await session_manager.send_to_window(created_wid, prefixed_text)
+    prefixed_text = _ensure_user_and_prefix(ctx.config.users_dir, user_obj, text)
+    send_ok, send_msg = await ctx.session_manager.send_to_window(
+        created_wid, prefixed_text
+    )
     if not send_ok:
         logger.warning("Failed to forward pending text: %s", send_msg)
         await safe_reply(
@@ -923,7 +949,7 @@ async def _auto_create_session(
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         if update.message:
             await safe_reply(update.message, "You are not authorized to use this bot.")
         return
@@ -931,17 +957,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message or not update.message.text:
         return
 
+    ctx = _ctx(context)
     # Store group chat_id for forum topic message routing
     chat = update.message.chat
     thread_id = _get_thread_id(update)
     if chat.type in ("group", "supergroup") and thread_id is not None:
-        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+        ctx.session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     # Backfill topic name from reply_to_message if not already persisted
-    if thread_id is not None and not session_manager.get_topic_name(thread_id):
+    if thread_id is not None and not ctx.session_manager.get_topic_name(thread_id):
         rtm = update.message.reply_to_message
         if rtm and rtm.forum_topic_created and rtm.forum_topic_created.name:
-            session_manager.set_topic_name(thread_id, rtm.forum_topic_created.name)
+            ctx.session_manager.set_topic_name(thread_id, rtm.forum_topic_created.name)
             logger.debug(
                 "Backfilled topic name from reply_to_message: thread=%d, name=%s",
                 thread_id,
@@ -968,9 +995,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 fname = info["filename"]
                 wid = info["window_id"]
                 raw_text = f"[Received File] {dest}\n{text}"
-                text_to_send = _ensure_user_and_prefix(user, raw_text)
+                text_to_send = _ensure_user_and_prefix(
+                    ctx.config.users_dir, user, raw_text
+                )
                 await update.message.chat.send_action(ChatAction.TYPING)
-                success, message = await session_manager.send_to_window(
+                success, message = await ctx.session_manager.send_to_window(
                     wid, text_to_send
                 )
                 if success:
@@ -990,23 +1019,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    wid = ctx.session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
         # Unbound topic — auto-create workspace and session
         await _auto_create_session(update, context, user.id, thread_id, text)
         return
 
     # Bound topic — forward to bound window
-    w = await tmux_manager.find_window_by_id(wid)
+    w = await ctx.tmux_manager.find_window_by_id(wid)
     if not w:
-        display = session_manager.get_display_name(wid)
+        display = ctx.session_manager.get_display_name(wid)
         logger.info(
             "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
             display,
             user.id,
             thread_id,
         )
-        session_manager.unbind_thread(user.id, thread_id)
+        ctx.session_manager.unbind_thread(user.id, thread_id)
         await safe_reply(
             update.message,
             f"❌ Window '{display}' no longer exists. Binding removed.\n"
@@ -1015,14 +1044,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await update.message.chat.send_action(ChatAction.TYPING)
-    clear_status_msg_info(user.id, thread_id)
+    clear_status_msg_info(ctx, user.id, thread_id)
 
     # Cancel any running bash capture — new message pushes pane content down
-    _cancel_bash_capture(user.id, thread_id)
+    _cancel_bash_capture(context.bot_data, user.id, thread_id)
 
     # Add [Name|user_id] prefix for multi-user identification
-    prefixed_text = _ensure_user_and_prefix(user, text)
-    success, message = await session_manager.send_to_window(wid, prefixed_text)
+    prefixed_text = _ensure_user_and_prefix(ctx.config.users_dir, user, text)
+    success, message = await ctx.session_manager.send_to_window(wid, prefixed_text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
@@ -1030,16 +1059,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Start background capture for ! bash command output
     if text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]  # strip leading "!"
+        bash_tasks: dict = context.bot_data.setdefault("_bash_capture_tasks", {})
         task = asyncio.create_task(
-            _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
+            _capture_bash_output(
+                context.bot, ctx, context.bot_data, user.id, thread_id, wid, bash_cmd
+            )
         )
-        _bash_capture_tasks[(user.id, thread_id)] = task
+        bash_tasks[(user.id, thread_id)] = task
 
     # If in interactive mode, refresh the UI after sending text
-    interactive_window = get_interactive_window(user.id, thread_id)
+    interactive_window = get_interactive_window(ctx, user.id, thread_id)
     if interactive_window and interactive_window == wid:
         await asyncio.sleep(0.2)
-        await handle_interactive_ui(context.bot, user.id, wid, thread_id)
+        await handle_interactive_ui(context.bot, user.id, wid, thread_id, agent_ctx=ctx)
 
 
 # --- Callback query handler ---
@@ -1051,15 +1083,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     user = update.effective_user
-    if not user or not is_user_allowed(user.id):
+    if not user or not _is_user_allowed(context, user.id):
         await query.answer("Not authorized")
         return
 
+    ctx = _ctx(context)
     # Store group chat_id for forum topic message routing
     if query.message and query.message.chat.type in ("group", "supergroup"):
         cb_thread_id = _get_thread_id(update)
         if cb_thread_id is not None:
-            session_manager.set_group_chat_id(
+            ctx.session_manager.set_group_chat_id(
                 user.id, cb_thread_id, query.message.chat.id
             )
 
@@ -1087,7 +1120,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Invalid data")
             return
 
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
             await send_history(
                 query,
@@ -1096,6 +1129,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 edit=True,
                 start_byte=start_byte,
                 end_byte=end_byte,
+                agent_ctx=ctx,
             )
         else:
             await safe_edit(query, "Window no longer exists.")
@@ -1104,12 +1138,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
         window_id = data[len(CB_SCREENSHOT_REFRESH) :]
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if not w:
             await query.answer("Window no longer exists", show_alert=True)
             return
 
-        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        text = await ctx.tmux_manager.capture_pane(w.window_id, with_ansi=True)
         if not text:
             await query.answer("Failed to capture pane", show_alert=True)
             return
@@ -1131,7 +1165,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Restart session (freeze recovery)
     elif data.startswith(CB_RESTART_SESSION):
         window_id = data[len(CB_RESTART_SESSION) :]
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if not w:
             await query.answer("Window no longer exists", show_alert=True)
             try:
@@ -1140,10 +1174,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 pass
             return
 
-        display = session_manager.get_display_name(window_id)
-        success = await tmux_manager.restart_claude(window_id)
+        display = ctx.session_manager.get_display_name(window_id)
+        success = await ctx.tmux_manager.restart_claude(window_id)
         clear_window_health(window_id)
-        session_manager.clear_window_session(window_id)
+        ctx.session_manager.clear_window_session(window_id)
 
         if success:
             try:
@@ -1176,8 +1210,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Please read and analyze this file. "
             "Provide a brief summary of its content."
         )
-        text_to_send = _ensure_user_and_prefix(user, raw_text)
-        success, message = await session_manager.send_to_window(wid, text_to_send)
+        text_to_send = _ensure_user_and_prefix(ctx.config.users_dir, user, raw_text)
+        success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
         if success:
             try:
                 await query.edit_message_text(f"📖 Sent to AI for analysis: {fname}")
@@ -1225,106 +1259,126 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data.startswith(CB_ASK_UP):
         window_id = data[len(CB_ASK_UP) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Up", enter=False, literal=False)
+            await ctx.tmux_manager.send_keys(
+                w.window_id, "Up", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer()
 
     # Interactive UI: Down arrow
     elif data.startswith(CB_ASK_DOWN):
         window_id = data[len(CB_ASK_DOWN) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(
+            await ctx.tmux_manager.send_keys(
                 w.window_id, "Down", enter=False, literal=False
             )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer()
 
     # Interactive UI: Left arrow
     elif data.startswith(CB_ASK_LEFT):
         window_id = data[len(CB_ASK_LEFT) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(
+            await ctx.tmux_manager.send_keys(
                 w.window_id, "Left", enter=False, literal=False
             )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer()
 
     # Interactive UI: Right arrow
     elif data.startswith(CB_ASK_RIGHT):
         window_id = data[len(CB_ASK_RIGHT) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(
+            await ctx.tmux_manager.send_keys(
                 w.window_id, "Right", enter=False, literal=False
             )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer()
 
     # Interactive UI: Escape
     elif data.startswith(CB_ASK_ESC):
         window_id = data[len(CB_ASK_ESC) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(
+            await ctx.tmux_manager.send_keys(
                 w.window_id, "Escape", enter=False, literal=False
             )
-            await clear_interactive_msg(user.id, context.bot, thread_id)
+            await clear_interactive_msg(user.id, context.bot, thread_id, agent_ctx=ctx)
         await query.answer("⎋ Esc")
 
     # Interactive UI: Enter
     elif data.startswith(CB_ASK_ENTER):
         window_id = data[len(CB_ASK_ENTER) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(
+            await ctx.tmux_manager.send_keys(
                 w.window_id, "Enter", enter=False, literal=False
             )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer("⏎ Enter")
 
     # Interactive UI: Space
     elif data.startswith(CB_ASK_SPACE):
         window_id = data[len(CB_ASK_SPACE) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(
+            await ctx.tmux_manager.send_keys(
                 w.window_id, "Space", enter=False, literal=False
             )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer("␣ Space")
 
     # Interactive UI: Tab
     elif data.startswith(CB_ASK_TAB):
         window_id = data[len(CB_ASK_TAB) :]
         thread_id = _get_thread_id(update)
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Tab", enter=False, literal=False)
+            await ctx.tmux_manager.send_keys(
+                w.window_id, "Tab", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
-            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            await handle_interactive_ui(
+                context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+            )
         await query.answer("⇥ Tab")
 
     # Interactive UI: refresh display
     elif data.startswith(CB_ASK_REFRESH):
         window_id = data[len(CB_ASK_REFRESH) :]
         thread_id = _get_thread_id(update)
-        await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+        await handle_interactive_ui(
+            context.bot, user.id, window_id, thread_id, agent_ctx=ctx
+        )
         await query.answer("🔄")
 
     # Screenshot quick keys: send key to tmux window
@@ -1343,19 +1397,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         tmux_key, enter, literal = key_info
-        w = await tmux_manager.find_window_by_id(window_id)
+        w = await ctx.tmux_manager.find_window_by_id(window_id)
         if not w:
             await query.answer("Window not found", show_alert=True)
             return
 
-        await tmux_manager.send_keys(
+        await ctx.tmux_manager.send_keys(
             w.window_id, tmux_key, enter=enter, literal=literal
         )
         await query.answer(_KEY_LABELS.get(key_id, key_id))
 
         # Refresh screenshot after key press
         await asyncio.sleep(0.5)
-        text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
+        text = await ctx.tmux_manager.capture_pane(w.window_id, with_ansi=True)
         if text:
             png_bytes = await text_to_image(text, with_ansi=True)
             keyboard = _build_screenshot_keyboard(window_id)
@@ -1374,12 +1428,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # --- Streaming response / notifications ---
 
 
-async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
+async def handle_new_message(
+    msg: NewMessage, bot: Bot, agent_ctx: AgentContext
+) -> None:
     """Handle a new assistant message — enqueue for sequential processing.
 
     Messages are queued per-user to ensure status messages always appear last.
     Routes via thread_bindings to deliver to the correct topic.
     """
+    sm = agent_ctx.session_manager
     status = "complete" if msg.is_complete else "streaming"
     logger.info(
         f"handle_new_message [{status}]: session={msg.session_id}, "
@@ -1387,7 +1444,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     )
 
     # Find users whose thread-bound window matches this session
-    active_users = await session_manager.find_users_for_session(msg.session_id)
+    active_users = await sm.find_users_for_session(msg.session_id)
 
     if not active_users:
         logger.info(f"No active users for session {msg.session_id}")
@@ -1397,46 +1454,46 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         # Handle interactive tools specially - capture terminal and send UI
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
             # Mark interactive mode BEFORE sleeping so polling skips this window
-            set_interactive_mode(user_id, wid, thread_id)
+            set_interactive_mode(agent_ctx, user_id, wid, thread_id)
             # Flush pending messages (e.g. plan content) before sending interactive UI
-            queue = get_message_queue(user_id)
+            queue = get_message_queue(agent_ctx, user_id)
             if queue:
                 await queue.join()
             # Wait briefly for Claude Code to render the question UI
             await asyncio.sleep(0.3)
-            handled = await handle_interactive_ui(bot, user_id, wid, thread_id)
+            handled = await handle_interactive_ui(
+                bot, user_id, wid, thread_id, agent_ctx=agent_ctx
+            )
             if handled:
                 # Update user's read offset
-                session = await session_manager.resolve_session_for_window(wid)
+                session = await sm.resolve_session_for_window(wid)
                 if session and session.file_path:
                     try:
                         file_size = Path(session.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
-                            user_id, wid, file_size
-                        )
+                        sm.update_user_window_offset(user_id, wid, file_size)
                     except OSError:
                         pass
                 continue  # Don't send the normal tool_use message
             else:
                 # UI not rendered — clear the early-set mode
-                clear_interactive_mode(user_id, thread_id)
+                clear_interactive_mode(agent_ctx, user_id, thread_id)
 
         # Any non-interactive message means the interaction is complete — delete the UI message
-        if get_interactive_msg_id(user_id, thread_id):
-            await clear_interactive_msg(user_id, bot, thread_id)
+        if get_interactive_msg_id(agent_ctx, user_id, thread_id):
+            await clear_interactive_msg(user_id, bot, thread_id, agent_ctx=agent_ctx)
 
         # Send files if [SEND_FILE:path] markers are present
         if msg.file_paths:
-            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            chat_id = sm.resolve_chat_id(user_id, thread_id)
             for fpath_str in msg.file_paths:
                 fpath = Path(fpath_str)
                 if not fpath.is_file():
                     logger.warning("SEND_FILE: file not found: %s", fpath)
                     continue
-                # Security: file must be within a workspace directory
+                # Security: file must be within agent directory
                 try:
                     fpath_resolved = fpath.resolve()
-                    config_resolved = config.config_dir.resolve()
+                    config_resolved = agent_ctx.config.config_dir.resolve()
                     if not str(fpath_resolved).startswith(str(config_resolved)):
                         logger.warning("SEND_FILE: path outside workspace: %s", fpath)
                         continue
@@ -1484,7 +1541,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 continue
 
         # Convert @[user_id] markers to Telegram mentions
-        display_text = convert_user_mentions(msg.text, config.users_dir)
+        display_text = convert_user_mentions(msg.text, agent_ctx.config.users_dir)
 
         parts = build_response_parts(
             display_text,
@@ -1506,15 +1563,16 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 content_type=msg.content_type,
                 text=msg.text,
                 thread_id=thread_id,
+                agent_ctx=agent_ctx,
             )
 
             # Update user's read offset to current file position
             # This marks these messages as "read" for this user
-            session = await session_manager.resolve_session_for_window(wid)
+            session = await sm.resolve_session_for_window(wid)
             if session and session.file_path:
                 try:
                     file_size = Path(session.file_path).stat().st_size
-                    session_manager.update_user_window_offset(user_id, wid, file_size)
+                    sm.update_user_window_offset(user_id, wid, file_size)
                 except OSError:
                     pass
 
@@ -1523,7 +1581,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
 
 async def post_init(application: Application) -> None:
-    global session_monitor, _status_poll_task
+    agent_ctx = _agent_ctx(application)
 
     await application.bot.delete_my_commands()
 
@@ -1548,13 +1606,15 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(bot_commands)
 
     # Re-resolve stale window IDs from persisted state against live tmux windows
-    await session_manager.resolve_stale_ids()
+    await agent_ctx.session_manager.resolve_stale_ids()
 
     # Rebuild CLAUDE.md for existing workspaces if sources changed
-    workspace_dirs = config.iter_workspace_dirs()
+    workspace_dirs = agent_ctx.config.iter_workspace_dirs()
     if workspace_dirs:
         rebuilt = rebuild_all_workspaces(
-            config.shared_dir, workspace_dirs, config.recent_memory_days
+            agent_ctx.config.shared_dir,
+            workspace_dirs,
+            agent_ctx.config.recent_memory_days,
         )
         if rebuilt:
             logger.info(
@@ -1562,61 +1622,78 @@ async def post_init(application: Application) -> None:
             )
 
     # Start cron service
-    await cron_service.start()
-    logger.info("Cron service started")
+    if agent_ctx.cron_service:
+        await agent_ctx.cron_service.start()
+        logger.info("Cron service started")
 
-    monitor = SessionMonitor()
+    monitor = SessionMonitor(
+        tmux_manager=agent_ctx.tmux_manager,
+        session_manager=agent_ctx.session_manager,
+        session_map_file=agent_ctx.config.session_map_file,
+        tmux_session_name=agent_ctx.config.tmux_session_name,
+        show_user_messages=agent_ctx.config.show_user_messages,
+        projects_path=agent_ctx.config.claude_projects_path,
+        poll_interval=agent_ctx.config.monitor_poll_interval,
+        state_file=agent_ctx.config.monitor_state_file,
+    )
 
     async def message_callback(msg: NewMessage) -> None:
-        await handle_new_message(msg, application.bot)
+        await handle_new_message(msg, application.bot, agent_ctx)
 
     monitor.set_message_callback(message_callback)
     monitor.start()
-    session_monitor = monitor
+    agent_ctx.session_monitor = monitor
     logger.info("Session monitor started")
 
     # Start status polling task
-    _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
+    application.bot_data["_status_poll_task"] = asyncio.create_task(
+        status_poll_loop(application.bot, agent_ctx=agent_ctx)
+    )
     logger.info("Status polling task started")
 
 
 async def post_shutdown(application: Application) -> None:
-    global _status_poll_task
+    agent_ctx = _agent_ctx(application)
 
     # Signal shutdown immediately to prevent destructive cleanup
     # (unbinding threads, killing windows) during the shutdown window.
     signal_shutdown()
 
     # Stop status polling
-    if _status_poll_task:
-        _status_poll_task.cancel()
+    poll_task = application.bot_data.get("_status_poll_task")
+    if poll_task:
+        poll_task.cancel()
         try:
-            await _status_poll_task
+            await poll_task
         except asyncio.CancelledError:
             pass
-        _status_poll_task = None
+        application.bot_data["_status_poll_task"] = None
         logger.info("Status polling stopped")
 
     # Stop all queue workers
-    await shutdown_workers()
+    await shutdown_workers(agent_ctx)
 
     # Stop cron service
-    await cron_service.stop()
-    logger.info("Cron service stopped")
+    if agent_ctx.cron_service:
+        await agent_ctx.cron_service.stop()
+        logger.info("Cron service stopped")
 
-    if session_monitor:
-        session_monitor.stop()
+    if agent_ctx.session_monitor:
+        agent_ctx.session_monitor.stop()
         logger.info("Session monitor stopped")
 
 
-def create_bot() -> Application:
+def create_bot(agent_ctx: AgentContext) -> Application:
     application = (
         Application.builder()
-        .token(config.telegram_bot_token)
+        .token(agent_ctx.config.bot_token)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
     )
+
+    # Store agent context in bot_data for handler access
+    application.bot_data["agent_ctx"] = agent_ctx
 
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("forcekill", forcekill_command))
