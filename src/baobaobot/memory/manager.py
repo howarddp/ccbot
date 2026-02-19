@@ -9,6 +9,7 @@ Key class: MemoryManager.
 """
 
 import logging
+import shutil
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -102,14 +103,12 @@ class MemoryManager:
             except OSError:
                 continue
 
-        # Clean up all attachments
+        # Clean up all attachment subdirectories
         att_dir = self.memory_dir / "attachments"
         if att_dir.exists():
-            for f in att_dir.iterdir():
-                try:
-                    f.unlink()
-                except OSError:
-                    continue
+            for d in att_dir.iterdir():
+                if d.is_dir():
+                    shutil.rmtree(d)
 
         logger.info("Deleted %d daily memory files", count)
         return count
@@ -172,23 +171,16 @@ class MemoryManager:
         return count
 
     def _cleanup_attachments_for_date(self, date_str: str) -> int:
-        """Delete all attachments prefixed with the given date.
+        """Delete the attachment subdirectory for the given date.
 
-        Attachment filenames are formatted as {YYYY-MM-DD}_{HHMMSS}_{original}.
+        Attachments are stored in memory/attachments/{YYYY-MM-DD}/.
         Returns the number of files deleted.
         """
-        att_dir = self.memory_dir / "attachments"
-        if not att_dir.exists():
+        date_dir = self.memory_dir / "attachments" / date_str
+        if not date_dir.is_dir():
             return 0
 
-        prefix = f"{date_str}_"
-        count = 0
-        for f in att_dir.iterdir():
-            if f.name.startswith(prefix):
-                try:
-                    f.unlink()
-                    count += 1
-                    logger.debug("Cleaned up attachment: %s", f.name)
-                except OSError:
-                    continue
+        count = sum(1 for f in date_dir.iterdir() if f.is_file())
+        shutil.rmtree(date_dir)
+        logger.debug("Cleaned up attachment dir: %s (%d files)", date_str, count)
         return count

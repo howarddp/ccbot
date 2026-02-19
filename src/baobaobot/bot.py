@@ -119,7 +119,6 @@ from .handlers.persona_handler import (
 )
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
-from .memory.daily import save_attachment
 from .handlers.cron_handler import cron_command
 from .cron.service import cron_service
 from .persona.profile import convert_user_mentions, ensure_user_profile
@@ -607,8 +606,8 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, "❌ 無法取得檔案。")
         return
 
-    # Generate filename
-    now = datetime.now(tz=timezone.utc)
+    # Generate filename (local time for human-readable timestamps)
+    now = datetime.now()
     ts = now.strftime("%Y%m%d_%H%M%S")
     if original_name:
         filename = f"{ts}_{original_name}"
@@ -653,12 +652,9 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
             return
 
-    # Check caption for memory trigger words
+    # Check caption for memory trigger words — delegate to Claude Code for analysis
     caption = msg.caption or ""
     if caption and any(t in caption.lower() for t in _MEMORY_TRIGGERS):
-        display_name = session_manager.get_display_name(wid)
-        ws_dir = config.workspace_dir_for(display_name)
-        user_name = user.first_name or str(user.id)
         # Remove only the first matched trigger word from description
         desc = caption
         for t in _MEMORY_TRIGGERS:
@@ -666,14 +662,22 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if idx >= 0:
                 desc = (desc[:idx] + desc[idx + len(t) :]).strip()
                 break
-        if not desc:
-            desc = filename
-        rel = save_attachment(ws_dir, dest, desc, user_name)
-        if rel:
-            await safe_reply(update.message, f"💾 已存入記憶: {dest.name}")
+        # Forward to Claude Code with memory instruction
+        lines = [f"[記憶附件] {dest}"]
+        if desc:
+            lines.append(f"用戶描述: {desc}")
+        raw_text = "\n".join(lines)
+        text_to_send = _ensure_user_and_prefix(user, raw_text)
+
+        await msg.chat.send_action(ChatAction.TYPING)
+        success, message = await session_manager.send_to_window(wid, text_to_send)
+        if success:
+            await safe_reply(update.message, f"💾 已送出記憶分析: {dest.name}")
         else:
-            await safe_reply(update.message, "❌ 無法存入記憶。")
-        # Still forward to Claude below
+            await safe_reply(
+                update.message, f"❌ 檔案已儲存但無法送達 Claude: {message}"
+            )
+        return
 
     # No caption — show inline keyboard asking user what to do
     if not caption:

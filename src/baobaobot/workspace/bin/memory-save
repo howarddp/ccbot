@@ -19,6 +19,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from datetime import date, datetime
@@ -26,6 +27,9 @@ from pathlib import Path
 from typing import Optional
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+# Matches tmp download prefix: YYYYMMDD_HHMMSS_
+_TMP_PREFIX_RE = re.compile(r"^\d{8}_\d{6}_")
 
 
 def resolve_workspace() -> Path:
@@ -48,15 +52,27 @@ def save_attachment(
     Returns the relative path of the saved attachment.
     """
     att_dir = workspace / "memory" / "attachments"
-    att_dir.mkdir(parents=True, exist_ok=True)
 
-    now = datetime.now()
-    ts = now.strftime("%Y-%m-%d_%H%M%S")
-    dest_name = f"{ts}_{source.name}"
-    dest = att_dir / dest_name
+    # Use local time so date subdir matches date.today() used for daily .md filenames.
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_dir = att_dir / date_str
+    date_dir.mkdir(parents=True, exist_ok=True)
+
+    # Strip tmp timestamp prefix (YYYYMMDD_HHMMSS_) and use clean filename
+    clean_name = _TMP_PREFIX_RE.sub("", source.name)
+    dest_name = clean_name
+    dest = date_dir / dest_name
+    if dest.exists():
+        stem = Path(clean_name).stem
+        ext = Path(clean_name).suffix
+        n = 2
+        while dest.exists():
+            dest_name = f"{stem}_{n}{ext}"
+            dest = date_dir / dest_name
+            n += 1
     shutil.copy2(source, dest)
 
-    rel_path = f"memory/attachments/{dest_name}"
+    rel_path = f"memory/attachments/{date_str}/{dest_name}"
 
     # Markdown reference: image vs file
     suffix = source.suffix.lower()

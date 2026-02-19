@@ -8,6 +8,7 @@ Key functions: get_daily(), write_daily(), delete_daily(), save_attachment().
 """
 
 import logging
+import re
 import shutil
 from datetime import date, datetime
 from pathlib import Path
@@ -75,6 +76,14 @@ def delete_daily(workspace_dir: Path, date_str: str) -> bool:
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
+# Matches tmp download prefix: YYYYMMDD_HHMMSS_
+_TMP_PREFIX_RE = re.compile(r"^\d{8}_\d{6}_")
+
+
+def _strip_tmp_prefix(name: str) -> str:
+    """Strip the YYYYMMDD_HHMMSS_ prefix added by tmp downloads."""
+    return _TMP_PREFIX_RE.sub("", name)
+
 
 def _attachments_dir(workspace_dir: Path) -> Path:
     """Get the memory attachments directory path."""
@@ -112,18 +121,28 @@ def save_attachment(
         return None
 
     att_dir = _attachments_dir(workspace_dir)
-    att_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use local time so date prefix matches date.today() used for daily .md filenames.
-    # This ensures _cleanup_attachments_for_date() can find attachments by date prefix.
-    now = datetime.now()
-    ts = now.strftime("%Y-%m-%d_%H%M%S")
-    dest_name = f"{ts}_{source_path.name}"
-    dest = att_dir / dest_name
+    # Use local time so date subdir matches date.today() used for daily .md filenames.
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_dir = att_dir / date_str
+    date_dir.mkdir(parents=True, exist_ok=True)
+
+    # Strip tmp timestamp prefix (YYYYMMDD_HHMMSS_) and use clean filename
+    clean_name = _strip_tmp_prefix(source_path.name)
+    dest_name = clean_name
+    dest = date_dir / dest_name
+    if dest.exists():
+        stem = Path(clean_name).stem
+        ext = Path(clean_name).suffix
+        n = 2
+        while dest.exists():
+            dest_name = f"{stem}_{n}{ext}"
+            dest = date_dir / dest_name
+            n += 1
     shutil.copy2(source_path, dest)
 
     # Build relative path from workspace root
-    rel_path = f"memory/attachments/{dest_name}"
+    rel_path = f"memory/attachments/{date_str}/{dest_name}"
 
     # Build Markdown reference
     suffix = source_path.suffix.lower()

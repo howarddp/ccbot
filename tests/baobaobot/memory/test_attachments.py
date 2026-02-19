@@ -26,14 +26,14 @@ def mm(workspace: Path) -> MemoryManager:
 
 class TestSaveAttachment:
     def test_copies_file_and_writes_daily(self, workspace: Path) -> None:
-        # Create a source file
         src = workspace / "tmp" / "photo.jpg"
         src.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
 
         rel = save_attachment(workspace, src, "a nice photo", "Alice")
         assert rel is not None
-        assert rel.startswith("memory/attachments/")
-        assert "photo.jpg" in rel
+        today = date.today().isoformat()
+        # Preserves original filename in date subdirectory
+        assert rel == f"memory/attachments/{today}/photo.jpg"
 
         # File was copied
         att_path = workspace / rel
@@ -41,7 +41,6 @@ class TestSaveAttachment:
         assert att_path.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg"
 
         # Daily memory was updated
-        today = date.today().isoformat()
         daily = (workspace / "memory" / f"{today}.md").read_text()
         assert "![a nice photo]" in daily
         assert "[Alice]" in daily
@@ -64,7 +63,6 @@ class TestSaveAttachment:
         assert rel is not None
         daily = (workspace / "memory" / f"{date.today().isoformat()}.md").read_text()
         assert "[monthly report](" in daily
-        # Should NOT have the image bang prefix
         assert "![monthly report]" not in daily
 
     def test_source_not_found_returns_none(self, workspace: Path) -> None:
@@ -78,7 +76,50 @@ class TestSaveAttachment:
         rel = save_attachment(workspace, src, "data file")
         assert rel is not None
         assert not rel.startswith("/")
-        assert rel.startswith("memory/attachments/")
+        today = date.today().isoformat()
+        assert rel == f"memory/attachments/{today}/data.csv"
+
+    def test_collision_adds_numeric_suffix(self, workspace: Path) -> None:
+        src = workspace / "tmp" / "file.txt"
+        src.write_bytes(b"first")
+
+        rel1 = save_attachment(workspace, src, "first copy")
+        assert rel1 is not None
+        today = date.today().isoformat()
+        assert rel1 == f"memory/attachments/{today}/file.txt"
+
+        # Save again — same source filename
+        src.write_bytes(b"second")
+        rel2 = save_attachment(workspace, src, "second copy")
+        assert rel2 is not None
+        assert rel2 == f"memory/attachments/{today}/file_2.txt"
+
+        # Third time
+        src.write_bytes(b"third")
+        rel3 = save_attachment(workspace, src, "third copy")
+        assert rel3 is not None
+        assert rel3 == f"memory/attachments/{today}/file_3.txt"
+
+    def test_strips_tmp_timestamp_prefix(self, workspace: Path) -> None:
+        # Simulate file downloaded by bot.py with YYYYMMDD_HHMMSS_ prefix
+        src = workspace / "tmp" / "20260219_120346_Resume.pdf"
+        src.write_bytes(b"%PDF")
+
+        rel = save_attachment(workspace, src, "resume")
+        assert rel is not None
+        today = date.today().isoformat()
+        # Prefix should be stripped
+        assert rel == f"memory/attachments/{today}/Resume.pdf"
+
+    def test_preserves_name_without_tmp_prefix(self, workspace: Path) -> None:
+        # File without tmp prefix should be unchanged
+        src = workspace / "tmp" / "my_report_2026.pdf"
+        src.write_bytes(b"%PDF")
+
+        rel = save_attachment(workspace, src, "report")
+        assert rel is not None
+        today = date.today().isoformat()
+        assert rel == f"memory/attachments/{today}/my_report_2026.pdf"
 
 
 class TestAttachmentCleanup:
@@ -86,65 +127,63 @@ class TestAttachmentCleanup:
         self, workspace: Path, mm: MemoryManager
     ) -> None:
         att_dir = workspace / "memory" / "attachments"
-        # Create some attachments for different dates
-        (att_dir / "2026-01-15_120000_photo.jpg").write_bytes(b"old")
-        (att_dir / "2026-01-15_130000_doc.pdf").write_bytes(b"old2")
-        (att_dir / "2026-01-16_100000_other.png").write_bytes(b"other")
+        (att_dir / "2026-01-15").mkdir(parents=True, exist_ok=True)
+        (att_dir / "2026-01-15" / "photo.jpg").write_bytes(b"old")
+        (att_dir / "2026-01-15" / "doc.pdf").write_bytes(b"old2")
+        (att_dir / "2026-01-16").mkdir(parents=True, exist_ok=True)
+        (att_dir / "2026-01-16" / "other.png").write_bytes(b"other")
 
         count = mm._cleanup_attachments_for_date("2026-01-15")
         assert count == 2
-        # 2026-01-15 files should be gone
-        assert not (att_dir / "2026-01-15_120000_photo.jpg").exists()
-        assert not (att_dir / "2026-01-15_130000_doc.pdf").exists()
-        # 2026-01-16 files should remain
-        assert (att_dir / "2026-01-16_100000_other.png").exists()
+        assert not (att_dir / "2026-01-15").exists()
+        assert (att_dir / "2026-01-16" / "other.png").exists()
 
     def test_delete_daily_cleans_attachments(
         self, workspace: Path, mm: MemoryManager
     ) -> None:
         att_dir = workspace / "memory" / "attachments"
-        (att_dir / "2026-02-10_090000_pic.jpg").write_bytes(b"data")
+        (att_dir / "2026-02-10").mkdir(parents=True, exist_ok=True)
+        (att_dir / "2026-02-10" / "pic.jpg").write_bytes(b"data")
         (workspace / "memory" / "2026-02-10.md").write_text("- entry\n")
 
         result = mm.delete_daily("2026-02-10")
         assert result is True
-        assert not (att_dir / "2026-02-10_090000_pic.jpg").exists()
+        assert not (att_dir / "2026-02-10").exists()
 
     def test_delete_all_daily_cleans_all_attachments(
         self, workspace: Path, mm: MemoryManager
     ) -> None:
         att_dir = workspace / "memory" / "attachments"
-        (att_dir / "2026-02-10_090000_a.jpg").write_bytes(b"a")
-        (att_dir / "2026-02-11_100000_b.png").write_bytes(b"b")
+        (att_dir / "2026-02-10").mkdir(parents=True, exist_ok=True)
+        (att_dir / "2026-02-10" / "a.jpg").write_bytes(b"a")
+        (att_dir / "2026-02-11").mkdir(parents=True, exist_ok=True)
+        (att_dir / "2026-02-11" / "b.png").write_bytes(b"b")
         (workspace / "memory" / "2026-02-10.md").write_text("- a\n")
         (workspace / "memory" / "2026-02-11.md").write_text("- b\n")
 
         count = mm.delete_all_daily()
         assert count == 2
-        # All attachments should be gone
-        remaining = list(att_dir.iterdir())
+        remaining = [d for d in att_dir.iterdir() if d.is_dir()]
         assert len(remaining) == 0
 
     def test_cleanup_removes_old_attachments(
         self, workspace: Path, mm: MemoryManager
     ) -> None:
         att_dir = workspace / "memory" / "attachments"
-        # Create an old daily memory + attachment
         old_date = "2020-01-01"
         (workspace / "memory" / f"{old_date}.md").write_text("- old\n")
-        (att_dir / f"{old_date}_120000_old.jpg").write_bytes(b"old")
+        (att_dir / old_date).mkdir(parents=True, exist_ok=True)
+        (att_dir / old_date / "old.jpg").write_bytes(b"old")
 
-        # Create a recent daily memory + attachment (today)
         today = date.today().isoformat()
         (workspace / "memory" / f"{today}.md").write_text("- today\n")
-        (att_dir / f"{today}_120000_new.jpg").write_bytes(b"new")
+        (att_dir / today).mkdir(parents=True, exist_ok=True)
+        (att_dir / today / "new.jpg").write_bytes(b"new")
 
         count = mm.cleanup(keep_days=30)
-        assert count == 1  # Only old one deleted
-        # Old attachment should be gone
-        assert not (att_dir / f"{old_date}_120000_old.jpg").exists()
-        # Today's attachment should remain
-        assert (att_dir / f"{today}_120000_new.jpg").exists()
+        assert count == 1
+        assert not (att_dir / old_date).exists()
+        assert (att_dir / today / "new.jpg").exists()
 
 
 class TestWorkspaceInit:

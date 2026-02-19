@@ -83,7 +83,18 @@
 {{BIN_DIR}}/memory-save /path/to/file "描述" --user Alice
 ```
 
-- 檔案會被複製到 `memory/attachments/`，並在今日的每日記憶中加入 Markdown 引用
+- 檔案會被複製到 `memory/attachments/YYYY-MM-DD/`（按日期分目錄），並在今日的每日記憶中加入 Markdown 引用
 - 圖片（`.jpg/.png/.gif/.webp`）使用 `![描述](路徑)` 格式，其他檔案使用 `[描述](路徑)` 格式
-- 用戶透過 Telegram 傳送檔案時，若 caption 包含「記住」或「remember」，會自動存入記憶
-- 附件隨每日記憶一同清理（刪除某天的記憶會同步刪除該天的附件）
+- 附件隨每日記憶一同清理（刪除某天的記憶會同步刪除該天的附件目錄）
+
+### 記憶附件（自動摘要）
+
+當收到 `[記憶附件] /path/to/file` 格式的訊息時：
+1. 讀取並分析檔案內容（圖片用 Read 查看、文件讀取文字、程式碼直接讀）
+2. 生成簡潔的內容摘要（1-2 句話）
+3. 若有 `用戶描述: ...`，結合用戶描述和你的分析作為最終摘要
+4. 使用 memory-save 存入記憶：
+   ```
+   {{BIN_DIR}}/memory-save /path/to/file "你生成的摘要" --user 用戶名
+   ```
+5. 存完後簡短回覆確認

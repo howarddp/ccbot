@@ -35,15 +35,13 @@ class TestMemorySave:
         assert result.returncode == 0
         assert "Saved to memory" in result.stdout
 
-        # Attachment file exists
-        att_dir = ws / "memory" / "attachments"
-        files = list(att_dir.iterdir())
-        assert len(files) == 1
-        assert "photo.jpg" in files[0].name
-        assert files[0].read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg"
+        # Attachment file exists in date subdirectory with original name
+        today = date.today().isoformat()
+        att_file = ws / "memory" / "attachments" / today / "photo.jpg"
+        assert att_file.exists()
+        assert att_file.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg"
 
         # Daily memory updated with image syntax
-        today = date.today().isoformat()
         daily = (ws / "memory" / f"{today}.md").read_text()
         assert "![nice photo](" in daily
 
@@ -95,7 +93,6 @@ class TestMemorySave:
     def test_creates_attachments_dir(self, tmp_path: Path) -> None:
         ws = tmp_path / "workspace"
         (ws / "memory").mkdir(parents=True)
-        # No attachments/ dir yet
         assert not (ws / "memory" / "attachments").exists()
 
         src = tmp_path / "img.png"
@@ -103,4 +100,5 @@ class TestMemorySave:
 
         result = run_script([str(src), "test"], ws)
         assert result.returncode == 0
-        assert (ws / "memory" / "attachments").is_dir()
+        today = date.today().isoformat()
+        assert (ws / "memory" / "attachments" / today).is_dir()
