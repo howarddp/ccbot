@@ -12,47 +12,48 @@ import logging
 import threading
 from pathlib import Path
 
-from .config import config
-
 logger = logging.getLogger(__name__)
 
-_model: object | None = None
+_models: dict[str, object] = {}
 _model_lock = threading.Lock()
 _load_failed = False
 
 
-def _get_model() -> object | None:
-    """Return the cached WhisperModel, creating it on first call."""
-    global _model, _load_failed  # noqa: PLW0603
+def _get_model(whisper_model: str = "small") -> object | None:
+    """Return the cached WhisperModel for *whisper_model*, creating it on first call."""
+    global _load_failed  # noqa: PLW0603
     if _load_failed:
         return None
-    if _model is not None:
-        return _model
+    cached = _models.get(whisper_model)
+    if cached is not None:
+        return cached
     with _model_lock:
         # Double-checked locking
-        if _model is not None:
-            return _model
+        cached = _models.get(whisper_model)
+        if cached is not None:
+            return cached
         if _load_failed:
             return None
         try:
             from faster_whisper import WhisperModel  # type: ignore[import-untyped]
 
-            _model = WhisperModel(config.whisper_model, compute_type="int8")
-            logger.info("Loaded whisper model: %s", config.whisper_model)
-            return _model
+            model = WhisperModel(whisper_model, compute_type="int8")
+            _models[whisper_model] = model
+            logger.info("Loaded whisper model: %s", whisper_model)
+            return model
         except ImportError:
             logger.info("faster-whisper not installed — voice transcription disabled")
             _load_failed = True
             return None
         except Exception:
-            logger.exception("Failed to load whisper model")
+            logger.exception("Failed to load whisper model: %s", whisper_model)
             _load_failed = True
             return None
 
 
-def _transcribe_sync(path: Path) -> str | None:
+def _transcribe_sync(path: Path, whisper_model: str = "small") -> str | None:
     """Synchronous transcription.  Returns text or *None* on failure."""
-    model = _get_model()
+    model = _get_model(whisper_model)
     if model is None:
         return None
     try:
@@ -64,6 +65,6 @@ def _transcribe_sync(path: Path) -> str | None:
         return None
 
 
-async def transcribe_voice(path: Path) -> str | None:
+async def transcribe_voice(path: Path, whisper_model: str = "small") -> str | None:
     """Transcribe an audio file without blocking the event loop."""
-    return await asyncio.to_thread(_transcribe_sync, path)
+    return await asyncio.to_thread(_transcribe_sync, path, whisper_model)

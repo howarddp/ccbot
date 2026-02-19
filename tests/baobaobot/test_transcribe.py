@@ -14,10 +14,10 @@ def _reset_transcribe_globals():
     """Reset the module-level model cache before every test."""
     import baobaobot.transcribe as mod
 
-    mod._model = None
+    mod._models.clear()
     mod._load_failed = False
     yield
-    mod._model = None
+    mod._models.clear()
     mod._load_failed = False
 
 
@@ -37,11 +37,8 @@ def _make_segment(text: str) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-@patch("baobaobot.transcribe.config")
-def test_transcribe_success(mock_config: MagicMock) -> None:
+def test_transcribe_success() -> None:
     """Successful transcription returns joined segment text."""
-    mock_config.whisper_model = "base"
-
     fake_model = MagicMock()
     segments = [_make_segment("Hello "), _make_segment("world")]
     fake_model.transcribe.return_value = (iter(segments), MagicMock())
@@ -55,20 +52,17 @@ def test_transcribe_success(mock_config: MagicMock) -> None:
     assert result == "Hello world"
 
 
-@patch("baobaobot.transcribe.config")
-def test_import_error_returns_none(mock_config: MagicMock) -> None:
+def test_import_error_returns_none() -> None:
     """When faster-whisper is not installed, transcription returns None."""
-    mock_config.whisper_model = "base"
-
     import baobaobot.transcribe as mod
 
     # Simulate ImportError inside _get_model
     with patch.dict("sys.modules", {"faster_whisper": None}):
         # Force re-import to hit ImportError
-        mod._model = None
+        mod._models.clear()
         mod._load_failed = False
 
-        def fake_get_model() -> None:
+        def fake_get_model(whisper_model: str = "small") -> None:
             mod._load_failed = True
             return None
 
@@ -78,11 +72,8 @@ def test_import_error_returns_none(mock_config: MagicMock) -> None:
     assert result is None
 
 
-@patch("baobaobot.transcribe.config")
-def test_model_load_failure(mock_config: MagicMock) -> None:
+def test_model_load_failure() -> None:
     """Model loading failure sets _load_failed and returns None."""
-    mock_config.whisper_model = "base"
-
     import baobaobot.transcribe as mod
 
     with patch(
@@ -90,7 +81,7 @@ def test_model_load_failure(mock_config: MagicMock) -> None:
         side_effect=RuntimeError("GPU exploded"),
     ):
         mod._load_failed = False
-        mod._model = None
+        mod._models.clear()
         # Directly simulate _get_model returning None on failure
         result = mod._transcribe_sync(Path("/tmp/voice.ogg"))
 
@@ -119,7 +110,7 @@ def test_singleton_only_loads_once() -> None:
     import baobaobot.transcribe as mod
 
     sentinel = MagicMock()
-    mod._model = sentinel
+    mod._models["small"] = sentinel
     assert mod._get_model() is sentinel
 
 
@@ -145,7 +136,7 @@ async def test_transcribe_voice_async() -> None:
         result = await mod.transcribe_voice(Path("/tmp/voice.ogg"))
 
     assert result == "hello"
-    mock_sync.assert_called_once_with(Path("/tmp/voice.ogg"))
+    mock_sync.assert_called_once_with(Path("/tmp/voice.ogg"), "small")
 
 
 def test_load_failed_prevents_retry() -> None:
