@@ -392,7 +392,9 @@ def main() -> None:
     if not toml_path.is_file():
         print("No settings.toml found. Running first-time setup...\n")
         _setup()
-        # Re-check after setup
+        # Re-resolve config_dir (setup may have changed it via dir pointer)
+        config_dir = baobaobot_dir()
+        toml_path = config_dir / "settings.toml"
         if not toml_path.is_file():
             print("Setup did not produce settings.toml. Exiting.")
             sys.exit(1)
@@ -455,8 +457,13 @@ def main() -> None:
                 apps.append(app)
 
             # Initialize and start all applications
+            # NOTE: post_init is only called by run_polling(), not by
+            # initialize()/start() directly. We must call it manually.
+            from .bot import post_init
+
             for app in apps:
                 await app.initialize()
+                await post_init(app)
                 await app.start()
                 updater = app.updater
                 assert updater is not None
@@ -475,8 +482,11 @@ def main() -> None:
             await stop_event.wait()
 
             # Shutdown all applications
+            from .bot import post_shutdown
+
             for i, app in enumerate(apps):
                 try:
+                    await post_shutdown(app)
                     updater = app.updater
                     if updater:
                         await updater.stop()
