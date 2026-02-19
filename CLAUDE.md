@@ -27,7 +27,7 @@ uv run pytest tests/baobaobot/memory/        # Memory tests
 uv run pytest -v -k "test_name"           # Specific test
 
 # Development
-baobaobot init                                # Initialize workspace
+baobaobot add-agent                           # Add a new agent to settings.toml
 baobaobot hook --install                      # Install Claude Code hook
 uv sync                                    # Install dependencies
 ```
@@ -36,8 +36,8 @@ uv sync                                    # Install dependencies
 
 ```
 src/baobaobot/
-├── main.py                  # CLI entry: hook / init / bot start + auto-tmux launch
-├── config.py                # Config singleton (workspace settings added)
+├── main.py                  # CLI entry: hook / add-agent / bot start + auto-tmux launch
+├── settings.py              # TOML-based multi-agent config (AgentConfig + load_settings)
 ├── bot.py                   # Telegram bot (new: /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild)
 ├── workspace/               # Workspace system
 │   ├── manager.py           # Directory init, project linking, bin/ script install

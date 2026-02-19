@@ -166,7 +166,7 @@ def load_settings(config_dir: Path | None = None) -> list[AgentConfig]:
     toml_path = config_dir / "settings.toml"
     if not toml_path.is_file():
         raise FileNotFoundError(
-            f"Settings file not found: {toml_path}\nRun 'baobaobot init' to create one."
+            f"Settings file not found: {toml_path}\nRun 'baobaobot' to auto-create one."
         )
 
     with open(toml_path, "rb") as f:

@@ -121,28 +121,13 @@ class TestMainSubcommands:
             mock_hook.assert_called_once()
             mock_tmux.assert_not_called()
 
-    def test_init_subcommand_bypasses_tmux(self, monkeypatch, tmp_path):
-        """'baobaobot init' goes to init logic, not tmux."""
-        monkeypatch.setattr(sys, "argv", ["baobaobot", "init"])
-        mock_cfg = MagicMock()
-        mock_cfg.shared_dir = tmp_path / "shared"
+    def test_add_agent_subcommand_bypasses_tmux(self, monkeypatch):
+        """'baobaobot add-agent' goes to _add_agent, not tmux."""
+        monkeypatch.setattr(sys, "argv", ["baobaobot", "add-agent"])
         with (
             patch("baobaobot.main._launch_in_tmux") as mock_tmux,
-            patch("baobaobot.settings.load_settings", return_value=[mock_cfg]),
-            patch("baobaobot.workspace.manager.WorkspaceManager") as mock_wm,
-            patch("baobaobot.main.print"),
+            patch("baobaobot.main._add_agent") as mock_add,
         ):
             main()
-            mock_wm.return_value.init_shared.assert_called_once()
-            mock_tmux.assert_not_called()
-
-    def test_setup_subcommand_bypasses_tmux(self, monkeypatch):
-        """'baobaobot setup' goes to setup, not tmux."""
-        monkeypatch.setattr(sys, "argv", ["baobaobot", "setup"])
-        with (
-            patch("baobaobot.main._launch_in_tmux") as mock_tmux,
-            patch("baobaobot.main._setup") as mock_setup,
-        ):
-            main()
-            mock_setup.assert_called_once()
+            mock_add.assert_called_once()
             mock_tmux.assert_not_called()

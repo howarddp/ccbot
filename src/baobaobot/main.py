@@ -1,18 +1,16 @@
 """Application entry point — CLI dispatcher and bot bootstrap.
 
-Handles four execution modes:
+Handles three execution modes:
   1. `baobaobot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. `baobaobot init` — initializes shared files (persona + bin scripts).
-  3. `baobaobot setup` — interactive first-time setup (create .env + settings.toml,
-     init shared, install hook).
-  4. Default — configures logging, initializes shared files + tmux session, and starts
-     the Telegram bot polling loop via bot.create_bot().
+  2. `baobaobot add-agent` — interactive prompt to add a new agent to settings.toml.
+  3. Default — configures logging, initializes shared files + tmux session, and starts
+     the Telegram bot polling loop via bot.create_bot(). Auto-triggers first-time setup
+     if settings.toml is missing.
 
 By default, the bot auto-launches inside a tmux session so it survives terminal
 closure. Use `--foreground` / `-f` to run in the current terminal instead.
 """
 
-import json
 import logging
 import os
 import shutil
@@ -98,22 +96,44 @@ def _setup() -> None:
     env_file.write_text(f"{token_env_var}={token}\n")
     print(f"\nSecrets written to {env_file}")
 
-    # Write settings.toml
+    # Write settings.toml — list all settings with defaults so users know what's available
     users_toml = ", ".join(str(u) for u in user_ids)
-    toml_lines = [
-        "[global]",
-        f'claude_command = "{claude_cmd}"',
-    ]
-    if whisper_model:
-        toml_lines.append(f'whisper_model = "{whisper_model}"')
-    toml_lines += [
-        "",
-        "[[agents]]",
-        f'name = "{agent_name}"',
-        f'bot_token_env = "{token_env_var}"',
-        f"allowed_users = [{users_toml}]",
-    ]
-    toml_path.write_text("\n".join(toml_lines) + "\n")
+    whisper_line = (
+        f'whisper_model = "{whisper_model}"'
+        if whisper_model
+        else '# whisper_model = "small"'
+    )
+    toml_content = f"""\
+# BaoBaoClaude settings
+# Agent-level settings override [global]; unset keys fall back to [global] then defaults.
+
+[global]
+claude_command = "{claude_cmd}"
+
+# Memory
+memory_keep_days = 30          # how long to keep daily memory files
+recent_memory_days = 7         # days of recent memory included in CLAUDE.md
+auto_assemble = true           # auto-reassemble CLAUDE.md on workspace changes
+
+# Monitoring
+monitor_poll_interval = 2.0    # seconds between session polling cycles
+show_user_messages = true      # show user messages in real-time notifications
+
+# Voice transcription (requires faster-whisper)
+{whisper_line}
+
+# Cron
+# cron_default_tz = "Asia/Taipei"  # default timezone for cron jobs
+
+# Each [[agents]] entry creates one bot instance.
+# Per-agent keys override [global] values.
+[[agents]]
+name = "{agent_name}"
+bot_token_env = "{token_env_var}"
+allowed_users = [{users_toml}]
+# tmux_session = "{agent_name}"  # defaults to agent name
+"""
+    toml_path.write_text(toml_content)
     print(f"Settings written to {toml_path}")
 
     # Set env so load_settings can resolve the token
@@ -157,6 +177,93 @@ def _setup() -> None:
             )
 
     print("\nSetup complete! Run 'baobaobot' to start the bot.")
+
+
+def _add_agent() -> None:
+    """Interactive prompt to add a new agent to an existing settings.toml."""
+    import tomllib
+
+    from .utils import baobaobot_dir
+
+    config_dir = baobaobot_dir()
+    toml_path = config_dir / "settings.toml"
+    env_file = config_dir / ".env"
+
+    if not toml_path.is_file():
+        print(f"No settings.toml found at {toml_path}.")
+        print("Run 'baobaobot' first to complete initial setup.")
+        sys.exit(1)
+
+    # Load existing settings to check for name conflicts
+    with open(toml_path, "rb") as f:
+        raw = tomllib.load(f)
+    existing_names = {a.get("name", "") for a in raw.get("agents", [])}
+
+    print("=== Add New Agent ===\n")
+
+    # Agent name
+    agent_name = input("Agent name: ").strip()
+    if not agent_name:
+        print("Error: Agent name is required.")
+        sys.exit(1)
+    if agent_name in existing_names:
+        print(f"Error: Agent '{agent_name}' already exists in settings.toml.")
+        sys.exit(1)
+
+    token_env_var = f"{agent_name.upper()}_BOT_TOKEN"
+
+    token = input("Telegram Bot Token (from @BotFather): ").strip()
+    if not token:
+        print("Error: Token is required.")
+        sys.exit(1)
+
+    users = input(
+        "Allowed Telegram User IDs (comma-separated, from @userinfobot): "
+    ).strip()
+    if not users:
+        print("Error: At least one user ID is required.")
+        sys.exit(1)
+
+    # Validate user IDs are numeric
+    user_ids: list[int] = []
+    for uid in users.split(","):
+        uid = uid.strip()
+        if uid and not uid.isdigit():
+            print(f"Error: '{uid}' is not a valid numeric user ID.")
+            sys.exit(1)
+        if uid:
+            user_ids.append(int(uid))
+
+    # Append [[agents]] block to settings.toml
+    users_toml = ", ".join(str(u) for u in user_ids)
+    agent_block = f"""\
+[[agents]]
+name = "{agent_name}"
+bot_token_env = "{token_env_var}"
+allowed_users = [{users_toml}]
+"""
+    with open(toml_path, "a") as f:
+        # Ensure previous content ends with newline before appending
+        if toml_path.stat().st_size > 0:
+            with open(toml_path, "rb") as rf:
+                rf.seek(-1, 2)
+                if rf.read(1) != b"\n":
+                    f.write("\n")
+        f.write(agent_block)
+    print(f"Agent '{agent_name}' added to {toml_path}")
+
+    # Append token to .env
+    with open(env_file, "a") as f:
+        # Ensure previous content ends with newline before appending
+        if env_file.exists() and env_file.stat().st_size > 0:
+            with open(env_file, "rb") as rf:
+                rf.seek(-1, 2)
+                if rf.read(1) != b"\n":
+                    f.write("\n")
+        f.write(f"{token_env_var}={token}\n")
+    print(f"Token written to {env_file}")
+
+    print("\nDone! Restart baobaobot to activate the new agent.")
 
 
 def _launch_in_tmux() -> None:
@@ -254,37 +361,8 @@ def main() -> None:
         hook_main()
         return
 
-    if len(sys.argv) > 1 and sys.argv[1] == "setup":
-        _setup()
-        return
-
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        # Standalone shared-files initialization
-        from .settings import load_settings
-
-        agents = load_settings()
-        for cfg in agents:
-            from .workspace.manager import WorkspaceManager
-
-            cfg.shared_dir.mkdir(parents=True, exist_ok=True)
-            wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
-            wm.init_shared()
-            print(f"Shared files initialized at {cfg.shared_dir}")
-
-        # Suggest hook install if not yet configured
-        from .hook import _CLAUDE_SETTINGS_FILE, _is_hook_installed
-
-        try:
-            settings: dict = {}
-            if _CLAUDE_SETTINGS_FILE.exists():
-                settings = json.loads(_CLAUDE_SETTINGS_FILE.read_text())
-            if not _is_hook_installed(settings):
-                print(
-                    "\nHint: Run 'baobaobot hook --install' to set up "
-                    "Claude Code session tracking."
-                )
-        except (OSError, json.JSONDecodeError):
-            pass  # Non-critical hint — don't fail init
+    if len(sys.argv) > 1 and sys.argv[1] == "add-agent":
+        _add_agent()
         return
 
     # Check if we should auto-launch inside tmux

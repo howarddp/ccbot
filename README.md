@@ -76,49 +76,31 @@ uv sync
 
 **2. 配置環境變數：**
 
-使用互動式設置（推薦）：
+首次運行 `baobaobot` 時會自動引導你完成設置（輸入 Bot Token、用戶 ID、Claude 命令），並自動建立 `.env`、初始化工作空間、安裝 Hook。
+
+設置完成後，配置保存在 `~/.baobaobot/settings.toml`（設定）和 `~/.baobaobot/.env`（密鑰）。所有可調設定及預設值都會列在 `settings.toml` 中，可直接編輯。
+
+要添加更多 Agent：
 
 ```bash
-baobaobot setup
+baobaobot add-agent
 ```
 
-會依序引導你輸入 Bot Token、用戶 ID、Claude 命令，並自動建立 `.env`、初始化工作空間、安裝 Hook。
-
-或手動創建 `~/.baobaobot/.env`：
-
-```ini
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-ALLOWED_USERS=your_telegram_user_id
-```
-
-**必填項：**
-
-| 變數 | 說明 |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | 從 @BotFather 獲取的 Bot Token |
-| `ALLOWED_USERS` | 逗號分隔的 Telegram 用戶 ID |
-
-**可選項：**
+**環境變數：**
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
-| `BAOBAOBOT_DIR` | `~/.baobaobot` | 配置/狀態目錄（`.env` 從此目錄載入） |
-| `TMUX_SESSION_NAME` | `baobaobot` | tmux 會話名稱 |
-| `CLAUDE_COMMAND` | `claude` | 新視窗中運行的命令 |
-| `MONITOR_POLL_INTERVAL` | `2.0` | 輪詢間隔（秒） |
-| `WORKSPACE_DIR` | `~/.baobaobot/workspace` | 工作空間目錄 |
-| `MEMORY_KEEP_DAYS` | `30` | 每日記憶保留天數 |
-| `RECENT_MEMORY_DAYS` | `7` | 納入 CLAUDE.md 的近期記憶天數 |
-| `AUTO_ASSEMBLE` | `true` | 會話啟動時自動組裝 CLAUDE.md |
+| `BAOBAOBOT_DIR` | `~/.baobaobot` | 配置/狀態目錄 |
 
-> 如果在 VPS 上運行且沒有互動終端來批准權限，可以考慮：
-> ```
-> CLAUDE_COMMAND=IS_SANDBOX=1 claude --dangerously-skip-permissions
+> 如果在 VPS 上運行且沒有互動終端來批准權限，可在 `settings.toml` 中設定：
+> ```toml
+> [global]
+> claude_command = "IS_SANDBOX=1 claude --dangerously-skip-permissions"
 > ```
 
 ## Hook 設置
 
-> 如果已通過 `baobaobot setup` 完成設置，Hook 已自動安裝，可跳過此段。
+> 如果已通過首次 `baobaobot` 設置完成，Hook 已自動安裝，可跳過此段。
 
 手動安裝：
 
@@ -145,10 +127,7 @@ Hook 會將視窗-會話映射寫入 `$BAOBAOBOT_DIR/session_map.json`（預設 
 ## 使用方法
 
 ```bash
-# 首次設置（互動式引導，含初始化 + Hook 安裝）
-baobaobot setup
-
-# 啟動 Bot（自動在 tmux session 中運行，終端可關閉）
+# 啟動 Bot（首次運行自動引導設置，自動在 tmux session 中運行）
 baobaobot
 
 # 從源碼安裝的
@@ -167,10 +146,9 @@ baobaobot -f
 
 | 命令 | 說明 |
 |---|---|
-| `baobaobot setup` | 互動式首次設置（建 `.env`、初始化工作空間、安裝 Hook） |
-| `baobaobot init` | 初始化工作空間目錄 |
+| `baobaobot` | 啟動 Telegram Bot（首次運行自動設置，自動在 tmux 中運行） |
+| `baobaobot add-agent` | 互動式添加新 Agent 到 settings.toml |
 | `baobaobot hook --install` | 安裝 Claude Code SessionStart Hook |
-| `baobaobot` | 啟動 Telegram Bot（自動在 tmux 中運行） |
 | `baobaobot --foreground` | 在前台啟動（不建立 tmux） |
 
 **Bot 命令：**
@@ -322,7 +300,7 @@ claude
 ```
 src/baobaobot/
 ├── __init__.py              # 套件入口
-├── main.py                  # CLI 調度器（setup / hook / init / bot 啟動 + 自動 tmux）
+├── main.py                  # CLI 調度器（hook / add-agent / bot 啟動 + 自動 tmux）
 ├── hook.py                  # Hook 子命令，用於會話追蹤（+ --install）
 ├── config.py                # 環境變數配置（含工作空間設定）
 ├── bot.py                   # Telegram Bot 設置、命令處理、話題路由
