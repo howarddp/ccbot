@@ -256,7 +256,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=edit_msg_id,
-                    text=full_text,
+                    text=convert_markdown(full_text),
                     parse_mode="MarkdownV2",
                     link_preview_options=NO_LINK_PREVIEW,
                 )
@@ -266,12 +266,11 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 raise
             except Exception:
                 try:
-                    # Fallback: strip markdown
-                    plain_text = task.text or full_text
+                    # Fallback: send as plain text
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=edit_msg_id,
-                        text=plain_text,
+                        text=full_text,
                         link_preview_options=NO_LINK_PREVIEW,
                     )
                     await _check_and_send_status(bot, user_id, wid, task.thread_id)
@@ -353,7 +352,7 @@ async def _convert_status_to_content(
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=msg_id,
-            text=content_text,
+            text=convert_markdown(content_text),
             parse_mode="MarkdownV2",
             link_preview_options=NO_LINK_PREVIEW,
         )
