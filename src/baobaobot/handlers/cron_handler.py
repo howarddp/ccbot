@@ -123,7 +123,8 @@ async def _cmd_list(update: Update, ws_name: str) -> None:
     lines = [f"⏰ Cron Jobs ({len(jobs)})\n"]
     for i, job in enumerate(jobs, 1):
         status_icon = "✅" if job.enabled else "⏸️"
-        lines.append(f"**{i}. {job.name}** `{job.id}` [{status_icon}]")
+        system_tag = " [system]" if job.system else ""
+        lines.append(f"**{i}. {job.name}** `{job.id}` [{status_icon}]{system_tag}")
         lines.append(f"   {format_schedule(job.schedule)}")
 
         # Next run
@@ -207,6 +208,15 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
 
 async def _cmd_remove(update: Update, ws_name: str, job_id: str) -> None:
     assert update.message
+    # Block removal of system jobs
+    jobs = await cron_service.list_jobs(ws_name)
+    for j in jobs:
+        if j.id == job_id and j.system:
+            await safe_reply(
+                update.message,
+                f"❌ 系統排程 `{job_id}` 無法移除，請使用 `/cron disable {job_id}` 停用。",
+            )
+            return
     ok = await cron_service.remove_job(ws_name, job_id)
     if ok:
         await safe_reply(update.message, f"🗑️ 已移除排程 `{job_id}`")

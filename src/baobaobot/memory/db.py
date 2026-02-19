@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS memories (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source      TEXT    NOT NULL,  -- 'daily' | 'memory_md'
-    date        TEXT    NOT NULL,  -- 'YYYY-MM-DD' or 'longterm'
+    source      TEXT    NOT NULL,  -- 'daily' | 'memory_md' | 'summary'
+    date        TEXT    NOT NULL,  -- 'YYYY-MM-DD' or 'YYYY-MM-DD_HH00' or 'longterm'
     line_num    INTEGER NOT NULL,
     content     TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL
@@ -143,6 +143,16 @@ class MemoryDB:
                     self._sync_file(conn, f, rel, "daily", date_str)
                     synced += 1
 
+        # Sync summary files
+        summaries_dir = self.memory_dir / "summaries"
+        if summaries_dir.exists():
+            for f in sorted(summaries_dir.glob("*.md")):
+                rel = f"memory/summaries/{f.name}"
+                if self._needs_sync(conn, f, rel):
+                    date_str = f.stem  # e.g. "2026-02-19_1400"
+                    self._sync_file(conn, f, rel, "summary", date_str)
+                    synced += 1
+
         # Clean up deleted files
         synced += self._cleanup_deleted(conn)
 
@@ -164,6 +174,13 @@ class MemoryDB:
                 if rel == "MEMORY.md":
                     conn.execute(
                         "DELETE FROM memories WHERE source = 'memory_md' AND date = 'longterm'"
+                    )
+                elif rel.startswith("memory/summaries/"):
+                    # memory/summaries/2026-02-19_1400.md → date = 2026-02-19_1400
+                    date_str = Path(rel).stem
+                    conn.execute(
+                        "DELETE FROM memories WHERE source = 'summary' AND date = ?",
+                        (date_str,),
                     )
                 else:
                     # memory/2026-02-15.md → date = 2026-02-15

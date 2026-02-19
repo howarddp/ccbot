@@ -34,6 +34,34 @@ _MAX_TICK_INTERVAL = 60.0
 # Minimum sleep between ticks
 _MIN_TICK_INTERVAL = 5.0
 
+# System job name for hourly summaries
+_SYSTEM_SUMMARY_JOB_NAME = "_system:hourly_summary"
+
+# Idle threshold: JSONL must not have been written to in the last N seconds
+_IDLE_THRESHOLD_S = 60
+
+# Summary prompt sent to Claude Code
+_SUMMARY_PROMPT = """\
+[System] Auto-summary check: Review recent conversation and classify:
+
+1. SKIP — no summary needed if:
+   - Only casual chat or greetings
+   - Simple factual Q&A (e.g., "what time is it")
+   - Repeated/continuing work already captured in previous summaries
+   - You were idle or only ran routine commands
+
+2. RECORD — write to memory/summaries/YYYY-MM-DD_HH00.md (e.g. 2026-02-19_1400.md) if:
+   - User made a decision or expressed a preference
+   - A task was completed or a problem was solved
+   - Important files were shared or created
+   - New project context or requirements emerged
+   - Anything you'd want to remember in a future session
+
+Format: bullet points, under 10 lines, [Name] prefix per item.
+Write in the user's preferred language.
+If nothing worth recording, reply only: "No summary needed."
+"""
+
 
 def _backoff_delay(consecutive_errors: int) -> float:
     """Return backoff delay in seconds for given error count."""
@@ -81,6 +109,12 @@ class CronService:
                     job.state.consecutive_errors += 1
                 # Catch up missed runs
                 if job.state.next_run_at and job.state.next_run_at < now:
+                    # System summary jobs: just reschedule, don't catch up
+                    if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
+                        job.state.next_run_at = compute_next_run(
+                            job.schedule, time.time(), config.cron_default_tz
+                        )
+                        continue
                     # Pre-resolve window once per workspace
                     if ws_name not in window_cache:
                         wid = self._resolve_window(ws_name)
@@ -281,6 +315,16 @@ class CronService:
                     if (now - job.state.last_run_at) < backoff:
                         continue
 
+                # System summary jobs: check for new activity + idle
+                if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
+                    if not self._should_run_summary(ws_name, job):
+                        # Skip but reschedule for next interval
+                        job.state.next_run_at = compute_next_run(
+                            job.schedule, time.time(), config.cron_default_tz
+                        )
+                        job.state.last_status = "skipped"
+                        continue
+
                 await self._execute_job(ws_name, job)
 
                 # Handle delete_after_run
@@ -310,9 +354,9 @@ class CronService:
             if not window_id:
                 raise RuntimeError(f"Cannot find or create window for {workspace_name}")
 
-            # Prefix cron message with creator info using same [Name|uid] format
+            # System jobs send message as-is (already has [System] prefix)
             send_text = job.message
-            if job.creator_user_id:
+            if not job.system and job.creator_user_id:
                 creator_name = get_user_display_name(
                     config.users_dir, job.creator_user_id
                 )
@@ -334,6 +378,10 @@ class CronService:
             job.state.last_error = ""
             job.state.last_duration_s = round(duration, 1)
             job.state.consecutive_errors = 0
+            # Update summary offset after successful system summary
+            if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
+                self._update_summary_offset(workspace_name, job)
+
             logger.info(
                 "Cron job %s '%s' executed (%.1fs) → %s",
                 job.id,
@@ -370,6 +418,74 @@ class CronService:
                 logger.warning("Cron job %s: no next run computed, disabling", job.id)
                 job.enabled = False
                 job.state.last_error = "invalid schedule"
+
+    # --- System summary checks ---
+
+    def get_jsonl_path_for_window(self, window_id: str) -> Path | None:
+        """Find the JSONL transcript file for a window's current session."""
+        state = session_manager.get_window_state(window_id)
+        if not state.session_id:
+            return None
+
+        # Look up the session file from Claude's projects directory
+        projects_dir = Path.home() / ".claude" / "projects"
+        if not projects_dir.exists():
+            return None
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            jsonl_file = project_dir / f"{state.session_id}.jsonl"
+            if jsonl_file.exists():
+                return jsonl_file
+        return None
+
+    def _should_run_summary(self, workspace_name: str, job: CronJob) -> bool:
+        """Check if a system summary job should run: has new conversation + idle."""
+        window_id = self._resolve_window(workspace_name)
+        if not window_id:
+            return False
+
+        jsonl_path = self.get_jsonl_path_for_window(window_id)
+        if not jsonl_path or not jsonl_path.exists():
+            return False
+
+        try:
+            st = jsonl_path.stat()
+            file_size = st.st_size
+            file_mtime = st.st_mtime
+        except OSError:
+            return False
+
+        # Reset offset if JSONL path changed (session changed, e.g. after /clear)
+        jsonl_str = str(jsonl_path)
+        if job.state.last_summary_jsonl and job.state.last_summary_jsonl != jsonl_str:
+            job.state.last_summary_offset = 0
+            job.state.last_summary_jsonl = jsonl_str
+
+        # No new content since last summary
+        if file_size <= job.state.last_summary_offset:
+            return False
+
+        # Claude is still active (JSONL modified recently)
+        if (time.time() - file_mtime) < _IDLE_THRESHOLD_S:
+            return False
+
+        return True
+
+    def _update_summary_offset(self, workspace_name: str, job: CronJob) -> None:
+        """Record the current JSONL size and path as the last summary state."""
+        window_id = self._resolve_window(workspace_name)
+        if not window_id:
+            return
+        jsonl_path = self.get_jsonl_path_for_window(window_id)
+        if not jsonl_path or not jsonl_path.exists():
+            return
+        try:
+            job.state.last_summary_offset = jsonl_path.stat().st_size
+            job.state.last_summary_jsonl = str(jsonl_path)
+        except OSError:
+            pass
 
     # --- Window resolution ---
 
@@ -428,18 +544,50 @@ class CronService:
     # --- Internal helpers ---
 
     def _scan_workspaces(self) -> None:
-        """Scan config_dir for workspace directories with cron stores."""
+        """Scan config_dir for all workspace directories."""
         for ws_dir in config.iter_workspace_dirs():
             ws_name = ws_dir.name.removeprefix("workspace_")
             if ws_name in self._stores:
                 continue
             cron_file = ws_dir / "cron" / "jobs.json"
-            if not cron_file.is_file():
-                continue
-            store = load_store(ws_dir)
+            if cron_file.is_file():
+                store = load_store(ws_dir)
+                self._mtimes[ws_name] = store_mtime(ws_dir)
+            else:
+                # Workspace without cron store — create empty store
+                store = CronStoreFile()
             self._stores[ws_name] = store
             self._workspace_dirs[ws_name] = ws_dir
-            self._mtimes[ws_name] = store_mtime(ws_dir)
+
+        # Ensure system jobs exist in all known workspaces
+        self._ensure_system_jobs()
+
+    def _ensure_system_jobs(self) -> None:
+        """Ensure every workspace has the built-in system summary job."""
+        now = time.time()
+        for ws_name, store in self._stores.items():
+            has_summary = any(j.name == _SYSTEM_SUMMARY_JOB_NAME for j in store.jobs)
+            if has_summary:
+                continue
+
+            schedule = CronSchedule(kind="every", every_seconds=3600)
+            next_run = compute_next_run(schedule, now, config.cron_default_tz)
+            job = CronJob(
+                id=uuid.uuid4().hex[:8],
+                name=_SYSTEM_SUMMARY_JOB_NAME,
+                schedule=schedule,
+                message=_SUMMARY_PROMPT,
+                enabled=True,
+                system=True,
+                created_at=now,
+                updated_at=now,
+                state=CronJobState(next_run_at=next_run),
+            )
+            store.jobs.append(job)
+            self._save(ws_name)
+            logger.info(
+                "Created system summary job %s in workspace %s", job.id, ws_name
+            )
 
     def _reload_changed_stores(self) -> None:
         """Reload stores whose JSON file has been modified externally."""
@@ -491,6 +639,69 @@ class CronService:
     def _wake_timer(self) -> None:
         """Signal the timer loop to re-evaluate schedule immediately."""
         self._wake_event.set()
+
+    async def trigger_summary(self, workspace_name: str) -> bool:
+        """Trigger an immediate summary for a workspace (e.g. before /clear).
+
+        Ignores job.enabled — /clear should summarize even if hourly is disabled.
+        Returns True if summary was sent, False if skipped.
+        """
+        store = self._stores.get(workspace_name)
+        if not store:
+            return False
+
+        job = None
+        for j in store.jobs:
+            if j.name == _SYSTEM_SUMMARY_JOB_NAME:
+                job = j
+                break
+
+        if not job:
+            return False
+
+        # Check if there's actually new content (but skip idle check)
+        window_id = self._resolve_window(workspace_name)
+        if not window_id:
+            return False
+
+        jsonl_path = self.get_jsonl_path_for_window(window_id)
+        if not jsonl_path or not jsonl_path.exists():
+            return False
+
+        try:
+            file_size = jsonl_path.stat().st_size
+        except OSError:
+            return False
+
+        # Reset offset if JSONL path changed (session changed)
+        jsonl_str = str(jsonl_path)
+        if job.state.last_summary_jsonl and job.state.last_summary_jsonl != jsonl_str:
+            job.state.last_summary_offset = 0
+            job.state.last_summary_jsonl = jsonl_str
+
+        if file_size <= job.state.last_summary_offset:
+            return False  # No new content
+
+        await self._execute_job(workspace_name, job, window_id=window_id)
+        self._save(workspace_name)
+        return True
+
+    async def wait_for_idle(self, window_id: str, timeout: int = 60) -> None:
+        """Wait until the JSONL file for a window is idle (no writes for 5s).
+
+        Used by /clear intercept to wait for summary completion.
+        """
+        jsonl_path = self.get_jsonl_path_for_window(window_id)
+        if not jsonl_path or not jsonl_path.exists():
+            return
+        for _ in range(timeout):
+            await asyncio.sleep(1)
+            try:
+                mtime = jsonl_path.stat().st_mtime
+                if (time.time() - mtime) >= 5:
+                    return
+            except OSError:
+                return
 
     @property
     def is_running(self) -> bool:

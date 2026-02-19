@@ -49,6 +49,12 @@ def sync_and_list(workspace: Path, days: int) -> None:
                 continue
             files_to_sync.append(("daily", f.stem, str(f)))
 
+    # Scan summaries
+    summaries_dir = memory_dir / "summaries"
+    if summaries_dir.is_dir():
+        for f in summaries_dir.glob("*.md"):
+            files_to_sync.append(("summary", f.stem, str(f)))
+
     if memory_md.is_file():
         files_to_sync.append(("memory_md", "", str(memory_md)))
 
@@ -64,6 +70,8 @@ def sync_and_list(workspace: Path, days: int) -> None:
 
         if source == "daily":
             conn.execute("DELETE FROM memories WHERE source = 'daily' AND date = ?", (date_str,))
+        elif source == "summary":
+            conn.execute("DELETE FROM memories WHERE source = 'summary' AND date = ?", (date_str,))
         else:
             conn.execute("DELETE FROM memories WHERE source = 'memory_md'", ())
 
@@ -97,6 +105,13 @@ def sync_and_list(workspace: Path, days: int) -> None:
     total_lines = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     has_longterm = conn.execute("SELECT COUNT(*) FROM memories WHERE source = 'memory_md'").fetchone()[0] > 0
 
+    # List summaries
+    summary_rows = conn.execute(
+        "SELECT date, COUNT(*) as line_count FROM memories WHERE source = 'summary' AND date >= ? GROUP BY date ORDER BY date DESC",
+        (cutoff,)
+    ).fetchall()
+    summary_count = conn.execute("SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'summary'").fetchone()[0]
+
     if not rows:
         print("No daily memories found.")
     else:
@@ -104,7 +119,12 @@ def sync_and_list(workspace: Path, days: int) -> None:
         for r in rows:
             print(f"  {r['date']}  ({r['line_count']} lines)")
 
-    print(f"\n📊 Total: {daily_count} days, {total_lines} lines indexed")
+    if summary_rows:
+        print("\n📋 Recent auto-summaries:\n")
+        for r in summary_rows:
+            print(f"  {r['date']}  ({r['line_count']} lines)")
+
+    print(f"\n📊 Total: {daily_count} days, {total_lines} lines indexed, {summary_count} summaries")
     if has_longterm:
         print("   MEMORY.md: ✓")
 

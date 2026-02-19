@@ -75,6 +75,39 @@ class ClaudeMdAssembler:
 
         return "\n".join(lines).strip()
 
+    def _get_recent_summaries(self, days: int = 3) -> str:
+        """Collect content from recent auto-summary files (memory/summaries/)."""
+        summaries_dir = self.memory_dir / "summaries"
+        if not summaries_dir.exists():
+            return ""
+
+        today = datetime.now().date()
+        lines: list[str] = []
+
+        # Collect all summary files within the date range
+        for f in sorted(summaries_dir.glob("*.md")):
+            try:
+                file_date_str = f.stem[:10]  # "YYYY-MM-DD" from "YYYY-MM-DD_HH00"
+                file_date = datetime.strptime(file_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if (today - file_date).days > days:
+                continue
+            content = self._read_file(f)
+            if content:
+                # Format: "### YYYY-MM-DD HH:00" from stem "YYYY-MM-DD_HH00"
+                time_part = f.stem[11:] if len(f.stem) > 10 else ""
+                display_time = (
+                    f"{file_date_str} {time_part[:2]}:{time_part[2:]}"
+                    if time_part
+                    else file_date_str
+                )
+                lines.append(f"### {display_time}")
+                lines.append(content)
+                lines.append("")
+
+        return "\n".join(lines).strip()
+
     def assemble(self) -> str:
         """Build the full CLAUDE.md content from source files."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -93,6 +126,12 @@ class ClaudeMdAssembler:
         if recent:
             parts.append("---\n\n## 近期記憶")
             parts.append(recent)
+
+        # Auto summaries (last 3 days)
+        summaries = self._get_recent_summaries(days=3)
+        if summaries:
+            parts.append("---\n\n## 自動匯整 (Auto Summaries)")
+            parts.append(summaries)
 
         result = "\n\n".join(parts) + "\n"
         # Replace template variables (safety net for old AGENTS.md with {{BIN_DIR}})
@@ -125,6 +164,13 @@ class ClaudeMdAssembler:
                 key = f"memory/{f.name}"
                 self._source_mtimes[key] = f.stat().st_mtime
 
+        # Track summaries directory
+        summaries_dir = self.memory_dir / "summaries"
+        if summaries_dir.exists():
+            for f in summaries_dir.glob("*.md"):
+                key = f"memory/summaries/{f.name}"
+                self._source_mtimes[key] = f.stat().st_mtime
+
     def needs_rebuild(self) -> bool:
         """Check if any source file has been modified since last assembly."""
         if not self.output_path.exists():
@@ -147,6 +193,16 @@ class ClaudeMdAssembler:
         if self.memory_dir.exists():
             for f in self.memory_dir.glob("*.md"):
                 key = f"memory/{f.name}"
+                current_mtime = f.stat().st_mtime
+                cached = self._source_mtimes.get(key, 0)
+                if current_mtime > cached:
+                    return True
+
+        # Check summaries
+        summaries_dir = self.memory_dir / "summaries"
+        if summaries_dir.exists():
+            for f in summaries_dir.glob("*.md"):
+                key = f"memory/summaries/{f.name}"
                 current_mtime = f.stat().st_mtime
                 cached = self._source_mtimes.get(key, 0)
                 if current_mtime > cached:

@@ -494,6 +494,18 @@ async def forward_command_handler(
         return
 
     display = session_manager.get_display_name(wid)
+
+    # Intercept /clear: trigger summary before clearing
+    if cc_slash.strip().lower() == "/clear":
+        logger.info("Triggering pre-clear summary for window %s", display)
+        await safe_reply(update.message, f"📋 [{display}] Summarizing before clear...")
+        try:
+            summarized = await cron_service.trigger_summary(display)
+            if summarized:
+                await cron_service.wait_for_idle(wid)
+        except Exception as e:
+            logger.warning("Pre-clear summary failed: %s", e)
+
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )

@@ -50,6 +50,10 @@ class CronJobState:
     last_error: str = ""
     last_duration_s: float = 0.0
     consecutive_errors: int = 0
+    last_summary_offset: int = 0  # JSONL byte offset at last summary
+    last_summary_jsonl: str = (
+        ""  # JSONL file path at last summary (detect session change)
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +64,8 @@ class CronJobState:
             "last_error": self.last_error,
             "last_duration_s": self.last_duration_s,
             "consecutive_errors": self.consecutive_errors,
+            "last_summary_offset": self.last_summary_offset,
+            "last_summary_jsonl": self.last_summary_jsonl,
         }
 
     @classmethod
@@ -72,6 +78,8 @@ class CronJobState:
             last_error=data.get("last_error", ""),
             last_duration_s=data.get("last_duration_s", 0.0),
             consecutive_errors=data.get("consecutive_errors", 0),
+            last_summary_offset=data.get("last_summary_offset", 0),
+            last_summary_jsonl=data.get("last_summary_jsonl", ""),
         )
 
 
@@ -85,6 +93,7 @@ class CronJob:
     message: str = ""  # text to send to tmux
     enabled: bool = True
     delete_after_run: bool = False  # at type defaults True
+    system: bool = False  # system-managed job (cannot be removed by user)
     creator_user_id: int = 0  # Telegram user ID of the job creator
     created_at: float = 0.0
     updated_at: float = 0.0
@@ -98,6 +107,7 @@ class CronJob:
             "message": self.message,
             "enabled": self.enabled,
             "delete_after_run": self.delete_after_run,
+            "system": self.system,
             "creator_user_id": self.creator_user_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -113,6 +123,7 @@ class CronJob:
             message=data.get("message", ""),
             enabled=data.get("enabled", True),
             delete_after_run=data.get("delete_after_run", False),
+            system=data.get("system", False),
             creator_user_id=data.get("creator_user_id", 0),
             created_at=data.get("created_at", 0.0),
             updated_at=data.get("updated_at", 0.0),

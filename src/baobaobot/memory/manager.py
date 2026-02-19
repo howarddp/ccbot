@@ -86,8 +86,9 @@ class MemoryManager:
         return get_daily(self.workspace_dir, date_str)
 
     def delete_daily(self, date_str: str) -> bool:
-        """Delete a specific daily memory file and its attachments."""
+        """Delete a specific daily memory file, its attachments, and its summaries."""
         self._cleanup_attachments_for_date(date_str)
+        self._cleanup_summaries_for_date(date_str)
         return delete_daily(self.workspace_dir, date_str)
 
     def delete_all_daily(self) -> int:
@@ -110,6 +111,15 @@ class MemoryManager:
                 if d.is_dir():
                     shutil.rmtree(d)
 
+        # Clean up all summaries
+        summaries_dir = self.memory_dir / "summaries"
+        if summaries_dir.exists():
+            for f in summaries_dir.glob("*.md"):
+                try:
+                    f.unlink()
+                except OSError:
+                    continue
+
         logger.info("Deleted %d daily memory files", count)
         return count
 
@@ -120,6 +130,8 @@ class MemoryManager:
         for row in rows:
             if row["source"] == "memory_md":
                 file = "MEMORY.md"
+            elif row["source"] == "summary":
+                file = f"memory/summaries/{row['date']}.md"
             else:
                 file = f"memory/{row['date']}.md"
             results.append(
@@ -166,8 +178,46 @@ class MemoryManager:
                 except OSError:
                     continue
 
+        # Clean up old summaries
+        summaries_dir = self.memory_dir / "summaries"
+        if summaries_dir.exists():
+            for f in summaries_dir.glob("*.md"):
+                try:
+                    # Parse date from filename: YYYY-MM-DD_HH00.md
+                    file_date = datetime.strptime(f.stem[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                if file_date < cutoff:
+                    try:
+                        f.unlink()
+                        count += 1
+                        logger.debug("Cleaned up old summary: %s", f.name)
+                    except OSError:
+                        continue
+
         if count:
             logger.info("Cleaned up %d old daily memories (cutoff: %s)", count, cutoff)
+        return count
+
+    def _cleanup_summaries_for_date(self, date_str: str) -> int:
+        """Delete summary files for the given date.
+
+        Summaries are stored as memory/summaries/YYYY-MM-DD_HH00.md.
+        Returns the number of files deleted.
+        """
+        summaries_dir = self.memory_dir / "summaries"
+        if not summaries_dir.is_dir():
+            return 0
+
+        count = 0
+        for f in summaries_dir.glob(f"{date_str}_*.md"):
+            try:
+                f.unlink()
+                count += 1
+            except OSError:
+                continue
+        if count:
+            logger.debug("Cleaned up %d summaries for %s", count, date_str)
         return count
 
     def _cleanup_attachments_for_date(self, date_str: str) -> int:

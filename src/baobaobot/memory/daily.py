@@ -21,6 +21,11 @@ def _memory_dir(workspace_dir: Path) -> Path:
     return workspace_dir / "memory"
 
 
+def get_summaries_dir(workspace_dir: Path) -> Path:
+    """Get the memory/summaries directory path."""
+    return _memory_dir(workspace_dir) / "summaries"
+
+
 def _daily_path(workspace_dir: Path, date_str: str) -> Path:
     """Get the path for a specific daily memory file."""
     return _memory_dir(workspace_dir) / f"{date_str}.md"

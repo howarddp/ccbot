@@ -17,7 +17,7 @@
 
 ### Session 開始時
 - 讀取 MEMORY.md 了解長期記憶
-- 瀏覽最近 3 天的 memory/ 每日記憶
+- 瀏覽最近 3 天的 memory/ 每日記憶與 memory/summaries/ 自動匯整
 - 根據用戶資訊調整互動方式
 
 ### Session 中
@@ -31,6 +31,14 @@
 - 保持簡潔，每則記憶 1-2 行
 - 記錄時間戳在檔名中（日期）
 - 寫入時標注是哪位用戶的資訊，例如 `- [Alice] 要求修 login bug`
+
+### 自動匯整（memory/summaries/YYYY-MM-DD_HH00.md）
+- 系統每小時自動觸發，檢查近期對話是否有值得記錄的內容
+- 若有重要內容（決定、完成的任務、新需求等），寫入 `memory/summaries/YYYY-MM-DD_HH00.md`
+- 格式：bullet points，10 行以內，每條以 `[用戶名]` 開頭
+- 若無值得記錄的內容，回覆 "No summary needed." 即可
+- 使用用戶偏好的語言撰寫
+- 此目錄由系統管理，與每日記憶（memory/YYYY-MM-DD.md）獨立
 
 ### 長期記憶（MEMORY.md）
 - 重要的用戶偏好和決定
@@ -54,6 +62,7 @@
 | `scripts/` | 自建腳本、自動化工具 |
 | `tmp/` | 暫存檔案、用戶上傳的檔案 |
 | `memory/` | 每日記憶（系統管理，勿手動操作結構） |
+| `memory/summaries/` | 自動匯整（系統每小時產生，勿手動刪除） |
 
 ### 例外情況
 - 當用戶**明確要求**在 workspace 外操作時，可以執行
