@@ -67,6 +67,9 @@ from .handlers.callback_data import (
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
+    CB_FILE_CANCEL,
+    CB_FILE_DESC,
+    CB_FILE_READ,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
@@ -672,12 +675,44 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await safe_reply(update.message, "❌ 無法存入記憶。")
         # Still forward to Claude below
 
-    # Build text to send to Claude Code with user prefix
-    lines = [f"[收到檔案] {dest}"]
-    if caption:
-        lines.append(caption)
-    else:
-        lines.append("請查看這個檔案。")
+    # No caption — show inline keyboard asking user what to do
+    if not caption:
+        file_key = (
+            f"{user.id}_{thread_id}_{int(datetime.now(tz=timezone.utc).timestamp())}"
+        )
+        pending = context.bot_data.setdefault("_pending_files", {})
+        pending[file_key] = {
+            "path": str(dest),
+            "filename": filename,
+            "user_id": user.id,
+            "thread_id": thread_id,
+            "window_id": wid,
+        }
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📖 Read & Analyze", callback_data=f"{CB_FILE_READ}{file_key}"
+                    ),
+                    InlineKeyboardButton(
+                        "✏️ Describe It", callback_data=f"{CB_FILE_DESC}{file_key}"
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Cancel", callback_data=f"{CB_FILE_CANCEL}{file_key}"
+                    ),
+                ]
+            ]
+        )
+        await safe_reply(
+            update.message,
+            f"📎 File received: *{filename}*\nWhat would you like to do?",
+            reply_markup=keyboard,
+        )
+        return
+
+    # Has caption — forward to Claude Code with user prefix
+    lines = [f"[Received File] {dest}"]
+    lines.append(caption)
     raw_text = "\n".join(lines)
     text_to_send = _ensure_user_and_prefix(user, raw_text)
 
@@ -893,6 +928,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if await handle_edit_mode_message(update, context):
         return
 
+    # Check if user has a pending file waiting for description
+    if thread_id is not None:
+        pending = context.bot_data.get("_pending_files", {})
+        for fk, info in list(pending.items()):
+            if (
+                info.get("user_id") == user.id
+                and info.get("thread_id") == thread_id
+                and info.get("waiting_description")
+            ):
+                pending.pop(fk)
+                dest = info["path"]
+                fname = info["filename"]
+                wid = info["window_id"]
+                raw_text = f"[Received File] {dest}\n{text}"
+                text_to_send = _ensure_user_and_prefix(user, raw_text)
+                await update.message.chat.send_action(ChatAction.TYPING)
+                success, message = await session_manager.send_to_window(
+                    wid, text_to_send
+                )
+                if success:
+                    await safe_reply(update.message, f"📎 Sent: {fname}")
+                else:
+                    await safe_reply(
+                        update.message,
+                        f"❌ Failed to send to Claude: {message}",
+                    )
+                return
+
     # Must be in a named topic
     if thread_id is None:
         await safe_reply(
@@ -1070,6 +1133,64 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except Exception:
                 pass
             await query.answer("Restart failed", show_alert=True)
+
+    # File action: Read & Analyze
+    elif data.startswith(CB_FILE_READ):
+        file_key = data[len(CB_FILE_READ) :]
+        pending = context.bot_data.get("_pending_files", {})
+        info = pending.pop(file_key, None)
+        if not info:
+            await query.answer("File no longer pending", show_alert=True)
+            return
+        wid = info["window_id"]
+        dest = info["path"]
+        fname = info["filename"]
+        raw_text = (
+            f"[Received File] {dest}\n"
+            "Please read and analyze this file. "
+            "Provide a brief summary of its content."
+        )
+        text_to_send = _ensure_user_and_prefix(user, raw_text)
+        success, message = await session_manager.send_to_window(wid, text_to_send)
+        if success:
+            try:
+                await query.edit_message_text(f"📖 Sent to AI for analysis: {fname}")
+            except Exception:
+                pass
+        else:
+            try:
+                await query.edit_message_text(f"❌ Failed to send to Claude: {message}")
+            except Exception:
+                pass
+        await query.answer()
+
+    # File action: Describe It (wait for user text)
+    elif data.startswith(CB_FILE_DESC):
+        file_key = data[len(CB_FILE_DESC) :]
+        pending = context.bot_data.get("_pending_files", {})
+        info = pending.get(file_key)
+        if not info:
+            await query.answer("File no longer pending", show_alert=True)
+            return
+        info["waiting_description"] = True
+        try:
+            await query.edit_message_text(
+                "✏️ Please describe what you'd like to do with this file:"
+            )
+        except Exception:
+            pass
+        await query.answer()
+
+    # File action: Cancel
+    elif data.startswith(CB_FILE_CANCEL):
+        file_key = data[len(CB_FILE_CANCEL) :]
+        pending = context.bot_data.get("_pending_files", {})
+        pending.pop(file_key, None)
+        try:
+            await query.edit_message_text("❌ Cancelled.")
+        except Exception:
+            pass
+        await query.answer()
 
     elif data == "noop":
         await query.answer()

@@ -9,6 +9,7 @@ Constants:
   - CB_WIN_*: Window picker (bind existing unbound window)
   - CB_SCREENSHOT_*: Screenshot refresh
   - CB_ASK_*: Interactive UI navigation (arrows, enter, esc)
+  - CB_FILE_*: File action prompt (no-caption attachment)
   - CB_KEYS_PREFIX: Screenshot control keys (kb:<key_id>:<window>)
 """
 
@@ -44,6 +45,11 @@ CB_ASK_REFRESH = "aq:ref:"  # aq:ref:<window>
 
 # Restart session (freeze recovery)
 CB_RESTART_SESSION = "rs:"  # rs:<window_id>
+
+# File action (no-caption attachment prompt)
+CB_FILE_READ = "fa:read:"  # fa:read:<file_key>
+CB_FILE_DESC = "fa:desc:"  # fa:desc:<file_key>
+CB_FILE_CANCEL = "fa:cancel:"  # fa:cancel:<file_key>
 
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
