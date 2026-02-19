@@ -348,7 +348,10 @@ async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         config.shared_dir, workspace_dir, config.recent_memory_days
     )
     assembler.write()
-    await safe_reply(update.message, "✅ CLAUDE.md 已重新組裝。")
+    await safe_reply(
+        update.message,
+        "✅ CLAUDE.md 已重新組裝。發送 /clear 可讓當前 session 套用新設定。",
+    )
 
 
 # --- Screenshot keyboard with quick control keys ---

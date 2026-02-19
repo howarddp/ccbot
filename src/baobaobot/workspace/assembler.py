@@ -98,6 +98,7 @@ class ClaudeMdAssembler:
         # Replace template variables (safety net for old AGENTS.md with {{BIN_DIR}})
         result = result.replace("{{BIN_DIR}}", str(self.shared_dir / "bin"))
         result = result.replace("{{USERS_DIR}}", str(self.shared_dir / "users"))
+        result = result.replace("{{WORKSPACE_DIR}}", str(self.workspace_dir))
         return result
 
     def write(self) -> None:

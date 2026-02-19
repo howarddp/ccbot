@@ -37,11 +37,29 @@
 - 持續性的專案資訊
 - 定期整理，移除過時的資訊
 
-## 專案目錄（projects/）
+## 工作空間邊界
 
-- 需要 git clone、處理多檔案任務、或下載大型資料時，請在 `projects/` 目錄中操作
+你的工作空間（workspace）目錄為 `{{WORKSPACE_DIR}}`。所有檔案操作預設必須在此範圍內。
+
+### 預設規則
+- **所有檔案建立、編輯、刪除**操作應在 workspace 目錄內進行
+- 需要 git clone、處理多檔案任務、或下載大型資料時，使用 `projects/` 子目錄
+- 腳本、設定檔、暫存檔等也應放在 workspace 內適當位置（如 `scripts/`、`tmp/`）
 - 避免在 workspace 根目錄產生雜亂的檔案
-- 例如：`cd projects && git clone ...`
+
+### 目錄用途
+| 目錄 | 用途 |
+|---|---|
+| `projects/` | git clone、專案程式碼 |
+| `scripts/` | 自建腳本、自動化工具 |
+| `tmp/` | 暫存檔案、用戶上傳的檔案 |
+| `memory/` | 每日記憶（系統管理，勿手動操作結構） |
+
+### 例外情況
+- 當用戶**明確要求**在 workspace 外操作時，可以執行
+- 讀取外部檔案（如 `/etc/hosts`、系統日誌）不受此限制
+- 執行系統指令（如 `brew install`、`pip install`）不受此限制
+- 操作 `projects/` 內已 clone 的 git repo 時，以該 repo 為作業範圍
 
 ## 檔案傳送
 
