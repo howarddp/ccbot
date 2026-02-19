@@ -73,7 +73,7 @@ async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     workspace_dir, ws_name = _resolve_workspace_for_thread(update)
     if workspace_dir is None:
-        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
     text = (update.message.text or "").strip()
@@ -101,10 +101,10 @@ async def cron_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         await safe_reply(
             update.message,
-            "❓ 用法:\n"
-            '• `/cron add "0 9 * * *" 早安！`\n'
-            "• `/cron add every:30m 檢查信箱`\n"
-            "• `/cron add at:2026-02-20T14:00 提醒開會`\n"
+            "❓ Usage:\n"
+            '• `/cron add "0 9 * * *" Good morning!`\n'
+            "• `/cron add every:30m Check inbox`\n"
+            "• `/cron add at:2026-02-20T14:00 Meeting reminder`\n"
             "• `/cron remove <id>`\n"
             "• `/cron enable <id>` / `disable <id>`\n"
             "• `/cron run <id>`\n"
@@ -117,7 +117,7 @@ async def _cmd_list(update: Update, ws_name: str) -> None:
     assert update.message
     jobs = await cron_service.list_jobs(ws_name)
     if not jobs:
-        await safe_reply(update.message, "⏰ 此 workspace 尚無排程任務。")
+        await safe_reply(update.message, "⏰ No scheduled jobs for this workspace.")
         return
 
     lines = [f"⏰ Cron Jobs ({len(jobs)})\n"]
@@ -169,7 +169,7 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
     if not message:
         await safe_reply(
             update.message,
-            '❌ 請提供排程和訊息。\n例：`/cron add "0 9 * * *" 早安！整理待辦事項`',
+            '❌ Please provide a schedule and message.\nExample: `/cron add "0 9 * * *" Good morning! Review TODOs`',
         )
         return
 
@@ -179,8 +179,8 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
         hint = ""
         first_token = schedule_str.split()[0] if schedule_str else ""
         if first_token and (first_token.isdigit() or first_token.startswith("*")):
-            hint = '\n💡 Cron 表達式需加引號：`/cron add "0 9 * * *" 訊息`'
-        await safe_reply(update.message, f"❌ 排程格式錯誤: {err}{hint}")
+            hint = '\n💡 Cron expressions need quotes: `/cron add "0 9 * * *" message`'
+        await safe_reply(update.message, f"❌ Invalid schedule format: {err}{hint}")
         return
 
     # Generate a short name from message
@@ -200,7 +200,7 @@ async def _cmd_add(update: Update, ws_name: str, args: str) -> None:
 
     await safe_reply(
         update.message,
-        f"✅ 排程已建立\n"
+        f"✅ Schedule created\n"
         f"ID: `{job.id}`\n"
         f"Schedule: {format_schedule(job.schedule)}{next_info}",
     )
@@ -214,41 +214,41 @@ async def _cmd_remove(update: Update, ws_name: str, job_id: str) -> None:
         if j.id == job_id and j.system:
             await safe_reply(
                 update.message,
-                f"❌ 系統排程 `{job_id}` 無法移除，請使用 `/cron disable {job_id}` 停用。",
+                f"❌ System job `{job_id}` cannot be removed. Use `/cron disable {job_id}` to disable it.",
             )
             return
     ok = await cron_service.remove_job(ws_name, job_id)
     if ok:
-        await safe_reply(update.message, f"🗑️ 已移除排程 `{job_id}`")
+        await safe_reply(update.message, f"🗑️ Removed schedule `{job_id}`")
     else:
-        await safe_reply(update.message, f"❌ 找不到排程 `{job_id}`")
+        await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
 async def _cmd_enable(update: Update, ws_name: str, job_id: str) -> None:
     assert update.message
     job = await cron_service.enable_job(ws_name, job_id)
     if job:
-        await safe_reply(update.message, f"✅ 已啟用排程 `{job_id}`")
+        await safe_reply(update.message, f"✅ Enabled schedule `{job_id}`")
     else:
-        await safe_reply(update.message, f"❌ 找不到排程 `{job_id}`")
+        await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
 async def _cmd_disable(update: Update, ws_name: str, job_id: str) -> None:
     assert update.message
     job = await cron_service.disable_job(ws_name, job_id)
     if job:
-        await safe_reply(update.message, f"⏸️ 已停用排程 `{job_id}`")
+        await safe_reply(update.message, f"⏸️ Disabled schedule `{job_id}`")
     else:
-        await safe_reply(update.message, f"❌ 找不到排程 `{job_id}`")
+        await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
 async def _cmd_run(update: Update, ws_name: str, job_id: str) -> None:
     assert update.message
     ok = await cron_service.run_job_now(ws_name, job_id)
     if ok:
-        await safe_reply(update.message, f"▶️ 已觸發排程 `{job_id}`")
+        await safe_reply(update.message, f"▶️ Triggered schedule `{job_id}`")
     else:
-        await safe_reply(update.message, f"❌ 找不到排程 `{job_id}`")
+        await safe_reply(update.message, f"❌ Schedule `{job_id}` not found")
 
 
 async def _cmd_status(update: Update) -> None:

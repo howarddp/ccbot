@@ -25,16 +25,16 @@ class TestAssemble:
         assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
         assert "BaoBao Assistant" in content
-        assert "自動生成" in content
+        assert "auto-generated" in content.lower()
 
     def test_contains_all_sections(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
-        assert "人格 (SOUL)" in content
-        assert "身份 (IDENTITY)" in content
-        assert "工作指令 (AGENTS)" in content
-        assert "記憶 (MEMORY)" in content
+        assert "Personality (SOUL)" in content
+        assert "Identity (IDENTITY)" in content
+        assert "Work Instructions (AGENTS)" in content
+        assert "Memory (MEMORY)" in content
 
     def test_includes_soul_from_shared(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
@@ -61,7 +61,7 @@ class TestAssemble:
 
         assembler = ClaudeMdAssembler(shared, workspace, recent_days=7)
         content = assembler.assemble()
-        assert "近期記憶" in content
+        assert "Recent Memories" in content
         assert "Something happened" in content
 
     def test_no_bin_dir_template_variable(self, dirs: tuple[Path, Path]) -> None:

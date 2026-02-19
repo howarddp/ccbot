@@ -17,12 +17,16 @@ logger = logging.getLogger(__name__)
 # Pattern for "- **key**: value" lines
 _FIELD_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:\s*(.*)$", re.MULTILINE)
 
-# Field name mapping (Chinese → dataclass field)
+# Field name mapping (label → dataclass field)
+# Accepts both English and Chinese keys for backward compatibility
 _FIELD_MAP = {
+    "Name": "name",
     "名字": "name",
+    "Role": "role",
     "角色": "role",
     "Emoji": "emoji",
     "emoji": "emoji",
+    "Vibe": "vibe",
     "氛圍": "vibe",
 }
 
@@ -32,9 +36,9 @@ class AgentIdentity:
     """Structured representation of IDENTITY.md."""
 
     name: str = "BaoBao"
-    role: str = "個人 AI 助理"
+    role: str = "Personal AI Assistant"
     emoji: str = "🐾"
-    vibe: str = "溫暖、可靠、聰明"
+    vibe: str = "warm, dependable, sharp"
 
 
 def parse_identity(content: str) -> AgentIdentity:
@@ -85,13 +89,13 @@ def update_identity(workspace_dir: Path, **kwargs: str) -> AgentIdentity:
             setattr(identity, field, value)
 
     # Rebuild the markdown content
-    # Reverse map: field → Chinese key
-    _reverse_map = {v: k for k, v in _FIELD_MAP.items()}
-    # Prefer Chinese keys for output
-    _reverse_map["name"] = "名字"
-    _reverse_map["role"] = "角色"
-    _reverse_map["emoji"] = "Emoji"
-    _reverse_map["vibe"] = "氛圍"
+    # Reverse map: field → English key for output
+    _reverse_map = {
+        "name": "Name",
+        "role": "Role",
+        "emoji": "Emoji",
+        "vibe": "Vibe",
+    }
 
     lines = ["# Identity", ""]
     for field in ["name", "role", "emoji", "vibe"]:

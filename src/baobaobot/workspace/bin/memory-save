@@ -12,8 +12,8 @@ Usage:
     memory-save <file> <description> [--user NAME] [--workspace PATH]
 
 Examples:
-    memory-save /path/to/screenshot.png "系統架構圖"
-    memory-save report.pdf "月報" --user Alice
+    memory-save /path/to/screenshot.png "System architecture diagram"
+    memory-save report.pdf "Monthly report" --user Alice
 """
 
 from __future__ import annotations

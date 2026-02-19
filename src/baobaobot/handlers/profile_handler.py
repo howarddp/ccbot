@@ -56,14 +56,14 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if field not in field_map:
             await safe_reply(
                 update.message,
-                f"❌ 不認識的欄位: {field}\n可用欄位: name, telegram, tz, lang, notes",
+                f"❌ Unknown field: {field}\nAvailable fields: name, telegram, tz, lang, notes",
             )
             return
 
         updated = update_user_profile(users_dir, user.id, **{field_map[field]: value})
         await safe_reply(
             update.message,
-            f"✅ 已更新 {field} = {value}\n\n"
+            f"✅ Updated {field} = {value}\n\n"
             f"👤 **{updated.name}** {updated.telegram}\n"
             f"🕐 {updated.timezone} | 🗣️ {updated.language}",
         )
@@ -74,10 +74,10 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await safe_reply(
         update.message,
         f"👤 **Profile** (`{user.id}`)\n\n"
-        f"名字: {profile.name}\n"
-        f"Telegram: {profile.telegram or '（無）'}\n"
-        f"時區: {profile.timezone}\n"
-        f"語言: {profile.language}\n"
-        f"備註: {profile.notes or '（無）'}\n\n"
-        f"使用 `/profile set <field> <value>` 修改",
+        f"Name: {profile.name}\n"
+        f"Telegram: {profile.telegram or '(none)'}\n"
+        f"Timezone: {profile.timezone}\n"
+        f"Language: {profile.language}\n"
+        f"Notes: {profile.notes or '(none)'}\n\n"
+        f"Use `/profile set <field> <value>` to modify",
     )

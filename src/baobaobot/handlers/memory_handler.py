@@ -59,7 +59,7 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     workspace_dir = _resolve_workspace_for_thread(update)
     if workspace_dir is None:
-        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
     text = (update.message.text or "").strip()
@@ -73,7 +73,7 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if content:
             await safe_reply(update.message, f"📝 **{today_str}**\n\n{content}")
         else:
-            await safe_reply(update.message, f"📝 今天 ({today_str}) 尚無記憶。")
+            await safe_reply(update.message, f"📝 No memories for today ({today_str}).")
         return
 
     # /memory search <query>
@@ -81,15 +81,15 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         query = parts[2]
         results = mm.search(query)
         if not results:
-            await safe_reply(update.message, f"🔍 找不到「{query}」的結果。")
+            await safe_reply(update.message, f'🔍 No results for "{query}".')
             return
 
-        lines = [f"🔍 搜尋「{query}」— {len(results)} 筆結果\n"]
+        lines = [f'🔍 Search "{query}" — {len(results)} results\n']
         for r in results[:20]:  # Limit to 20 results
             lines.append(f"📄 `{r.file}:{r.line_num}` {r.line}")
 
         if len(results) > 20:
-            lines.append(f"\n…還有 {len(results) - 20} 筆結果")
+            lines.append(f"\n…{len(results) - 20} more results")
 
         await safe_reply(update.message, "\n".join(lines))
         return
@@ -101,20 +101,20 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if content:
             await safe_reply(update.message, f"📝 **{date_str}**\n\n{content}")
         else:
-            await safe_reply(update.message, f"📝 找不到 {date_str} 的記憶。")
+            await safe_reply(update.message, f"📝 No memories found for {date_str}.")
         return
 
     # /memory — list recent memories
     memories = mm.list_daily(days=config.recent_memory_days)
     if not memories:
-        await safe_reply(update.message, "📝 尚無每日記憶。")
+        await safe_reply(update.message, "📝 No daily memories yet.")
         return
 
-    lines = ["📝 **近期記憶**\n"]
+    lines = ["📝 **Recent Memories**\n"]
     for m in memories:
         lines.append(f"• `{m.date}` — {m.preview}")
 
-    lines.append(f"\n共 {len(memories)} 筆 | 使用 `/memory <日期>` 查看詳情")
+    lines.append(f"\n{len(memories)} total | Use `/memory <date>` to view details")
     await safe_reply(update.message, "\n".join(lines))
 
 
@@ -126,7 +126,7 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     workspace_dir = _resolve_workspace_for_thread(update)
     if workspace_dir is None:
-        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
     text = (update.message.text or "").strip()
@@ -136,9 +136,9 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if len(parts) < 2:
         await safe_reply(
             update.message,
-            "❓ 用法:\n"
-            "• `/forget 2026-02-15` — 刪除特定日期\n"
-            "• `/forget all` — 清除所有每日記憶（保留 MEMORY.md）",
+            "❓ Usage:\n"
+            "• `/forget 2026-02-15` — delete a specific date\n"
+            "• `/forget all` — clear all daily memories (keeps MEMORY.md)",
         )
         return
 
@@ -147,11 +147,11 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # /forget all
     if target.lower() == "all":
         count = mm.delete_all_daily()
-        await safe_reply(update.message, f"🗑️ 已刪除 {count} 筆每日記憶。")
+        await safe_reply(update.message, f"🗑️ Deleted {count} daily memories.")
         return
 
     # /forget <date>
     if mm.delete_daily(target):
-        await safe_reply(update.message, f"🗑️ 已刪除 {target} 的記憶。")
+        await safe_reply(update.message, f"🗑️ Deleted memory for {target}.")
     else:
-        await safe_reply(update.message, f"❌ 找不到 {target} 的記憶。")
+        await safe_reply(update.message, f"❌ No memory found for {target}.")

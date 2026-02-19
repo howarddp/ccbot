@@ -363,8 +363,8 @@ class CronService:
                 if not creator_name:
                     creator_name = str(job.creator_user_id)
                 send_text = (
-                    f"[{creator_name}|{job.creator_user_id}] [排程任務] {job.message}\n"
-                    f"(完成後請 @[{job.creator_user_id}] 告知結果)"
+                    f"[{creator_name}|{job.creator_user_id}] [Scheduled Task] {job.message}\n"
+                    f"(When done, please @[{job.creator_user_id}] with the result)"
                 )
 
             ok, msg = await session_manager.send_to_window(window_id, send_text)

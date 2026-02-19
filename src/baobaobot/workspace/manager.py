@@ -23,10 +23,14 @@ _BIN_DIR = Path(__file__).parent / "bin"
 # Skill templates bundled with the package
 _SKILLS_DIR = Path(__file__).parent / "skills"
 
-# Files deployed to the shared dir (config_dir)
+# Files deployed to the shared dir (config_dir) — created only if missing
 _SHARED_TEMPLATE_FILES = [
     "SOUL.md",
     "IDENTITY.md",
+]
+
+# System-managed files always overwritten from templates
+_SHARED_SYNC_FILES = [
     "AGENTS.md",
 ]
 
@@ -81,6 +85,14 @@ class WorkspaceManager:
                     logger.info("Deployed shared template: %s", dest)
                 else:
                     logger.warning("Template not found: %s", src)
+
+        # System-managed files: always overwrite from templates
+        for filename in _SHARED_SYNC_FILES:
+            src = _TEMPLATES_DIR / filename
+            dest = self.shared_dir / filename
+            if src.exists():
+                shutil.copy2(src, dest)
+                logger.debug("Synced system file: %s", dest)
 
         # Create users/ directory for multi-user profiles
         (self.shared_dir / "users").mkdir(exist_ok=True)

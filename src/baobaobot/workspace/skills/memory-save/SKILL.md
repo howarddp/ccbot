@@ -1,14 +1,14 @@
 ---
 name: memory-save
-description: 將檔案存入記憶附件。當需要保存圖片、文件、產出物供未來回憶時使用。
+description: Save a file as a memory attachment. Use when you need to preserve images, documents, or artifacts for future recall.
 ---
 
-將檔案複製到 `memory/attachments/` 並在今日的每日記憶中加入 Markdown 引用。
+Copy a file to `memory/attachments/` and add a Markdown reference to today's daily memory.
 
-用法：`{{BIN_DIR}}/memory-save /path/to/file "描述"`
+Usage: `{{BIN_DIR}}/memory-save /path/to/file "description"`
 
-指定用戶：`{{BIN_DIR}}/memory-save /path/to/file "描述" --user Alice`
+Specify user: `{{BIN_DIR}}/memory-save /path/to/file "description" --user Alice`
 
-- 圖片（`.jpg/.png/.gif/.webp`）使用 `![描述](路徑)` 格式
-- 其他檔案使用 `[描述](路徑)` 格式
-- 附件隨每日記憶一同清理
+- Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format
+- Other files use `[description](path)` format
+- Attachments are cleaned up together with daily memories

@@ -1,10 +1,10 @@
 # User
 
-- **名字**: （待設定）
-- **稱呼**: （待設定）
-- **時區**: Asia/Taipei
-- **語言偏好**: 繁體中文
-- **備註**:
+- **Name**: (not set)
+- **Nickname**: (not set)
+- **Timezone**: Asia/Taipei
+- **Language**: English
+- **Notes**:
 
 ## Context
-<!-- 持續觀察：用戶的興趣、進行中的專案、偏好 -->
+<!-- Ongoing observations: interests, active projects, preferences -->

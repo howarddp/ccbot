@@ -13,33 +13,117 @@ Key functions: parse_profile(), read_profile(), update_profile(),
 
 from __future__ import annotations
 
+import locale
 import logging
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Sentinel values for "not yet configured" name fields
+NAME_NOT_SET_SENTINELS = frozenset({"（待設定）", "(not set)"})
+
+# Module-level caches for detected timezone/language (avoid repeated I/O)
+_cached_tz: str | None = None
+_cached_lang: str | None = None
+
+
+def _detect_timezone() -> str:
+    """Detect system timezone from OS, fallback to Asia/Taipei."""
+    global _cached_tz
+    if _cached_tz is not None:
+        return _cached_tz
+    # TZ environment variable
+    tz = os.environ.get("TZ")
+    if tz and "/" in tz:
+        _cached_tz = tz
+        return tz
+    # macOS/Linux: resolve /etc/localtime symlink
+    try:
+        link = os.readlink("/etc/localtime")
+        if "zoneinfo/" in link:
+            _cached_tz = link.split("zoneinfo/", 1)[1]
+            return _cached_tz
+    except OSError:
+        pass
+    # Linux: /etc/timezone file
+    try:
+        result = Path("/etc/timezone").read_text().strip()
+        _cached_tz = result
+        return result
+    except OSError:
+        pass
+    _cached_tz = "Asia/Taipei"
+    return _cached_tz
+
+
+_TZ_LANG_MAP: dict[str, str] = {
+    "Asia/Taipei": "繁體中文",
+    "Asia/Hong_Kong": "繁體中文",
+    "Asia/Shanghai": "简体中文",
+    "Asia/Chongqing": "简体中文",
+    "Asia/Tokyo": "日本語",
+    "Asia/Seoul": "한국어",
+}
+
+
+def _detect_language() -> str:
+    """Detect display language from system locale and timezone."""
+    global _cached_lang
+    if _cached_lang is not None:
+        return _cached_lang
+    lang = (locale.getlocale()[0] or "").lower()
+    if lang.startswith("zh_tw") or lang.startswith("zh_hant"):
+        _cached_lang = "繁體中文"
+        return _cached_lang
+    if lang.startswith("zh_cn") or lang.startswith("zh_hans"):
+        _cached_lang = "简体中文"
+        return _cached_lang
+    if lang.startswith("ja"):
+        _cached_lang = "日本語"
+        return _cached_lang
+    if lang.startswith("ko"):
+        _cached_lang = "한국어"
+        return _cached_lang
+    # Fallback: infer from timezone (many Asian devs use en_US locale)
+    if lang.startswith("en") or not lang:
+        tz = _detect_timezone()
+        tz_lang = _TZ_LANG_MAP.get(tz)
+        if tz_lang:
+            _cached_lang = tz_lang
+            return _cached_lang
+    _cached_lang = "English"
+    return _cached_lang
+
+
 # Pattern for "- **key**: value" lines
 _FIELD_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:\s*(.*)$", re.MULTILINE)
 
-# Field name mapping (Chinese → dataclass field)
+# Field name mapping (label → dataclass field)
+# Accepts both English and Chinese keys for backward compatibility
 _FIELD_MAP = {
+    "Name": "name",
     "名字": "name",
+    "Nickname": "nickname",  # legacy only
     "稱呼": "nickname",  # legacy only
     "Telegram": "telegram",
+    "Timezone": "timezone",
     "時區": "timezone",
+    "Language": "language",
     "語言偏好": "language",
+    "Notes": "notes",
     "備註": "notes",
 }
 
 # Reverse map for serialization (multi-user profiles)
 _REVERSE_MAP = {
-    "name": "名字",
+    "name": "Name",
     "telegram": "Telegram",
-    "timezone": "時區",
-    "language": "語言偏好",
-    "notes": "備註",
+    "timezone": "Timezone",
+    "language": "Language",
+    "notes": "Notes",
 }
 
 # Regex to match @[user_id] mention markers in Claude Code output
@@ -53,11 +137,11 @@ _profile_cache: dict[int, UserProfile] = {}
 class UserProfile:
     """Structured representation of USER.md."""
 
-    name: str = "（待設定）"
-    nickname: str = "（待設定）"  # legacy, used only by read_profile/update_profile
+    name: str = "(not set)"
+    nickname: str = "(not set)"  # legacy, used only by read_profile/update_profile
     telegram: str = ""
-    timezone: str = "Asia/Taipei"
-    language: str = "繁體中文"
+    timezone: str = field(default_factory=_detect_timezone)
+    language: str = field(default_factory=_detect_language)
     notes: str = ""
     context: str = ""
 
@@ -115,30 +199,32 @@ def update_profile(workspace_dir: Path, **kwargs: str) -> UserProfile:
     """
     profile = read_profile(workspace_dir)
 
-    for field, value in kwargs.items():
-        if hasattr(profile, field) and value:
-            setattr(profile, field, value)
+    for attr, value in kwargs.items():
+        if hasattr(profile, attr) and value:
+            setattr(profile, attr, value)
 
     # Reverse map
     _legacy_reverse = {
-        "name": "名字",
-        "nickname": "稱呼",
-        "timezone": "時區",
-        "language": "語言偏好",
-        "notes": "備註",
+        "name": "Name",
+        "nickname": "Nickname",
+        "timezone": "Timezone",
+        "language": "Language",
+        "notes": "Notes",
     }
 
     lines = ["# User", ""]
-    for field in ["name", "nickname", "timezone", "language", "notes"]:
-        label = _legacy_reverse.get(field, field)
-        value = getattr(profile, field)
+    for attr in ["name", "nickname", "timezone", "language", "notes"]:
+        label = _legacy_reverse.get(attr, attr)
+        value = getattr(profile, attr)
         lines.append(f"- **{label}**: {value}")
 
     lines.extend(["", "## Context"])
     if profile.context:
         lines.append(profile.context)
     else:
-        lines.append("<!-- 持續觀察：用戶的興趣、進行中的專案、偏好 -->")
+        lines.append(
+            "<!-- Ongoing observations: interests, active projects, preferences -->"
+        )
 
     content = "\n".join(lines) + "\n"
     user_path = workspace_dir / "USER.md"
@@ -159,16 +245,16 @@ def _user_profile_path(users_dir: Path, user_id: int) -> Path:
 def _serialize_user_profile(profile: UserProfile) -> str:
     """Serialize a UserProfile to markdown."""
     lines = ["# User", ""]
-    for field in ["name", "telegram", "timezone", "language", "notes"]:
-        label = _REVERSE_MAP.get(field, field)
-        value = getattr(profile, field)
+    for attr in ["name", "telegram", "timezone", "language", "notes"]:
+        label = _REVERSE_MAP.get(attr, attr)
+        value = getattr(profile, attr)
         lines.append(f"- **{label}**: {value}")
 
     lines.extend(["", "## Context"])
     if profile.context:
         lines.append(profile.context)
     else:
-        lines.append("<!-- 用戶的興趣、進行中的專案、偏好 -->")
+        lines.append("<!-- User interests, active projects, preferences -->")
 
     return "\n".join(lines) + "\n"
 
@@ -252,9 +338,9 @@ def update_user_profile(users_dir: Path, user_id: int, **kwargs: str) -> UserPro
     _profile_cache.pop(user_id, None)
     profile = read_user_profile(users_dir, user_id)
 
-    for field, value in kwargs.items():
-        if hasattr(profile, field) and value:
-            setattr(profile, field, value)
+    for attr, value in kwargs.items():
+        if hasattr(profile, attr) and value:
+            setattr(profile, attr, value)
 
     profile_path = _user_profile_path(users_dir, user_id)
     profile_path.write_text(_serialize_user_profile(profile), encoding="utf-8")
@@ -281,7 +367,7 @@ def get_user_display_name(users_dir: Path, user_id: int) -> str | None:
         if not profile_path.exists():
             return None
     profile = read_user_profile(users_dir, user_id)
-    if profile.name and profile.name != "（待設定）":
+    if profile.name and profile.name not in NAME_NOT_SET_SENTINELS:
         return profile.name
     return None
 

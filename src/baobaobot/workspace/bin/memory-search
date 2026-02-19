@@ -5,7 +5,7 @@ Usage:
     memory-search <query> [--days N] [--workspace PATH]
 
 Examples:
-    memory-search "架構"
+    memory-search "architecture"
     memory-search "tmux" --days 7
 """
 

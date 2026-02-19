@@ -121,7 +121,11 @@ from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
 from .handlers.cron_handler import cron_command
 from .cron.service import cron_service
-from .persona.profile import convert_user_mentions, ensure_user_profile
+from .persona.profile import (
+    NAME_NOT_SET_SENTINELS,
+    convert_user_mentions,
+    ensure_user_profile,
+)
 from .workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
 from .workspace.manager import WorkspaceManager
 
@@ -145,7 +149,9 @@ def _ensure_user_and_prefix(user: User, text: str) -> str:
 
     profile = ensure_user_profile(config.users_dir, user.id, first_name, username)
     display = (
-        profile.name if profile.name and profile.name != "（待設定）" else first_name
+        profile.name
+        if profile.name and profile.name not in NAME_NOT_SET_SENTINELS
+        else first_name
     )
     return f"[{display}|{user.id}] {text}"
 
@@ -327,10 +333,10 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     workspace_dir = _resolve_workspace_dir(update)
     if workspace_dir is None:
-        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
-    await safe_reply(update.message, f"📁 **Workspace**\n\n路徑: `{workspace_dir}`")
+    await safe_reply(update.message, f"📁 **Workspace**\n\nPath: `{workspace_dir}`")
 
 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -343,7 +349,7 @@ async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     workspace_dir = _resolve_workspace_dir(update)
     if workspace_dir is None:
-        await safe_reply(update.message, "❌ 此 topic 尚無 workspace。")
+        await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
     assembler = ClaudeMdAssembler(
@@ -352,7 +358,7 @@ async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     assembler.write()
     await safe_reply(
         update.message,
-        "✅ CLAUDE.md 已重新組裝。發送 /clear 可讓當前 session 套用新設定。",
+        "✅ CLAUDE.md rebuilt. Send /clear to apply new settings to the current session.",
     )
 
 
@@ -535,7 +541,7 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ 不支援此類型的訊息（貼圖等）。",
+        "⚠ This message type is not supported (stickers, etc.).",
     )
 
 
@@ -584,14 +590,14 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if wid is None:
         await safe_reply(
             update.message,
-            "❌ 尚無 session。請先發送文字訊息建立 session，再傳送檔案。",
+            "❌ No session yet. Send a text message first to create a session, then send files.",
         )
         return
 
     # Resolve tmp directory
     tmp_dir = _resolve_tmp_dir(user.id, thread_id)
     if tmp_dir is None:
-        await safe_reply(update.message, "❌ 無法取得 workspace 路徑。")
+        await safe_reply(update.message, "❌ Cannot resolve workspace path.")
         return
 
     # Determine file object and filename
@@ -615,7 +621,7 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         file_obj = await msg.voice.get_file()
 
     if file_obj is None:
-        await safe_reply(update.message, "❌ 無法取得檔案。")
+        await safe_reply(update.message, "❌ Cannot retrieve file.")
         return
 
     # Generate filename (local time for human-readable timestamps)
@@ -647,7 +653,7 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         transcript = await transcribe_voice(dest)
         if transcript:
             caption = msg.caption or ""
-            lines = [f"[語音訊息] {dest}", f"語音轉文字: {transcript}"]
+            lines = [f"[Voice Message] {dest}", f"Transcript: {transcript}"]
             if caption:
                 lines.append(caption)
             raw_text = "\n".join(lines)
@@ -656,11 +662,11 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await msg.chat.send_action(ChatAction.TYPING)
             success, message = await session_manager.send_to_window(wid, text_to_send)
             if success:
-                await safe_reply(update.message, f"🎤 語音轉文字: {transcript}")
+                await safe_reply(update.message, f"🎤 Transcript: {transcript}")
             else:
                 await safe_reply(
                     update.message,
-                    f"❌ 檔案已儲存但無法送達 Claude: {message}",
+                    f"❌ File saved but failed to send to Claude: {message}",
                 )
             return
 
@@ -675,19 +681,21 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 desc = (desc[:idx] + desc[idx + len(t) :]).strip()
                 break
         # Forward to Claude Code with memory instruction
-        lines = [f"[記憶附件] {dest}"]
+        lines = [f"[Memory Attachment] {dest}"]
         if desc:
-            lines.append(f"用戶描述: {desc}")
+            lines.append(f"User description: {desc}")
         raw_text = "\n".join(lines)
         text_to_send = _ensure_user_and_prefix(user, raw_text)
 
         await msg.chat.send_action(ChatAction.TYPING)
         success, message = await session_manager.send_to_window(wid, text_to_send)
         if success:
-            await safe_reply(update.message, f"💾 已送出記憶分析: {dest.name}")
+            await safe_reply(
+                update.message, f"💾 Sent for memory analysis: {dest.name}"
+            )
         else:
             await safe_reply(
-                update.message, f"❌ 檔案已儲存但無法送達 Claude: {message}"
+                update.message, f"❌ File saved but failed to send to Claude: {message}"
             )
         return
 
@@ -735,9 +743,11 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await msg.chat.send_action(ChatAction.TYPING)
     success, message = await session_manager.send_to_window(wid, text_to_send)
     if success:
-        await safe_reply(update.message, f"📎 已傳送檔案: {filename}")
+        await safe_reply(update.message, f"📎 File sent: {filename}")
     else:
-        await safe_reply(update.message, f"❌ 檔案已儲存但無法送達 Claude: {message}")
+        await safe_reply(
+            update.message, f"❌ File saved but failed to send to Claude: {message}"
+        )
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task

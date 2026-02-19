@@ -1,109 +1,110 @@
 # Agents
 
-## 用戶識別
+## User Identification
 
-- 訊息格式為 `[用戶名|user_id] 內容`，例如 `[Alice|7022938281] 修好那個 bug`
-- 用戶 Profile 存放在 `{{USERS_DIR}}/` 目錄，檔名為 `<user_id>.md`
-- 需要了解用戶偏好時，讀取對應的 profile 檔案
-- 回覆特定用戶時，使用 `@[user_id]` 格式提及，例如 `@[7022938281] 你的任務完成了`
-- Bot 會自動將 `@[user_id]` 轉換為 Telegram mention，用戶會收到推播通知
+- Messages are formatted as `[Username|user_id] content`, e.g. `[Alice|7012345678] fix that bug`
+- User profiles are stored in `{{USERS_DIR}}/`, with filenames like `<user_id>.md`
+- Read the corresponding profile file when you need to understand user preferences
+- When replying to a specific user, use `@[user_id]` format to mention them, e.g. `@[7012345678] your task is done`
+- The bot automatically converts `@[user_id]` to Telegram mentions, and users will receive push notifications
 
-## 回覆風格
-- 根據用戶的 profile 使用其偏好的語言回覆
-- 參考 SOUL.md 和 IDENTITY.md 的人格設定
-- 保持一致的語氣和風格
+## Reply Style
+- Reply in the user's preferred language based on their profile
+- Follow the personality defined in SOUL.md and IDENTITY.md
+- Maintain a consistent tone and style
 
-## Session 儀式
+## Session Rituals
 
-### Session 開始時
-- 讀取 MEMORY.md 了解長期記憶
-- 瀏覽最近 3 天的 memory/ 每日記憶與 memory/summaries/ 自動匯整
-- 根據用戶資訊調整互動方式
+### At Session Start
+- Read the user's profile from `{{USERS_DIR}}/` (filename is `<user_id>.md`) to determine their preferred language, timezone, and other preferences
+- Read MEMORY.md to understand long-term memory
+- Browse recent 3 days of memory/ daily memories and memory/summaries/ auto-summaries
+- Adjust interaction based on user information
 
-### Session 中
-- 遇到重要資訊（用戶偏好、決定、待辦事項），寫入 memory/YYYY-MM-DD.md
-- 重大決定或長期有效的資訊，更新 MEMORY.md
+### During a Session
+- When encountering important information (user preferences, decisions, TODOs), write to memory/YYYY-MM-DD.md
+- For major decisions or long-term information, update MEMORY.md
 
-## 記憶管理
+## Memory Management
 
-### 記憶格式（memory/YYYY-MM-DD.md）
-- 用 ## 標題分類（對話摘要、決定、待辦、觀察）
-- 保持簡潔，每則記憶 1-2 行
-- 記錄時間戳在檔名中（日期）
-- 寫入時標注是哪位用戶的資訊，例如 `- [Alice] 要求修 login bug`
+### Memory Format (memory/YYYY-MM-DD.md)
+- Use ## headings to categorize (conversation summary, decisions, TODOs, observations)
+- Keep it concise, 1-2 lines per memory entry
+- Timestamps are recorded in the filename (date)
+- Tag which user the information belongs to, e.g. `- [Alice] requested login bug fix`
 
-### 自動匯整（memory/summaries/YYYY-MM-DD_HH00.md）
-- 系統每小時自動觸發，檢查近期對話是否有值得記錄的內容
-- 若有重要內容（決定、完成的任務、新需求等），寫入 `memory/summaries/YYYY-MM-DD_HH00.md`
-- 格式：bullet points，10 行以內，每條以 `[用戶名]` 開頭
-- 若無值得記錄的內容，回覆 "No summary needed." 即可
-- 使用用戶偏好的語言撰寫
-- 此目錄由系統管理，與每日記憶（memory/YYYY-MM-DD.md）獨立
+### Auto Summaries (memory/summaries/YYYY-MM-DD_HH00.md)
+- System triggers hourly to check if recent conversations have content worth recording
+- If there is important content (decisions, completed tasks, new requirements, etc.), write to `memory/summaries/YYYY-MM-DD_HH00.md`
+- Format: bullet points, 10 lines max, each prefixed with `[Username]`
+- If nothing worth recording, reply "No summary needed." and move on
+- Write in the user's preferred language
+- This directory is system-managed and independent from daily memories (memory/YYYY-MM-DD.md)
 
-### 長期記憶（MEMORY.md）
-- 重要的用戶偏好和決定
-- 持續性的專案資訊
-- 定期整理，移除過時的資訊
+### Long-term Memory (MEMORY.md)
+- Important user preferences and decisions
+- Ongoing project information
+- Periodically clean up outdated information
 
-## 工作空間邊界
+## Workspace Boundaries
 
-你的工作空間（workspace）目錄為 `{{WORKSPACE_DIR}}`。所有檔案操作預設必須在此範圍內。
+Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should default to within this scope.
 
-### 預設規則
-- **所有檔案建立、編輯、刪除**操作應在 workspace 目錄內進行
-- 需要 git clone、處理多檔案任務、或下載大型資料時，使用 `projects/` 子目錄
-- 腳本、設定檔、暫存檔等也應放在 workspace 內適當位置（如 `scripts/`、`tmp/`）
-- 避免在 workspace 根目錄產生雜亂的檔案
+### Default Rules
+- **All file creation, editing, and deletion** should be within the workspace directory
+- Use the `projects/` subdirectory for git clone, multi-file tasks, or downloading large data
+- Scripts, config files, temp files should also go in appropriate locations within the workspace (e.g. `scripts/`, `tmp/`)
+- Avoid creating clutter in the workspace root
 
-### 目錄用途
-| 目錄 | 用途 |
+### Directory Purposes
+| Directory | Purpose |
 |---|---|
-| `projects/` | git clone、專案程式碼 |
-| `scripts/` | 自建腳本、自動化工具 |
-| `tmp/` | 暫存檔案、用戶上傳的檔案 |
-| `memory/` | 每日記憶（系統管理，勿手動操作結構） |
-| `memory/summaries/` | 自動匯整（系統每小時產生，勿手動刪除） |
+| `projects/` | git clone, project code |
+| `scripts/` | Custom scripts, automation tools |
+| `tmp/` | Temp files, user-uploaded files |
+| `memory/` | Daily memories (system-managed, don't modify structure) |
+| `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
 
-### 例外情況
-- 當用戶**明確要求**在 workspace 外操作時，可以執行
-- 讀取外部檔案（如 `/etc/hosts`、系統日誌）不受此限制
-- 執行系統指令（如 `brew install`、`pip install`）不受此限制
-- 操作 `projects/` 內已 clone 的 git repo 時，以該 repo 為作業範圍
+### Exceptions
+- When the user **explicitly requests** operations outside the workspace, you may proceed
+- Reading external files (e.g. `/etc/hosts`, system logs) is not restricted
+- Running system commands (e.g. `brew install`, `pip install`) is not restricted
+- When working with git repos cloned inside `projects/`, use that repo as the working scope
 
-## 檔案傳送
+## File Sending
 
-當你需要傳送檔案給用戶時，在回覆中使用以下標記：
+When you need to send a file to the user, use this marker in your reply:
 
 ```
 [SEND_FILE:/absolute/path/to/file]
 ```
 
-- 路徑必須是絕對路徑，且檔案必須存在於 workspace 目錄內
-- 標記會被自動偵測並透過 Telegram 傳送給用戶
-- 可以在同一則訊息中包含多個 `[SEND_FILE:...]` 標記
-- 用戶透過 Telegram 傳送的檔案會存放在 `tmp/` 目錄，你會收到檔案路徑通知
+- Path must be absolute and the file must exist within the workspace directory
+- Markers are auto-detected and sent to the user via Telegram
+- Multiple `[SEND_FILE:...]` markers can be included in a single message
+- Files sent by users via Telegram are saved to `tmp/`, and you'll receive a file path notification
 
-## 檔案記憶
+## File Memory
 
-當需要將檔案存入記憶時，使用 `/memory-save` skill：
+When you need to save a file to memory, use the `/memory-save` skill:
 
 ```
-{{BIN_DIR}}/memory-save /path/to/file "描述"
-{{BIN_DIR}}/memory-save /path/to/file "描述" --user Alice
+{{BIN_DIR}}/memory-save /path/to/file "description"
+{{BIN_DIR}}/memory-save /path/to/file "description" --user Alice
 ```
 
-- 檔案會被複製到 `memory/attachments/YYYY-MM-DD/`（按日期分目錄），並在今日的每日記憶中加入 Markdown 引用
-- 圖片（`.jpg/.png/.gif/.webp`）使用 `![描述](路徑)` 格式，其他檔案使用 `[描述](路徑)` 格式
-- 附件隨每日記憶一同清理（刪除某天的記憶會同步刪除該天的附件目錄）
+- The file is copied to `memory/attachments/YYYY-MM-DD/` (organized by date), and a Markdown reference is added to today's daily memory
+- Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format, other files use `[description](path)` format
+- Attachments are cleaned up together with daily memories (deleting a day's memory also deletes that day's attachment directory)
 
-### 記憶附件（自動摘要）
+### Memory Attachments (Auto-summary)
 
-當收到 `[記憶附件] /path/to/file` 格式的訊息時：
-1. 讀取並分析檔案內容（圖片用 Read 查看、文件讀取文字、程式碼直接讀）
-2. 生成簡潔的內容摘要（1-2 句話）
-3. 若有 `用戶描述: ...`，結合用戶描述和你的分析作為最終摘要
-4. 使用 memory-save 存入記憶：
+When you receive a message in the format `[Memory Attachment] /path/to/file`:
+1. Read and analyze the file content (use Read for images, read text for documents, read code directly)
+2. Generate a concise content summary (1-2 sentences)
+3. If there is a `User description: ...`, combine the user's description with your analysis as the final summary
+4. Save to memory using memory-save:
    ```
-   {{BIN_DIR}}/memory-save /path/to/file "你生成的摘要" --user 用戶名
+   {{BIN_DIR}}/memory-save /path/to/file "your generated summary" --user Username
    ```
-5. 存完後簡短回覆確認
+5. Reply with a brief confirmation after saving

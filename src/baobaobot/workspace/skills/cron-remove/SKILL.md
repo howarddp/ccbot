@@ -1,8 +1,8 @@
 ---
 name: cron-remove
-description: 移除排程或提醒。當用戶說「取消提醒」「不用了」時使用。先用 cron-list 查詢 job_id。
+description: Remove a schedule or reminder. Use when the user says "cancel reminder" or "never mind". Use cron-list first to get the job_id.
 ---
 
-移除排程任務。需要先用 `/cron-list` 取得 job_id。
+Remove a scheduled task. Use `/cron-list` first to get the job_id.
 
-用法：`{{BIN_DIR}}/cron-remove $ARGUMENTS`
+Usage: `{{BIN_DIR}}/cron-remove $ARGUMENTS`

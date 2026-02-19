@@ -1,10 +1,10 @@
 # Memory
 
-## 長期記憶
-<!-- 由 Claude Code 或用戶手動維護的重要記憶 -->
+## Long-term Memory
+<!-- Important memories maintained by Claude Code or the user -->
 
-## 重要決定
+## Key Decisions
 
-## 用戶偏好
+## User Preferences
 
-## 持續性專案
+## Ongoing Projects

@@ -39,8 +39,8 @@ async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         _edit_mode[user.id] = "soul"
         await safe_reply(
             update.message,
-            "✏️ 請發送新的 SOUL.md 內容。下一則訊息將覆蓋整個 SOUL.md。\n"
-            "發送 /cancel 取消。",
+            "✏️ Send the new SOUL.md content. Your next message will overwrite the entire SOUL.md.\n"
+            "Send /cancel to cancel.",
         )
         return
 
@@ -49,7 +49,7 @@ async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if content:
         await safe_reply(update.message, f"🫀 **SOUL.md**\n\n{content}")
     else:
-        await safe_reply(update.message, "🫀 SOUL.md 尚未設定。")
+        await safe_reply(update.message, "🫀 SOUL.md is not configured yet.")
 
 
 async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -70,7 +70,7 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if field not in field_map:
             await safe_reply(
                 update.message,
-                f"❌ 不認識的欄位: {field}\n可用欄位: name, emoji, role, vibe",
+                f"❌ Unknown field: {field}\nAvailable fields: name, emoji, role, vibe",
             )
             return
 
@@ -80,9 +80,9 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         await safe_reply(
             update.message,
-            f"✅ 已更新 {field} = {value}\n\n"
+            f"✅ Updated {field} = {value}\n\n"
             f"🪪 {updated.emoji} **{updated.name}** — {updated.role}\n"
-            f"氛圍: {updated.vibe}",
+            f"Vibe: {updated.vibe}",
         )
         return
 
@@ -94,11 +94,11 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             update.message,
             f"🪪 **IDENTITY.md**\n\n"
             f"{identity.emoji} **{identity.name}** — {identity.role}\n"
-            f"氛圍: {identity.vibe}\n\n"
-            f"使用 `/identity set <field> <value>` 修改",
+            f"Vibe: {identity.vibe}\n\n"
+            f"Use `/identity set <field> <value>` to modify",
         )
     else:
-        await safe_reply(update.message, "🪪 IDENTITY.md 尚未設定。")
+        await safe_reply(update.message, "🪪 IDENTITY.md is not configured yet.")
 
 
 async def handle_edit_mode_message(
@@ -120,7 +120,7 @@ async def handle_edit_mode_message(
     text = update.message.text.strip()
 
     if text.lower() == "/cancel":
-        await safe_reply(update.message, "❌ 已取消編輯。")
+        await safe_reply(update.message, "❌ Edit cancelled.")
         return True
 
     if target == "soul":
@@ -128,7 +128,7 @@ async def handle_edit_mode_message(
         rebuild_all_workspaces(
             config.shared_dir, config.iter_workspace_dirs(), config.recent_memory_days
         )
-        await safe_reply(update.message, "✅ SOUL.md 已更新！")
+        await safe_reply(update.message, "✅ SOUL.md updated!")
         return True
 
     return False
@@ -142,6 +142,6 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if user.id in _edit_mode:
         del _edit_mode[user.id]
-        await safe_reply(update.message, "❌ 已取消編輯。")
+        await safe_reply(update.message, "❌ Edit cancelled.")
     else:
-        await safe_reply(update.message, "沒有進行中的操作。")
+        await safe_reply(update.message, "No operation in progress.")

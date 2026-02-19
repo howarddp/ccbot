@@ -10,9 +10,9 @@ Schedule formats:
     "0 9 * * *"              Cron expression (5 fields)
 
 Examples:
-    cron-add "at:2026-02-28T09:00" "去拿藥"
-    cron-add "every:1d" "每日站會提醒" --name daily-standup
-    cron-add "0 9 * * 1-5" "週報提醒" --tz Asia/Taipei
+    cron-add "at:2026-02-28T09:00" "Pick up medicine"
+    cron-add "every:1d" "Daily standup reminder" --name daily-standup
+    cron-add "0 9 * * 1-5" "Weekly report reminder" --tz Asia/Taipei
 """
 
 import argparse

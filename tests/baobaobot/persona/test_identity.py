@@ -26,6 +26,21 @@ class TestParseIdentity:
     def test_default_template(self) -> None:
         content = """# Identity
 
+- **Name**: BaoBao
+- **Role**: Personal AI Assistant
+- **Emoji**: 🐾
+- **Vibe**: warm, dependable, sharp
+"""
+        identity = parse_identity(content)
+        assert identity.name == "BaoBao"
+        assert identity.role == "Personal AI Assistant"
+        assert identity.emoji == "🐾"
+        assert identity.vibe == "warm, dependable, sharp"
+
+    def test_chinese_keys_backward_compat(self) -> None:
+        """Existing workspaces with Chinese keys should still parse correctly."""
+        content = """# Identity
+
 - **名字**: BaoBao
 - **角色**: 個人 AI 助理
 - **Emoji**: 🐾
@@ -37,12 +52,27 @@ class TestParseIdentity:
         assert identity.emoji == "🐾"
         assert identity.vibe == "溫暖、可靠、聰明"
 
+    def test_mixed_keys(self) -> None:
+        """Files with a mix of English and Chinese keys should parse correctly."""
+        content = """# Identity
+
+- **Name**: TestBot
+- **角色**: 超級助理
+- **Emoji**: 🤖
+- **Vibe**: energetic
+"""
+        identity = parse_identity(content)
+        assert identity.name == "TestBot"
+        assert identity.role == "超級助理"
+        assert identity.emoji == "🤖"
+        assert identity.vibe == "energetic"
+
     def test_empty_content(self) -> None:
         identity = parse_identity("")
         assert identity == AgentIdentity()
 
     def test_partial_content(self) -> None:
-        content = "- **名字**: TestBot"
+        content = "- **Name**: TestBot"
         identity = parse_identity(content)
         assert identity.name == "TestBot"
         assert identity.emoji == "🐾"  # default
@@ -60,19 +90,31 @@ class TestReadIdentity:
 
 class TestUpdateIdentity:
     def test_update_name(self, workspace: Path) -> None:
-        updated = update_identity(workspace, name="小寶")
-        assert updated.name == "小寶"
+        updated = update_identity(workspace, name="TestBot")
+        assert updated.name == "TestBot"
 
         # Verify persisted
         identity = read_identity(workspace)
-        assert identity.name == "小寶"
+        assert identity.name == "TestBot"
 
     def test_update_emoji(self, workspace: Path) -> None:
         updated = update_identity(workspace, emoji="🤖")
         assert updated.emoji == "🤖"
 
     def test_update_multiple(self, workspace: Path) -> None:
-        updated = update_identity(workspace, name="小寶", vibe="活潑")
-        assert updated.name == "小寶"
-        assert updated.vibe == "活潑"
-        assert updated.role == "個人 AI 助理"  # unchanged
+        updated = update_identity(workspace, name="TestBot", vibe="lively")
+        assert updated.name == "TestBot"
+        assert updated.vibe == "lively"
+        assert updated.role == "Personal AI Assistant"  # unchanged
+
+    def test_output_uses_english_keys(self, workspace: Path) -> None:
+        """update_identity should write English keys to the file."""
+        update_identity(workspace, name="TestBot")
+        content = (workspace / "IDENTITY.md").read_text()
+        assert "**Name**:" in content
+        assert "**Role**:" in content
+        assert "**Vibe**:" in content
+        # Should not contain Chinese keys
+        assert "名字" not in content
+        assert "角色" not in content
+        assert "氛圍" not in content

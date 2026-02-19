@@ -1,10 +1,10 @@
 ---
 name: cron-list
-description: 列出目前所有排程和提醒。當用戶問「有哪些提醒」「排了什麼」時使用。
+description: List all current schedules and reminders. Use when the user asks "what reminders do I have" or "what's scheduled".
 ---
 
-列出目前所有排程任務。
+List all scheduled tasks.
 
-用法：`{{BIN_DIR}}/cron-list`
+Usage: `{{BIN_DIR}}/cron-list`
 
-JSON 格式輸出：`{{BIN_DIR}}/cron-list --json`
+JSON output: `{{BIN_DIR}}/cron-list --json`
