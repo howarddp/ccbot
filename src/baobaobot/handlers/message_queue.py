@@ -269,7 +269,9 @@ async def _process_content_task(
                     parse_mode="MarkdownV2",
                     link_preview_options=NO_LINK_PREVIEW,
                 )
-                await _check_and_send_status(bot, user_id, wid, task.thread_id, agent_ctx)
+                await _check_and_send_status(
+                    bot, user_id, wid, task.thread_id, agent_ctx
+                )
                 return
             except RetryAfter:
                 raise
@@ -426,7 +428,9 @@ async def _process_status_update_task(
         if stored_wid != wid:
             # Window changed - delete old and send new
             await _do_clear_status_message(bot, user_id, tid, agent_ctx)
-            await _do_send_status_message(bot, user_id, tid, wid, status_text, agent_ctx)
+            await _do_send_status_message(
+                bot, user_id, tid, wid, status_text, agent_ctx
+            )
         elif status_text == last_text:
             # Same content, skip edit
             pass
@@ -535,7 +539,9 @@ async def _check_and_send_status(
     tid = thread_id or 0
     status_line = parse_status_line(pane_text)
     if status_line:
-        await _do_send_status_message(bot, user_id, tid, window_id, status_line, agent_ctx)
+        await _do_send_status_message(
+            bot, user_id, tid, window_id, status_line, agent_ctx
+        )
 
 
 async def enqueue_content_message(

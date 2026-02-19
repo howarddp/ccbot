@@ -1,6 +1,8 @@
 """Tests for main.main() entry point — tmux auto-launch logic."""
 
+import os
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from baobaobot.main import main
@@ -8,6 +10,7 @@ from baobaobot.main import main
 # Patches needed when main() reaches the bot startup path (past tmux check).
 _BOT_STARTUP_PATCHES = (
     "baobaobot.main.logging",
+    "baobaobot.settings.load_settings",
     "baobaobot.workspace.manager.WorkspaceManager",
     "baobaobot.agent_context.create_agent_context",
     "baobaobot.bot.create_bot",
@@ -16,6 +19,11 @@ _BOT_STARTUP_PATCHES = (
 
 def _enter_bot_patches():
     """Context-manage all bot startup patches. Returns (mocks, exits)."""
+    # Ensure settings.toml exists so main() doesn't trigger interactive _setup()
+    config_dir = Path(os.environ["BAOBAOBOT_DIR"])
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "settings.toml").write_text("[global]\n[[agents]]\nname = 'test'\n")
+
     mocks = {}
     exits = []
     for target in _BOT_STARTUP_PATCHES:
@@ -25,6 +33,11 @@ def _enter_bot_patches():
         exits.append(p)
     # create_bot must return a mock application
     mocks["baobaobot.bot.create_bot"].return_value = MagicMock()
+    # load_settings must return a list with a mock AgentConfig
+    mock_cfg = MagicMock()
+    mock_cfg.shared_dir = config_dir / "shared"
+    mock_cfg.agent_dir = config_dir / "agents" / "test"
+    mocks["baobaobot.settings.load_settings"].return_value = [mock_cfg]
     # create_agent_context must return a mock AgentContext with tmux_manager
     mock_ctx = MagicMock()
     mock_ctx.tmux_manager.get_or_create_session.return_value = MagicMock(
@@ -108,11 +121,14 @@ class TestMainSubcommands:
             mock_hook.assert_called_once()
             mock_tmux.assert_not_called()
 
-    def test_init_subcommand_bypasses_tmux(self, monkeypatch):
+    def test_init_subcommand_bypasses_tmux(self, monkeypatch, tmp_path):
         """'baobaobot init' goes to init logic, not tmux."""
         monkeypatch.setattr(sys, "argv", ["baobaobot", "init"])
+        mock_cfg = MagicMock()
+        mock_cfg.shared_dir = tmp_path / "shared"
         with (
             patch("baobaobot.main._launch_in_tmux") as mock_tmux,
+            patch("baobaobot.settings.load_settings", return_value=[mock_cfg]),
             patch("baobaobot.workspace.manager.WorkspaceManager") as mock_wm,
             patch("baobaobot.main.print"),
         ):

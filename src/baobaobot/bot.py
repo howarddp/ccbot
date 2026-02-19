@@ -670,7 +670,9 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if msg.voice:
         from .transcribe import transcribe_voice
 
-        transcript = await transcribe_voice(dest)
+        transcript = await transcribe_voice(
+            dest, whisper_model=ctx.config.whisper_model
+        )
         if transcript:
             caption = msg.caption or ""
             lines = [f"[Voice Message] {dest}", f"Transcript: {transcript}"]

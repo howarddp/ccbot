@@ -3,8 +3,8 @@
 Handles four execution modes:
   1. `baobaobot hook` — delegates to hook.hook_main() for Claude Code hook processing.
   2. `baobaobot init` — initializes shared files (persona + bin scripts).
-  3. `baobaobot setup` — interactive first-time setup (create .env, init shared,
-     install hook).
+  3. `baobaobot setup` — interactive first-time setup (create .env + settings.toml,
+     init shared, install hook).
   4. Default — configures logging, initializes shared files + tmux session, and starts
      the Telegram bot polling loop via bot.create_bot().
 
@@ -22,17 +22,17 @@ import time
 
 
 def _setup() -> None:
-    """Interactive first-time setup."""
+    """Interactive first-time setup — produces .env (secrets) + settings.toml."""
     from pathlib import Path
 
     from .utils import baobaobot_dir
 
     default_dir = Path.home() / ".baobaobot"
     config_dir = baobaobot_dir()
-    env_file = config_dir / ".env"
+    toml_path = config_dir / "settings.toml"
 
-    if env_file.exists():
-        resp = input(f"{env_file} already exists. Overwrite? [y/N] ")
+    if toml_path.exists():
+        resp = input(f"{toml_path} already exists. Overwrite? [y/N] ")
         if resp.lower() != "y":
             print("Setup cancelled.")
             return
@@ -45,6 +45,7 @@ def _setup() -> None:
         config_dir = Path(os.path.expanduser(custom_dir))
     else:
         config_dir = default_dir
+    toml_path = config_dir / "settings.toml"
     env_file = config_dir / ".env"
 
     # Always persist chosen directory so baobaobot_dir() resolves it on next run
@@ -52,6 +53,10 @@ def _setup() -> None:
 
     save_dir_pointer(config_dir)
     print(f"Config directory: {config_dir}")
+
+    # Agent name
+    agent_name = input("Agent name [baobao]: ").strip() or "baobao"
+    token_env_var = f"{agent_name.upper()}_BOT_TOKEN"
 
     token = input("Telegram Bot Token (from @BotFather): ").strip()
     if not token:
@@ -66,11 +71,14 @@ def _setup() -> None:
         sys.exit(1)
 
     # Validate user IDs are numeric
+    user_ids: list[int] = []
     for uid in users.split(","):
         uid = uid.strip()
         if uid and not uid.isdigit():
             print(f"Error: '{uid}' is not a valid numeric user ID.")
             sys.exit(1)
+        if uid:
+            user_ids.append(int(uid))
 
     claude_cmd = input("Claude command [claude]: ").strip()
     if not claude_cmd:
@@ -85,32 +93,45 @@ def _setup() -> None:
     if enable_voice:
         whisper_model = input("Whisper model size [small]: ").strip() or "small"
 
-    # Write .env
+    # Write .env (secrets only)
     config_dir.mkdir(parents=True, exist_ok=True)
-    env_lines = [
-        f"TELEGRAM_BOT_TOKEN={token}",
-        f"ALLOWED_USERS={users}",
-        f"CLAUDE_COMMAND={claude_cmd}",
+    env_file.write_text(f"{token_env_var}={token}\n")
+    print(f"\nSecrets written to {env_file}")
+
+    # Write settings.toml
+    users_toml = ", ".join(str(u) for u in user_ids)
+    toml_lines = [
+        "[global]",
+        f'claude_command = "{claude_cmd}"',
     ]
     if whisper_model:
-        env_lines.append(f"WHISPER_MODEL={whisper_model}")
-    env_file.write_text("\n".join(env_lines) + "\n")
-    print(f"\nConfig written to {env_file}")
+        toml_lines.append(f'whisper_model = "{whisper_model}"')
+    toml_lines += [
+        "",
+        "[[agents]]",
+        f'name = "{agent_name}"',
+        f'bot_token_env = "{token_env_var}"',
+        f"allowed_users = [{users_toml}]",
+    ]
+    toml_path.write_text("\n".join(toml_lines) + "\n")
+    print(f"Settings written to {toml_path}")
 
-    # Set env so Config can load without re-reading the file
-    os.environ["TELEGRAM_BOT_TOKEN"] = token
-    os.environ["ALLOWED_USERS"] = users
-    os.environ["CLAUDE_COMMAND"] = claude_cmd
+    # Set env so load_settings can resolve the token
+    os.environ[token_env_var] = token
 
     # Init shared files
-    from .config import Config
+    from .settings import load_settings
 
-    cfg = Config()
+    agents = load_settings(config_dir=config_dir)
+    cfg = agents[0]
+
     from .workspace.manager import WorkspaceManager
 
-    wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
+    shared_dir = cfg.shared_dir
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    wm = WorkspaceManager(shared_dir, shared_dir)
     wm.init_shared()
-    print(f"Shared files initialized at {cfg.shared_dir}")
+    print(f"Shared files initialized at {shared_dir}")
 
     # Install hook
     from .hook import _install_hook
@@ -239,15 +260,19 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         # Standalone shared-files initialization
-        from .config import config
-        from .workspace.manager import WorkspaceManager
+        from .settings import load_settings
 
-        wm = WorkspaceManager(config.shared_dir, config.shared_dir)
-        wm.init_shared()
-        print(f"Shared files initialized at {config.shared_dir}")
+        agents = load_settings()
+        for cfg in agents:
+            from .workspace.manager import WorkspaceManager
+
+            cfg.shared_dir.mkdir(parents=True, exist_ok=True)
+            wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
+            wm.init_shared()
+            print(f"Shared files initialized at {cfg.shared_dir}")
 
         # Suggest hook install if not yet configured
-        from .hook import _is_hook_installed, _CLAUDE_SETTINGS_FILE
+        from .hook import _CLAUDE_SETTINGS_FILE, _is_hook_installed
 
         try:
             settings: dict = {}
@@ -279,86 +304,52 @@ def main() -> None:
     )
 
     from .agent_context import AgentContext, create_agent_context
+    from .settings import load_settings
     from .utils import baobaobot_dir
 
     config_dir = baobaobot_dir()
     toml_path = config_dir / "settings.toml"
 
+    # Auto-guide setup if settings.toml is missing
+    if not toml_path.is_file():
+        print("No settings.toml found. Running first-time setup...\n")
+        _setup()
+        # Re-check after setup
+        if not toml_path.is_file():
+            print("Setup did not produce settings.toml. Exiting.")
+            sys.exit(1)
+
+    try:
+        agent_configs = load_settings(config_dir=config_dir)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}\n")
+        print("Check your settings.toml configuration.")
+        sys.exit(1)
+
+    logging.getLogger("baobaobot").setLevel(logging.DEBUG)
+    logger = logging.getLogger(__name__)
+
     agent_contexts: list[AgentContext] = []
 
-    if toml_path.is_file():
-        # New TOML-based configuration
-        from .settings import load_settings
+    for cfg in agent_configs:
+        # Ensure agent directory exists
+        cfg.agent_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            agent_configs = load_settings(config_dir=config_dir)
-        except (FileNotFoundError, ValueError) as e:
-            print(f"Error: {e}\n")
-            print("Check your settings.toml configuration.")
-            sys.exit(1)
-
-        logging.getLogger("baobaobot").setLevel(logging.DEBUG)
-        logger = logging.getLogger(__name__)
-
-        for cfg in agent_configs:
-            # Ensure agent directory exists
-            cfg.agent_dir.mkdir(parents=True, exist_ok=True)
-
-            # Initialize shared files on startup (persona + bin scripts)
-            from .workspace.manager import WorkspaceManager
-
-            wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
-            wm.init_shared()
-            logger.info("Shared files ready at %s", cfg.shared_dir)
-
-            ctx = create_agent_context(cfg)
-            agent_contexts.append(ctx)
-            logger.info(
-                "Agent '%s': allowed_users=%s, tmux_session=%s",
-                cfg.name,
-                cfg.allowed_users,
-                cfg.tmux_session_name,
-            )
-    else:
-        # Legacy .env-based configuration — bridge to AgentConfig
-        try:
-            from .config import config
-        except ValueError as e:
-            print(f"Error: {e}\n")
-            print("Run 'baobaobot setup' for interactive first-time configuration.")
-            sys.exit(1)
-
-        logging.getLogger("baobaobot").setLevel(logging.DEBUG)
-        logger = logging.getLogger(__name__)
-
+        # Initialize shared files on startup (persona + bin scripts)
         from .workspace.manager import WorkspaceManager
 
-        wm = WorkspaceManager(config.shared_dir, config.shared_dir)
+        wm = WorkspaceManager(cfg.shared_dir, cfg.shared_dir)
         wm.init_shared()
-        logger.info("Shared files ready at %s", config.shared_dir)
+        logger.info("Shared files ready at %s", cfg.shared_dir)
 
-        from .settings import AgentConfig
-
-        agent_cfg = AgentConfig(
-            name=config.tmux_session_name,
-            bot_token=config.telegram_bot_token,
-            allowed_users=frozenset(config.allowed_users),
-            tmux_session_name=config.tmux_session_name,
-            tmux_main_window_name=config.tmux_main_window_name,
-            claude_command=config.claude_command,
-            config_dir=config.config_dir,
-            agent_dir=config.config_dir,  # legacy: flat layout
-            claude_projects_path=config.claude_projects_path,
-            monitor_poll_interval=config.monitor_poll_interval,
-            show_user_messages=config.show_user_messages,
-            memory_keep_days=config.memory_keep_days,
-            recent_memory_days=config.recent_memory_days,
-            auto_assemble=config.auto_assemble,
-            whisper_model=config.whisper_model,
-            cron_default_tz=config.cron_default_tz,
+        ctx = create_agent_context(cfg)
+        agent_contexts.append(ctx)
+        logger.info(
+            "Agent '%s': allowed_users=%s, tmux_session=%s",
+            cfg.name,
+            cfg.allowed_users,
+            cfg.tmux_session_name,
         )
-        agent_contexts.append(create_agent_context(agent_cfg))
-        logger.info("Allowed users: %s", config.allowed_users)
 
     # Ensure tmux sessions exist for all agents
     for ctx in agent_contexts:

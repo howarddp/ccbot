@@ -74,6 +74,31 @@ class TestAgentConfig:
         assert cfg.is_user_allowed(111) is True
         assert cfg.is_user_allowed(999) is False
 
+    def test_workspace_dir_for_special_chars(self, tmp_path: Path):
+        cfg = AgentConfig(
+            name="test",
+            agent_dir=tmp_path / "agents" / "test",
+        )
+        ws = cfg.workspace_dir_for('a:b*c?"<>|')
+        assert ":" not in ws.name
+        assert "*" not in ws.name
+
+    def test_workspace_dir_for_dots_only(self, tmp_path: Path):
+        cfg = AgentConfig(
+            name="test",
+            agent_dir=tmp_path / "agents" / "test",
+        )
+        ws = cfg.workspace_dir_for("..")
+        assert ws.name == "workspace_unnamed"
+
+    def test_workspace_dir_for_truncates_long_name(self, tmp_path: Path):
+        cfg = AgentConfig(
+            name="test",
+            agent_dir=tmp_path / "agents" / "test",
+        )
+        ws = cfg.workspace_dir_for("x" * 200)
+        assert len(ws.name) <= len("workspace_") + 100
+
     def test_defaults(self):
         cfg = AgentConfig(name="mybot")
         assert cfg.agent_type == "claude"
