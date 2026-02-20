@@ -12,27 +12,59 @@
 
 ### At Session Start
 - Read the user's profile from `{{USERS_DIR}}/` (filename is `<user_id>.md`) to determine their preferred language, timezone, and other preferences
-- Browse recent 3 days of memory/ daily memories and memory/summaries/ auto-summaries
+- Run `{{BIN_DIR}}/memory-list` to see recent daily memories and available tags
+- Browse the relevant experience/ topic files listed in the Memory Context section below
+- Use `{{BIN_DIR}}/memory-search <query>` to find specific past information when needed
 
 ### During a Session
 - When encountering important information (user preferences, decisions, TODOs), write to memory/YYYY-MM-DD.md
-- For major decisions or long-term information, update memory/EXPERIENCE.md
+- For major decisions or long-term information, write to `memory/experience/` (one topic per file, kebab-case naming)
 
 ## Memory Management
 
-### Memory Format (memory/YYYY-MM-DD.md)
+### Daily Memory (memory/YYYY-MM-DD.md)
+
+Daily memory files use Obsidian-compatible YAML frontmatter:
+
+```yaml
+---
+date: 2026-02-15
+tags: []
+---
+```
+
+Content guidelines:
 - Use ## headings to categorize (conversation summary, decisions, TODOs, observations)
 - Keep it concise, 1-2 lines per memory entry
-- Timestamps are recorded in the filename (date)
 - Tag which user the information belongs to, e.g. `- [Alice] requested login bug fix`
+- Add tags to the frontmatter as appropriate: `#decision`, `#preference`, `#todo`, `#bug`, `#learning`, `#project`
 
 ### Auto Summaries (memory/summaries/)
 - System-managed directory; hourly cron job handles summary creation automatically
 
-### Long-term Memory (memory/EXPERIENCE.md)
-- Important user preferences and decisions
-- Ongoing project information
+### Memory Consolidation
+- A weekly system job reviews daily memories older than 21 days
+- Important content is consolidated into `memory/experience/` topic files
+- Old daily files are deleted after consolidation
+- This keeps the daily memory directory manageable while preserving long-term knowledge
+
+### Long-term Memory (memory/experience/)
+
+Topic-based long-term memory files. Each file covers a single topic:
+- Filename: kebab-case descriptive name (e.g. `user-preferences.md`, `project-architecture.md`)
+- You decide when to create, update, or remove topic files
 - Periodically clean up outdated information
+- Files are Obsidian-compatible Markdown (wikilinks, tags OK)
+
+### Tags
+
+Use these tags in frontmatter or inline to categorize memories:
+- `#decision` — architectural/design decisions made
+- `#preference` — user preferences and settings
+- `#todo` — tasks to follow up on
+- `#bug` — bugs encountered and their fixes
+- `#learning` — lessons learned, tips, patterns
+- `#project` — project-specific context and status
 
 ## Workspace Boundaries
 
@@ -51,6 +83,7 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 | `scripts/` | Custom scripts, automation tools |
 | `tmp/` | Temp files, user-uploaded files |
 | `memory/` | Daily memories (create new files freely, don't rename or reorganize existing) |
+| `memory/experience/` | Long-term topic memories (one topic per file, kebab-case naming) |
 | `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
 
 ### Exceptions

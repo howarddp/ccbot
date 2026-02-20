@@ -166,25 +166,6 @@ class TestAttachmentCleanup:
         remaining = [d for d in att_dir.iterdir() if d.is_dir()]
         assert len(remaining) == 0
 
-    def test_cleanup_removes_old_attachments(
-        self, workspace: Path, mm: MemoryManager
-    ) -> None:
-        att_dir = workspace / "memory" / "attachments"
-        old_date = "2020-01-01"
-        (workspace / "memory" / f"{old_date}.md").write_text("- old\n")
-        (att_dir / old_date).mkdir(parents=True, exist_ok=True)
-        (att_dir / old_date / "old.jpg").write_bytes(b"old")
-
-        today = date.today().isoformat()
-        (workspace / "memory" / f"{today}.md").write_text("- today\n")
-        (att_dir / today).mkdir(parents=True, exist_ok=True)
-        (att_dir / today / "new.jpg").write_bytes(b"new")
-
-        count = mm.cleanup(keep_days=30)
-        assert count == 1
-        assert not (att_dir / old_date).exists()
-        assert (att_dir / today / "new.jpg").exists()
-
 
 class TestWorkspaceInit:
     def test_attachments_dir_created(self, workspace: Path) -> None:

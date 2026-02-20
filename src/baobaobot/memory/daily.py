@@ -16,6 +16,14 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+_DAILY_FRONTMATTER_TEMPLATE = """\
+---
+date: {date}
+tags: []
+---
+"""
+
+
 def _memory_dir(workspace_dir: Path) -> Path:
     """Get the memory directory path."""
     return workspace_dir / "memory"
@@ -53,12 +61,23 @@ def get_today(workspace_dir: Path) -> str | None:
     return get_daily(workspace_dir, date.today().isoformat())
 
 
+def _create_daily_with_frontmatter(path: Path, date_str: str) -> None:
+    """Create a new daily memory file with YAML frontmatter."""
+    path.write_text(_DAILY_FRONTMATTER_TEMPLATE.format(date=date_str), encoding="utf-8")
+
+
 def write_daily(workspace_dir: Path, date_str: str, content: str) -> None:
-    """Write content to a daily memory file."""
+    """Write content to a daily memory file.
+
+    If content doesn't start with frontmatter (---), a frontmatter block is prepended.
+    """
     mem_dir = _memory_dir(workspace_dir)
     mem_dir.mkdir(parents=True, exist_ok=True)
     path = _daily_path(workspace_dir, date_str)
-    path.write_text(content.strip() + "\n", encoding="utf-8")
+    body = content.strip() + "\n"
+    if not body.startswith("---\n"):
+        body = _DAILY_FRONTMATTER_TEMPLATE.format(date=date_str) + body
+    path.write_text(body, encoding="utf-8")
     logger.info("Wrote daily memory: %s", date_str)
 
 
@@ -96,10 +115,16 @@ def _attachments_dir(workspace_dir: Path) -> Path:
 
 
 def append_to_daily(workspace_dir: Path, line: str) -> None:
-    """Append a single line to today's daily memory file."""
+    """Append a single line to today's daily memory file.
+
+    Creates the file with YAML frontmatter if it doesn't exist.
+    """
     mem_dir = _memory_dir(workspace_dir)
     mem_dir.mkdir(parents=True, exist_ok=True)
-    path = _daily_path(workspace_dir, date.today().isoformat())
+    today_str = date.today().isoformat()
+    path = _daily_path(workspace_dir, today_str)
+    if not path.exists():
+        _create_daily_with_frontmatter(path, today_str)
     with path.open("a", encoding="utf-8") as f:
         f.write(line.rstrip("\n") + "\n")
 

@@ -1,7 +1,7 @@
 """Memory search — plain-text search across all memory files.
 
-Provides grep-style search across daily memory files and memory/EXPERIENCE.md,
-returning matching lines with file and line context.
+Provides grep-style search across daily memory files and memory/experience/
+topic files, returning matching lines with file and line context.
 
 Key class: MemorySearchResult.
 Key function: search_memories().
@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 class MemorySearchResult:
     """A single search match in a memory file."""
 
-    file: (
-        str  # Relative filename (e.g. "memory/2026-02-15.md" or "memory/EXPERIENCE.md")
-    )
+    file: str  # Relative filename (e.g. "memory/2026-02-15.md" or "memory/experience/topic.md")
     line_num: int
     line: str  # The matching line content
 
@@ -30,7 +28,7 @@ def search_memories(workspace_dir: Path, query: str) -> list[MemorySearchResult]
     """Search all memory files for a query string (case-insensitive).
 
     Searches:
-      - workspace/memory/EXPERIENCE.md (long-term memory)
+      - workspace/memory/experience/*.md (long-term topic memories)
       - workspace/memory/*.md (daily memories)
 
     Returns:
@@ -44,10 +42,12 @@ def search_memories(workspace_dir: Path, query: str) -> list[MemorySearchResult]
         logger.warning("Invalid search pattern: %s", query)
         return results
 
-    # Search EXPERIENCE.md (long-term memory)
-    experience_md = workspace_dir / "memory" / "EXPERIENCE.md"
-    if experience_md.exists():
-        _search_file(experience_md, "memory/EXPERIENCE.md", pattern, results)
+    # Search experience/ topic files (long-term memory)
+    experience_dir = workspace_dir / "memory" / "experience"
+    if experience_dir.exists():
+        for f in sorted(experience_dir.glob("*.md")):
+            rel = f"memory/experience/{f.name}"
+            _search_file(f, rel, pattern, results)
 
     # Search daily memory files
     memory_dir = workspace_dir / "memory"

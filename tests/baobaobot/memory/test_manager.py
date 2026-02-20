@@ -47,6 +47,19 @@ class TestListDaily:
         memories = mm.list_daily(days=7)
         assert len(memories) == 0
 
+    def test_skips_frontmatter_in_preview(
+        self, mm: MemoryManager, workspace: Path
+    ) -> None:
+        memory_dir = workspace / "memory"
+        today = date.today().isoformat()
+        (memory_dir / f"{today}.md").write_text(
+            "---\ndate: {}\ntags: []\n---\n## Real content\n- thing".format(today)
+        )
+
+        memories = mm.list_daily(days=7)
+        assert len(memories) == 1
+        assert memories[0].preview == "## Real content"
+
 
 class TestGetDaily:
     def test_exists(self, mm: MemoryManager, workspace: Path) -> None:
@@ -84,12 +97,15 @@ class TestDeleteAllDaily:
         assert count == 5
         assert mm.list_daily(days=30) == []
 
-    def test_preserves_experience_md(self, mm: MemoryManager, workspace: Path) -> None:
+    def test_preserves_experience_dir(self, mm: MemoryManager, workspace: Path) -> None:
         memory_dir = workspace / "memory"
         (memory_dir / "2026-02-15.md").write_text("daily")
+        exp_dir = memory_dir / "experience"
+        (exp_dir / "important.md").write_text("keep this")
 
         mm.delete_all_daily()
-        assert (memory_dir / "EXPERIENCE.md").is_file()
+        assert (exp_dir / "important.md").is_file()
+        assert (exp_dir / "important.md").read_text() == "keep this"
 
 
 class TestSearch:
@@ -101,14 +117,13 @@ class TestSearch:
         assert len(results) == 1
         assert "keyword" in results[0].line
 
-    def test_finds_in_experience_md(self, mm: MemoryManager, workspace: Path) -> None:
-        (workspace / "memory" / "EXPERIENCE.md").write_text(
-            "# Experience\n\nImportant: special note"
-        )
+    def test_finds_in_experience_dir(self, mm: MemoryManager, workspace: Path) -> None:
+        exp_dir = workspace / "memory" / "experience"
+        (exp_dir / "notes.md").write_text("Important: special note")
 
         results = mm.search("special")
         assert len(results) == 1
-        assert results[0].file == "memory/EXPERIENCE.md"
+        assert results[0].file == "memory/experience/notes.md"
 
     def test_case_insensitive(self, mm: MemoryManager, workspace: Path) -> None:
         memory_dir = workspace / "memory"
@@ -122,29 +137,18 @@ class TestSearch:
         assert results == []
 
 
-class TestCleanup:
-    def test_removes_old(self, mm: MemoryManager, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        today = date.today()
+class TestListExperienceFiles:
+    def test_empty(self, mm: MemoryManager) -> None:
+        assert mm.list_experience_files() == []
 
-        # Recent file
-        (memory_dir / f"{today.isoformat()}.md").write_text("recent")
+    def test_lists_files(self, mm: MemoryManager, workspace: Path) -> None:
+        exp_dir = workspace / "memory" / "experience"
+        (exp_dir / "user-preferences.md").write_text("prefs")
+        (exp_dir / "project-arch.md").write_text("arch")
 
-        # Old file
-        old = today - timedelta(days=60)
-        (memory_dir / f"{old.isoformat()}.md").write_text("old")
+        files = mm.list_experience_files()
+        assert files == ["project-arch", "user-preferences"]
 
-        count = mm.cleanup(keep_days=30)
-        assert count == 1
-        assert mm.get_daily(today.isoformat()) is not None
-        assert mm.get_daily(old.isoformat()) is None
-
-
-class TestGetSummary:
-    def test_reads_experience_md(self, mm: MemoryManager, workspace: Path) -> None:
-        summary = mm.get_summary()
-        assert "Experience" in summary
-
-    def test_missing_file(self, tmp_path: Path) -> None:
+    def test_missing_dir(self, tmp_path: Path) -> None:
         mm = MemoryManager(tmp_path)
-        assert mm.get_summary() == ""
+        assert mm.list_experience_files() == []

@@ -25,10 +25,6 @@ class TestInitShared:
         for filename in ["AGENTSOUL.md", "AGENTS.md"]:
             assert (manager.shared_dir / filename).is_file()
 
-    def test_does_not_deploy_experience_md(self, manager: WorkspaceManager) -> None:
-        manager.init_shared()
-        assert not (manager.shared_dir / "EXPERIENCE.md").is_file()
-
     def test_idempotent(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
         agentsoul = manager.shared_dir / "AGENTSOUL.md"
@@ -45,9 +41,9 @@ class TestInitWorkspace:
         assert (manager.workspace_dir / "projects").is_dir()
         assert manager.memory_dir.is_dir()
 
-    def test_deploys_experience_md(self, manager: WorkspaceManager) -> None:
+    def test_creates_experience_dir(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
-        assert (manager.memory_dir / "EXPERIENCE.md").is_file()
+        assert (manager.memory_dir / "experience").is_dir()
 
     def test_does_not_deploy_shared_templates(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
@@ -56,11 +52,12 @@ class TestInitWorkspace:
 
     def test_idempotent(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
-        experience = manager.memory_dir / "EXPERIENCE.md"
-        experience.write_text("custom memory")
+        # Put a file in experience/ to verify it's preserved
+        exp_dir = manager.memory_dir / "experience"
+        (exp_dir / "topic.md").write_text("custom memory")
 
-        manager.init_workspace()  # Should NOT overwrite
-        assert experience.read_text() == "custom memory"
+        manager.init_workspace()  # Should NOT delete existing files
+        assert (exp_dir / "topic.md").read_text() == "custom memory"
 
 
 class TestBinScripts:

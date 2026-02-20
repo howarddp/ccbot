@@ -116,7 +116,6 @@ allowed_users = [{users_toml}]
 claude_command = "{claude_cmd}"
 
 # Memory
-memory_keep_days = 30          # how long to keep daily memory files
 recent_memory_days = 7         # default days shown in /memory command
 auto_assemble = true           # auto-reassemble BAOBAOBOT.md on workspace changes
 

@@ -66,7 +66,6 @@ class AgentConfig:
     show_user_messages: bool = True
 
     # Workspace / persona
-    memory_keep_days: int = 30
     recent_memory_days: int = 7
     auto_assemble: bool = True
 
@@ -132,7 +131,6 @@ _MERGEABLE_KEYS = {
     "claude_command",
     "whisper_model",
     "cron_default_tz",
-    "memory_keep_days",
     "recent_memory_days",
     "auto_assemble",
     "monitor_poll_interval",
@@ -238,7 +236,6 @@ def _build_agent_config(
         agent_dir=agent_dir,
         monitor_poll_interval=float(_get("monitor_poll_interval", 2.0)),
         show_user_messages=bool(_get("show_user_messages", True)),
-        memory_keep_days=int(_get("memory_keep_days", 30)),
         recent_memory_days=int(_get("recent_memory_days", 7)),
         auto_assemble=bool(_get("auto_assemble", True)),
         whisper_model=str(_get("whisper_model", "small")),

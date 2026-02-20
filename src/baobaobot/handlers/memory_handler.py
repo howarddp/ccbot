@@ -134,7 +134,7 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             update.message,
             "❓ Usage:\n"
             "• `/forget 2026-02-15` — delete a specific date\n"
-            "• `/forget all` — clear all daily memories (keeps EXPERIENCE.md)",
+            "• `/forget all` — clear all daily memories (keeps experience/ topic files)",
         )
         return
 

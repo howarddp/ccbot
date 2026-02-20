@@ -10,140 +10,101 @@ Examples:
 """
 
 import argparse
-import os
-import sqlite3
 import sys
-from datetime import date, datetime, timedelta
 from pathlib import Path
 
-
-def resolve_workspace() -> Path:
-    """Resolve workspace directory: --workspace > cwd (if has memory/) > error."""
-    cwd = Path.cwd()
-    if (cwd / "memory").is_dir() or (cwd / "MEMORY.md").is_file():
-        return cwd
-    print("Cannot determine workspace. Use --workspace or run from a workspace dir.", file=sys.stderr)
-    sys.exit(1)
-
-
-def sync_and_list(workspace: Path, days: int) -> None:
-    """Sync memory files to SQLite and list recent entries."""
-    db_path = workspace / "memory.db"
-    memory_dir = workspace / "memory"
-    memory_md = workspace / "MEMORY.md"
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY, source TEXT, date TEXT, line_num INTEGER, content TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS file_meta (path TEXT PRIMARY KEY, mtime REAL, size INTEGER)")
-
-    # Sync memory files
-    synced = 0
-    files_to_sync: list[tuple[str, str, str]] = []  # (source, date_str, path)
-
-    if memory_dir.is_dir():
-        for f in memory_dir.glob("*.md"):
-            try:
-                datetime.strptime(f.stem, "%Y-%m-%d")
-            except ValueError:
-                continue
-            files_to_sync.append(("daily", f.stem, str(f)))
-
-    # Scan summaries
-    summaries_dir = memory_dir / "summaries"
-    if summaries_dir.is_dir():
-        for f in summaries_dir.glob("*.md"):
-            files_to_sync.append(("summary", f.stem, str(f)))
-
-    if memory_md.is_file():
-        files_to_sync.append(("memory_md", "", str(memory_md)))
-
-    for source, date_str, fpath in files_to_sync:
-        p = Path(fpath)
-        stat = p.stat()
-        row = conn.execute("SELECT mtime, size FROM file_meta WHERE path = ?", (fpath,)).fetchone()
-        if row and row["mtime"] == stat.st_mtime and row["size"] == stat.st_size:
-            continue
-
-        content = p.read_text(encoding="utf-8")
-        lines = [l for l in content.splitlines() if l.strip()]
-
-        if source == "daily":
-            conn.execute("DELETE FROM memories WHERE source = 'daily' AND date = ?", (date_str,))
-        elif source == "summary":
-            conn.execute("DELETE FROM memories WHERE source = 'summary' AND date = ?", (date_str,))
-        else:
-            conn.execute("DELETE FROM memories WHERE source = 'memory_md'", ())
-
-        for i, line in enumerate(lines, 1):
-            conn.execute("INSERT INTO memories (source, date, line_num, content) VALUES (?, ?, ?, ?)",
-                         (source, date_str, i, line))
-
-        conn.execute("REPLACE INTO file_meta (path, mtime, size) VALUES (?, ?, ?)",
-                     (fpath, stat.st_mtime, stat.st_size))
-        synced += 1
-
-    # Clean deleted files
-    for row in conn.execute("SELECT path FROM file_meta").fetchall():
-        if not Path(row["path"]).exists():
-            conn.execute("DELETE FROM file_meta WHERE path = ?", (row["path"],))
-            conn.execute("DELETE FROM memories WHERE source = 'daily' AND date = ?",
-                         (Path(row["path"]).stem,))
-            synced += 1
-
-    conn.commit()
-
-    # List dates
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
-    rows = conn.execute(
-        "SELECT date, COUNT(*) as line_count FROM memories WHERE source = 'daily' AND date >= ? GROUP BY date ORDER BY date DESC",
-        (cutoff,)
-    ).fetchall()
-
-    # Stats
-    daily_count = conn.execute("SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'daily'").fetchone()[0]
-    total_lines = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-    has_longterm = conn.execute("SELECT COUNT(*) FROM memories WHERE source = 'memory_md'").fetchone()[0] > 0
-
-    # List summaries
-    summary_rows = conn.execute(
-        "SELECT date, COUNT(*) as line_count FROM memories WHERE source = 'summary' AND date >= ? GROUP BY date ORDER BY date DESC",
-        (cutoff,)
-    ).fetchall()
-    summary_count = conn.execute("SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'summary'").fetchone()[0]
-
-    if not rows:
-        print("No daily memories found.")
-    else:
-        print("📅 Recent memories:\n")
-        for r in rows:
-            print(f"  {r['date']}  ({r['line_count']} lines)")
-
-    if summary_rows:
-        print("\n📋 Recent auto-summaries:\n")
-        for r in summary_rows:
-            print(f"  {r['date']}  ({r['line_count']} lines)")
-
-    print(f"\n📊 Total: {daily_count} days, {total_lines} lines indexed, {summary_count} summaries")
-    if has_longterm:
-        print("   MEMORY.md: ✓")
-
-    conn.close()
+# Allow importing _memory_common from the same directory
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _memory_common import connect_db, list_tags, resolve_workspace, sync_workspace
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="List recent BaoBao memories")
-    parser.add_argument("--days", type=int, default=7, help="List last N days (default: 7)")
+    parser.add_argument(
+        "--days", type=int, default=7, help="List last N days (default: 7)"
+    )
     parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
     args = parser.parse_args()
 
-    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
-
+    workspace = resolve_workspace(args.workspace)
     if not workspace.exists():
         print(f"Workspace not found: {workspace}", file=sys.stderr)
         sys.exit(1)
 
-    sync_and_list(workspace, args.days)
+    conn = connect_db(workspace)
+    sync_workspace(conn, workspace)
+
+    from datetime import date, timedelta
+
+    cutoff = (date.today() - timedelta(days=args.days)).isoformat()
+
+    # List daily memories
+    rows = conn.execute(
+        "SELECT date, COUNT(*) as line_count FROM memories "
+        "WHERE source = 'daily' AND date >= ? GROUP BY date ORDER BY date DESC",
+        (cutoff,),
+    ).fetchall()
+
+    # List summaries
+    summary_rows = conn.execute(
+        "SELECT date, COUNT(*) as line_count FROM memories "
+        "WHERE source = 'summary' AND date >= ? GROUP BY date ORDER BY date DESC",
+        (cutoff,),
+    ).fetchall()
+
+    # Stats
+    daily_count = conn.execute(
+        "SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'daily'"
+    ).fetchone()[0]
+    total_lines = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    summary_count = conn.execute(
+        "SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'summary'"
+    ).fetchone()[0]
+    experience_count = conn.execute(
+        "SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'experience'"
+    ).fetchone()[0]
+
+    if not rows:
+        print("No daily memories found.")
+    else:
+        print("\U0001f4c5 Recent memories:\n")
+        for r in rows:
+            print(f"  {r['date']}  ({r['line_count']} lines)")
+
+    if summary_rows:
+        print("\n\U0001f4cb Recent auto-summaries:\n")
+        for r in summary_rows:
+            print(f"  {r['date']}  ({r['line_count']} lines)")
+
+    print(
+        f"\n\U0001f4ca Total: {daily_count} days, {total_lines} lines indexed, "
+        f"{summary_count} summaries"
+    )
+    if experience_count:
+        print(f"   experience/: {experience_count} topic files")
+
+    # Show attachment count
+    attachment_count = conn.execute("SELECT COUNT(*) FROM attachment_meta").fetchone()[
+        0
+    ]
+    if attachment_count:
+        image_count = conn.execute(
+            "SELECT COUNT(*) FROM attachment_meta WHERE file_type = 'image'"
+        ).fetchone()[0]
+        file_count = attachment_count - image_count
+        parts = []
+        if image_count:
+            parts.append(f"{image_count} images")
+        if file_count:
+            parts.append(f"{file_count} files")
+        print(f"   \U0001f4ce attachments: {', '.join(parts)}")
+
+    # Show tags
+    tags = list_tags(conn)
+    if tags:
+        print(f"\n\U0001f3f7\ufe0f  Tags: {', '.join('#' + t for t in tags)}")
+
+    conn.close()
 
 
 if __name__ == "__main__":

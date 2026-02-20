@@ -1,9 +1,9 @@
-"""Memory lifecycle management — listing, cleanup, and summary access.
+"""Memory lifecycle management — listing, search, and experience access.
 
 Provides MemoryManager for high-level memory operations:
   - list_daily(): list recent daily memory files.
-  - cleanup(): remove daily memories older than N days.
-  - get_summary(): read memory/EXPERIENCE.md long-term memory.
+  - search(): search memories via SQLite index.
+  - list_experience_files(): list memory/experience/ topic files.
 
 Key class: MemoryManager.
 """
@@ -11,12 +11,13 @@ Key class: MemoryManager.
 import logging
 import shutil
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from .daily import delete_daily, get_daily
 from .db import MemoryDB
 from .search import MemorySearchResult
+from .utils import strip_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,8 @@ class MemoryManager:
                 continue
 
             try:
-                content = f.read_text(encoding="utf-8").strip()
+                raw = f.read_text(encoding="utf-8").strip()
+                content = strip_frontmatter(raw).strip()
                 first_line = content.split("\n")[0] if content else ""
                 if len(first_line) > 60:
                     first_line = first_line[:57] + "..."
@@ -94,14 +96,14 @@ class MemoryManager:
     def delete_all_daily(self) -> int:
         """Delete all daily memory files and all attachments. Returns count of deleted files.
 
-        Preserves EXPERIENCE.md (long-term memory).
+        Preserves experience/ topic files (long-term memory).
         """
         if not self.memory_dir.exists():
             return 0
 
         count = 0
         for f in self.memory_dir.glob("*.md"):
-            if f.name == "EXPERIENCE.md":
+            if f.name == "EXPERIENCE.md":  # Legacy — may exist in old workspaces
                 continue
             try:
                 f.unlink()
@@ -134,7 +136,7 @@ class MemoryManager:
         results: list[MemorySearchResult] = []
         for row in rows:
             if row["source"] == "experience":
-                file = "memory/EXPERIENCE.md"
+                file = f"memory/experience/{row['date']}.md"
             elif row["source"] == "summary":
                 file = f"memory/summaries/{row['date']}.md"
             else:
@@ -148,61 +150,17 @@ class MemoryManager:
             )
         return results
 
-    def get_summary(self) -> str:
-        """Read memory/EXPERIENCE.md long-term memory."""
-        memory_path = self.memory_dir / "EXPERIENCE.md"
-        try:
-            return memory_path.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-
-    def cleanup(self, keep_days: int = 30) -> int:
-        """Remove daily memory files older than keep_days, including their attachments.
+    def list_experience_files(self) -> list[str]:
+        """List memory/experience/ topic file names (without extension).
 
         Returns:
-            Number of files deleted.
+            List of topic names sorted alphabetically,
+            e.g. ["project-architecture", "user-preferences"].
         """
-        if not self.memory_dir.exists():
-            return 0
-
-        cutoff = date.today() - timedelta(days=keep_days)
-        count = 0
-
-        for f in self.memory_dir.glob("*.md"):
-            try:
-                file_date = datetime.strptime(f.stem, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-
-            if file_date < cutoff:
-                self._cleanup_attachments_for_date(f.stem)
-                try:
-                    f.unlink()
-                    count += 1
-                    logger.debug("Cleaned up old memory: %s", f.name)
-                except OSError:
-                    continue
-
-        # Clean up old summaries
-        summaries_dir = self.memory_dir / "summaries"
-        if summaries_dir.exists():
-            for f in summaries_dir.glob("*.md"):
-                try:
-                    # Parse date from filename: YYYY-MM-DD_HH00.md
-                    file_date = datetime.strptime(f.stem[:10], "%Y-%m-%d").date()
-                except ValueError:
-                    continue
-                if file_date < cutoff:
-                    try:
-                        f.unlink()
-                        count += 1
-                        logger.debug("Cleaned up old summary: %s", f.name)
-                    except OSError:
-                        continue
-
-        if count:
-            logger.info("Cleaned up %d old daily memories (cutoff: %s)", count, cutoff)
-        return count
+        exp_dir = self.memory_dir / "experience"
+        if not exp_dir.is_dir():
+            return []
+        return sorted(f.stem for f in exp_dir.glob("*.md"))
 
     def _cleanup_summaries_for_date(self, date_str: str) -> int:
         """Delete summary files for the given date.

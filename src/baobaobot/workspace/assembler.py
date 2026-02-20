@@ -1,9 +1,10 @@
 """BAOBAOBOT.md assembly — composes the root BAOBAOBOT.md from shared files.
 
 Reads AGENTS.md and AGENTSOUL.md from shared_dir, then writes a single
-assembled BAOBAOBOT.md in the workspace root. Memory (memory/EXPERIENCE.md,
-daily memories, summaries) is NOT embedded — Claude Code reads those on demand
-via skills (memory-list, memory-search).
+assembled BAOBAOBOT.md in the workspace root.  A dynamic "Memory Context"
+section lists available experience/ topic files so Claude Code knows what
+long-term memory exists.  Daily memories are NOT embedded — Claude Code
+reads those on demand via skills (memory-list, memory-search).
 
 A thin CLAUDE.md is also written so Claude Code discovers the instructions.
 
@@ -13,6 +14,9 @@ Key class: ClaudeMdAssembler.
 import logging
 from datetime import datetime
 from pathlib import Path
+
+from baobaobot.memory.utils import strip_frontmatter
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +53,29 @@ class ClaudeMdAssembler:
         self._source_mtimes: dict[str, float] = {}
 
     def _read_file(self, path: Path) -> str:
-        """Read a file, returning empty string if it doesn't exist."""
+        """Read a file, stripping frontmatter, returning empty string if missing."""
         try:
-            return path.read_text(encoding="utf-8").strip()
+            content = path.read_text(encoding="utf-8").strip()
+            return strip_frontmatter(content).strip()
         except OSError:
             return ""
 
     def _resolve_source_dir(self, source: str) -> Path:
         """Return shared_dir or workspace_dir based on source tag."""
         return self.shared_dir if source == "shared" else self.workspace_dir
+
+    def _experience_listing(self) -> str:
+        """Generate a listing of memory/experience/ topic files."""
+        exp_dir = self.workspace_dir / "memory" / "experience"
+        if not exp_dir.is_dir():
+            return ""
+        files = sorted(f.stem for f in exp_dir.glob("*.md"))
+        if not files:
+            return ""
+        lines = ["### Experience Topics (Long-term Memory)\n"]
+        for name in files:
+            lines.append(f"- `{name}` → memory/experience/{name}.md")
+        return "\n".join(lines)
 
     def assemble(self) -> str:
         """Build the full BAOBAOBOT.md content from source files."""
@@ -71,6 +89,11 @@ class ClaudeMdAssembler:
             if content:
                 parts.append(f"---\n\n## {section_title}")
                 parts.append(content)
+
+        # Dynamic memory context: list experience topic files
+        exp_listing = self._experience_listing()
+        if exp_listing:
+            parts.append(f"---\n\n## Memory Context\n\n{exp_listing}")
 
         result = "\n\n".join(parts) + "\n"
         # Replace template variables (safety net for old AGENTS.md with {{BIN_DIR}})
@@ -92,7 +115,7 @@ class ClaudeMdAssembler:
         self._update_mtimes()
 
     def _update_mtimes(self) -> None:
-        """Cache modification times of source files."""
+        """Cache modification times of source files and experience dir."""
         self._source_mtimes = {}
         for filename, _, source in _SECTION_ORDER:
             source_dir = self._resolve_source_dir(source)
@@ -100,8 +123,13 @@ class ClaudeMdAssembler:
             if filepath.exists():
                 self._source_mtimes[f"{source}:{filename}"] = filepath.stat().st_mtime
 
+        # Track experience directory (mtime changes when files added/removed)
+        exp_dir = self.workspace_dir / "memory" / "experience"
+        if exp_dir.is_dir():
+            self._source_mtimes["experience_dir"] = exp_dir.stat().st_mtime
+
     def needs_rebuild(self) -> bool:
-        """Check if any source file has been modified since last assembly."""
+        """Check if any source file or experience dir has changed since last assembly."""
         if not self.output_path.exists():
             return True
 
@@ -117,6 +145,14 @@ class ClaudeMdAssembler:
                 cached = self._source_mtimes.get(f"{source}:{filename}", 0)
                 if current_mtime > cached:
                     return True
+
+        # Check experience directory for added/removed files
+        exp_dir = self.workspace_dir / "memory" / "experience"
+        if exp_dir.is_dir():
+            current_mtime = exp_dir.stat().st_mtime
+            cached = self._source_mtimes.get("experience_dir", 0)
+            if current_mtime > cached:
+                return True
 
         return False
 

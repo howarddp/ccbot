@@ -31,6 +31,13 @@ _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 # Matches tmp download prefix: YYYYMMDD_HHMMSS_
 _TMP_PREFIX_RE = re.compile(r"^\d{8}_\d{6}_")
 
+_DAILY_FRONTMATTER_TEMPLATE = """\
+---
+date: {date}
+tags: []
+---
+"""
+
 
 def resolve_workspace() -> Path:
     """Resolve workspace directory: --workspace > cwd (if has memory/) > error."""
@@ -84,7 +91,12 @@ def save_attachment(
     # Append to today's daily memory
     memory_dir = workspace / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
-    daily_path = memory_dir / f"{date.today().isoformat()}.md"
+    today_str = date.today().isoformat()
+    daily_path = memory_dir / f"{today_str}.md"
+    if not daily_path.exists():
+        daily_path.write_text(
+            _DAILY_FRONTMATTER_TEMPLATE.format(date=today_str), encoding="utf-8"
+        )
     tag = f"[{user_name}] " if user_name else ""
     line = f"- {tag}{ref}\n"
     with daily_path.open("a", encoding="utf-8") as f:

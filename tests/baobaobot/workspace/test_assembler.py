@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from baobaobot.workspace.assembler import ClaudeMdAssembler
+from baobaobot.memory.utils import strip_frontmatter
 from baobaobot.workspace.manager import WorkspaceManager
 
 
@@ -43,16 +44,18 @@ class TestAssemble:
         content = assembler.assemble()
         assert "Test personality" in content
 
-    def test_does_not_embed_memory(self, dirs: tuple[Path, Path]) -> None:
-        """Memory files should NOT be embedded — Claude Code reads them on demand."""
+    def test_does_not_embed_memory_content(self, dirs: tuple[Path, Path]) -> None:
+        """Memory file *content* should NOT be embedded — only a listing."""
         shared, workspace = dirs
-        (workspace / "memory").mkdir(exist_ok=True)
-        (workspace / "memory" / "EXPERIENCE.md").write_text(
-            "# Experience\n\nRemember this"
-        )
+        exp_dir = workspace / "memory" / "experience"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "notes.md").write_text("Remember this secret detail")
         assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
-        assert "Remember this" not in content
+        assert "Remember this secret detail" not in content
+        # But the listing should be present
+        assert "notes" in content
+        assert "Memory Context" in content
 
     def test_does_not_embed_daily_memories(self, dirs: tuple[Path, Path]) -> None:
         """Daily memory files should NOT be embedded."""
@@ -132,10 +135,10 @@ class TestNeedsRebuild:
         (shared / "AGENTSOUL.md").write_text("# Agent Soul\n\nUpdated")
         assert assembler.needs_rebuild() is True
 
-    def test_memory_change_does_not_trigger_rebuild(
+    def test_experience_dir_change_triggers_rebuild(
         self, dirs: tuple[Path, Path]
     ) -> None:
-        """Memory changes should NOT trigger rebuild — Claude Code reads on demand."""
+        """Adding/removing experience files triggers rebuild (listing changed)."""
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
@@ -143,6 +146,100 @@ class TestNeedsRebuild:
         import time
 
         time.sleep(0.01)
-        (workspace / "memory").mkdir(exist_ok=True)
-        (workspace / "memory" / "EXPERIENCE.md").write_text("# Experience\n\nUpdated")
+        exp_dir = workspace / "memory" / "experience"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "notes.md").write_text("New topic")
+        assert assembler.needs_rebuild() is True
+
+    def test_daily_memory_change_does_not_trigger_rebuild(
+        self, dirs: tuple[Path, Path]
+    ) -> None:
+        """Daily memory changes should NOT trigger rebuild."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+
+        import time
+
+        time.sleep(0.01)
+        memory_dir = workspace / "memory"
+        (memory_dir / "2026-02-15.md").write_text("- thing")
         assert assembler.needs_rebuild() is False
+
+
+class TestFrontmatterStripping:
+    def test_strips_frontmatter_from_source(self, dirs: tuple[Path, Path]) -> None:
+        """YAML frontmatter in source files should be stripped during assembly."""
+        shared, workspace = dirs
+        (shared / "AGENTSOUL.md").write_text(
+            "---\ntitle: Soul\ntags: [test]\n---\n# Agent Soul\n\n- Personality"
+        )
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "- Personality" in content
+        assert "title: Soul" not in content
+        assert "tags: [test]" not in content
+
+    def test_no_frontmatter_unchanged(self, dirs: tuple[Path, Path]) -> None:
+        """Files without frontmatter should be read as-is."""
+        shared, workspace = dirs
+        (shared / "AGENTSOUL.md").write_text("# Agent Soul\n\n- Personality")
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "- Personality" in content
+
+    def test_strip_frontmatter_function(self) -> None:
+        text = "---\ndate: 2026-02-15\ntags: []\n---\n## Content\n- thing\n"
+        result = strip_frontmatter(text)
+        assert "---" not in result
+        assert "## Content" in result
+
+    def test_strip_frontmatter_no_frontmatter(self) -> None:
+        text = "## Content\n- thing\n"
+        assert strip_frontmatter(text) == text
+
+
+class TestExperienceListing:
+    def test_lists_experience_files(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        exp_dir = workspace / "memory" / "experience"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "project-architecture.md").write_text("Architecture details")
+        (exp_dir / "user-preferences.md").write_text("User prefs")
+
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "Memory Context" in content
+        assert "project-architecture" in content
+        assert "user-preferences" in content
+
+    def test_no_listing_when_no_experience(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "## Memory Context" not in content
+        assert "Experience Topics" not in content
+
+    def test_no_listing_when_experience_dir_empty(
+        self, dirs: tuple[Path, Path]
+    ) -> None:
+        shared, workspace = dirs
+        exp_dir = workspace / "memory" / "experience"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "## Memory Context" not in content
+        assert "Experience Topics" not in content
+
+    def test_listing_sorted_alphabetically(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        exp_dir = workspace / "memory" / "experience"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "zebra-topic.md").write_text("Z")
+        (exp_dir / "alpha-topic.md").write_text("A")
+
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        alpha_pos = content.index("alpha-topic")
+        zebra_pos = content.index("zebra-topic")
+        assert alpha_pos < zebra_pos

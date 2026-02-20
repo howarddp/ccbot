@@ -2,7 +2,7 @@
 
 Manages a two-tier layout:
   - Shared dir (config_dir): AGENTSOUL.md, AGENTS.md, bin/, users/
-  - Per-topic workspace (workspace_<topic>): memory/EXPERIENCE.md, memory/, projects/, BAOBAOBOT.md
+  - Per-topic workspace (workspace_<topic>): memory/, memory/experience/, projects/, BAOBAOBOT.md
 
 Key class: WorkspaceManager.
 """
@@ -34,12 +34,11 @@ _SHARED_SYNC_FILES = [
 ]
 
 # Files deployed to each per-topic workspace (dest_subdir, filename)
-_WORKSPACE_TEMPLATE_FILES = [
-    ("memory", "EXPERIENCE.md"),
-]
+_WORKSPACE_TEMPLATE_FILES: list[tuple[str, str]] = []
 
 # Scripts deployed to shared bin/
 _BIN_SCRIPTS = [
+    "_memory_common.py",
     "memory-search",
     "memory-list",
     "memory-save",
@@ -117,6 +116,7 @@ class WorkspaceManager:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         (self.workspace_dir / "projects").mkdir(exist_ok=True)
         self.memory_dir.mkdir(exist_ok=True)
+        (self.memory_dir / "experience").mkdir(exist_ok=True)
         (self.memory_dir / "attachments").mkdir(exist_ok=True)
         (self.workspace_dir / "tmp").mkdir(exist_ok=True)
 

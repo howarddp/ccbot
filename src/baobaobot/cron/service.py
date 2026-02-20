@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -39,6 +40,15 @@ _MIN_TICK_INTERVAL = 5.0
 # System job name for hourly summaries
 _SYSTEM_SUMMARY_JOB_NAME = "_system:hourly_summary"
 
+# System job name for weekly memory consolidation
+_SYSTEM_CONSOLIDATION_JOB_NAME = "_system:weekly_consolidation"
+
+# Weekly interval in seconds (7 days)
+_CONSOLIDATION_INTERVAL_S = 7 * 24 * 3600
+
+# Daily memories older than this many days are candidates for consolidation
+_CONSOLIDATION_AGE_DAYS = 21
+
 # Idle threshold: JSONL must not have been written to in the last N seconds
 _IDLE_THRESHOLD_S = 60
 
@@ -63,6 +73,35 @@ Format: bullet points, under 10 lines, [Name] prefix per item.
 Write in the user's preferred language.
 If nothing worth recording, reply only: "[NO_NOTIFY] No summary needed."
 If you recorded a summary, reply WITHOUT [NO_NOTIFY] so the user is notified.
+"""
+
+# Consolidation prompt sent to Claude Code
+_CONSOLIDATION_PROMPT = """\
+[NO_NOTIFY] [System] Memory consolidation: Review daily memories older than \
+{age_days} days.
+
+Steps:
+1. Run `memory-list --days 90` to see all daily memories
+2. For each daily memory older than {age_days} days:
+   - Read the file content
+   - Extract important decisions, preferences, learnings, project context, or TODOs
+   - Skip trivial entries (casual chat, routine commands, already-captured info)
+3. Merge extracted information into the appropriate `memory/experience/` topic files:
+   - Update existing topic files if the info fits an existing topic
+   - Create new topic files (kebab-case naming) for new topics
+   - Remove duplicates with existing experience content
+4. After consolidation, delete the processed daily memory files:
+   `rm memory/YYYY-MM-DD.md` for each fully processed file
+5. Keep recent daily memories (< {age_days} days old) untouched
+
+Guidelines:
+- Only consolidate content worth keeping long-term
+- Use concise bullet points in experience files
+- Preserve user attribution ([Username]) where relevant
+- Write in the user's preferred language
+
+If nothing worth consolidating, reply: "[NO_NOTIFY] No consolidation needed."
+If you consolidated content, reply WITHOUT [NO_NOTIFY] with a brief summary.
 """
 
 
@@ -128,8 +167,11 @@ class CronService:
                     job.state.consecutive_errors += 1
                 # Catch up missed runs
                 if job.state.next_run_at and job.state.next_run_at < now:
-                    # System summary jobs: just reschedule, don't catch up
-                    if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
+                    # System jobs: just reschedule, don't catch up
+                    if job.system and job.name in (
+                        _SYSTEM_SUMMARY_JOB_NAME,
+                        _SYSTEM_CONSOLIDATION_JOB_NAME,
+                    ):
                         job.state.next_run_at = compute_next_run(
                             job.schedule, time.time(), self._cron_default_tz
                         )
@@ -344,6 +386,15 @@ class CronService:
                         job.state.last_status = "skipped"
                         continue
 
+                # System consolidation jobs: check for old daily memories
+                if job.system and job.name == _SYSTEM_CONSOLIDATION_JOB_NAME:
+                    if not self._should_run_consolidation(ws_name):
+                        job.state.next_run_at = compute_next_run(
+                            job.schedule, time.time(), self._cron_default_tz
+                        )
+                        job.state.last_status = "skipped"
+                        continue
+
                 await self._execute_job(ws_name, job)
 
                 # Handle delete_after_run
@@ -506,6 +557,27 @@ class CronService:
         except OSError:
             pass
 
+    # --- Consolidation checks ---
+
+    def _should_run_consolidation(self, workspace_name: str) -> bool:
+        """Check if consolidation should run: old daily memories exist."""
+        ws_dir = self._workspace_dirs.get(workspace_name)
+        if not ws_dir:
+            return False
+        memory_dir = ws_dir / "memory"
+        if not memory_dir.is_dir():
+            return False
+
+        cutoff = date.today() - timedelta(days=_CONSOLIDATION_AGE_DAYS)
+        for f in memory_dir.glob("*.md"):
+            try:
+                file_date = date.fromisoformat(f.stem)
+                if file_date < cutoff:
+                    return True
+            except ValueError:
+                continue
+        return False
+
     # --- Window resolution ---
 
     def _resolve_window(self, workspace_name: str) -> str | None:
@@ -586,31 +658,64 @@ class CronService:
         self._ensure_system_jobs()
 
     def _ensure_system_jobs(self) -> None:
-        """Ensure every workspace has the built-in system summary job."""
+        """Ensure every workspace has the built-in system jobs."""
         now = time.time()
         for ws_name, store in self._stores.items():
-            has_summary = any(j.name == _SYSTEM_SUMMARY_JOB_NAME for j in store.jobs)
-            if has_summary:
-                continue
+            changed = False
 
-            schedule = CronSchedule(kind="every", every_seconds=3600)
-            next_run = compute_next_run(schedule, now, self._cron_default_tz)
-            job = CronJob(
-                id=uuid.uuid4().hex[:8],
-                name=_SYSTEM_SUMMARY_JOB_NAME,
-                schedule=schedule,
-                message=_SUMMARY_PROMPT,
-                enabled=True,
-                system=True,
-                created_at=now,
-                updated_at=now,
-                state=CronJobState(next_run_at=next_run),
+            # Hourly summary job
+            has_summary = any(j.name == _SYSTEM_SUMMARY_JOB_NAME for j in store.jobs)
+            if not has_summary:
+                schedule = CronSchedule(kind="every", every_seconds=3600)
+                next_run = compute_next_run(schedule, now, self._cron_default_tz)
+                job = CronJob(
+                    id=uuid.uuid4().hex[:8],
+                    name=_SYSTEM_SUMMARY_JOB_NAME,
+                    schedule=schedule,
+                    message=_SUMMARY_PROMPT,
+                    enabled=True,
+                    system=True,
+                    created_at=now,
+                    updated_at=now,
+                    state=CronJobState(next_run_at=next_run),
+                )
+                store.jobs.append(job)
+                changed = True
+                logger.info(
+                    "Created system summary job %s in workspace %s", job.id, ws_name
+                )
+
+            # Weekly consolidation job
+            has_consolidation = any(
+                j.name == _SYSTEM_CONSOLIDATION_JOB_NAME for j in store.jobs
             )
-            store.jobs.append(job)
-            self._save(ws_name)
-            logger.info(
-                "Created system summary job %s in workspace %s", job.id, ws_name
-            )
+            if not has_consolidation:
+                schedule = CronSchedule(
+                    kind="every", every_seconds=_CONSOLIDATION_INTERVAL_S
+                )
+                next_run = compute_next_run(schedule, now, self._cron_default_tz)
+                prompt = _CONSOLIDATION_PROMPT.format(age_days=_CONSOLIDATION_AGE_DAYS)
+                job = CronJob(
+                    id=uuid.uuid4().hex[:8],
+                    name=_SYSTEM_CONSOLIDATION_JOB_NAME,
+                    schedule=schedule,
+                    message=prompt,
+                    enabled=True,
+                    system=True,
+                    created_at=now,
+                    updated_at=now,
+                    state=CronJobState(next_run_at=next_run),
+                )
+                store.jobs.append(job)
+                changed = True
+                logger.info(
+                    "Created system consolidation job %s in workspace %s",
+                    job.id,
+                    ws_name,
+                )
+
+            if changed:
+                self._save(ws_name)
 
     def _reload_changed_stores(self) -> None:
         """Reload stores whose JSON file has been modified externally."""

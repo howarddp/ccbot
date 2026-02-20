@@ -1,9 +1,10 @@
 """SQLite-based memory index — sync .md files and query via SQL.
 
 Provides an index layer over the plain-text memory files.  Claude Code
-continues to write ``memory/YYYY-MM-DD.md`` and ``memory/EXPERIENCE.md`` directly;
-this module watches for file changes and keeps a SQLite database in sync
-so that searches are fast and structured.
+writes ``memory/YYYY-MM-DD.md`` (daily) and ``memory/experience/*.md``
+(topic-based long-term memory) directly; this module watches for file
+changes and keeps a SQLite database in sync so that searches are fast
+and structured.
 
 The database lives at ``<workspace>/memory.db``.
 
@@ -11,18 +12,27 @@ Key class: MemoryDB.
 """
 
 import hashlib
+import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .utils import ATTACHMENT_RE, parse_tags, strip_frontmatter
+
 logger = logging.getLogger(__name__)
+
+# Schema version — bump to force DB recreation on next connect.
+# IMPORTANT: keep in sync with _memory_common.py (standalone bin scripts).
+_SCHEMA_VERSION = 3
+
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS memories (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    path        TEXT    NOT NULL,  -- relative path e.g. 'memory/2026-02-15.md'
     source      TEXT    NOT NULL,  -- 'daily' | 'experience' | 'summary'
-    date        TEXT    NOT NULL,  -- 'YYYY-MM-DD' or 'YYYY-MM-DD_HH00' or 'longterm'
+    date        TEXT    NOT NULL,  -- 'YYYY-MM-DD' or topic name or 'YYYY-MM-DD_HH00'
     line_num    INTEGER NOT NULL,
     content     TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL
@@ -31,11 +41,28 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE TABLE IF NOT EXISTS file_meta (
     path        TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
-    synced_at   TEXT NOT NULL
+    synced_at   TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT ''
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    content,
+    content='memories',
+    content_rowid='id'
+);
+
+CREATE TABLE IF NOT EXISTS attachment_meta (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_path TEXT    NOT NULL,  -- path of the .md file containing the reference
+    description TEXT    NOT NULL,
+    file_path   TEXT    NOT NULL,  -- relative path of the attachment file
+    file_type   TEXT    NOT NULL DEFAULT ''  -- 'image' or 'file'
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_date    ON memories(date);
 CREATE INDEX IF NOT EXISTS idx_memories_source  ON memories(source);
+CREATE INDEX IF NOT EXISTS idx_memories_path    ON memories(path);
+CREATE INDEX IF NOT EXISTS idx_attachment_path  ON attachment_meta(memory_path);
 """
 
 
@@ -47,6 +74,7 @@ class MemoryDB:
         self.memory_dir = workspace_dir / "memory"
         self.db_path = workspace_dir / "memory.db"
         self._conn: sqlite3.Connection | None = None
+        self._fts_available: bool = True
 
     # ------------------------------------------------------------------
     # Connection management
@@ -58,8 +86,42 @@ class MemoryDB:
             return self._conn
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
+        self._ensure_schema(self._conn)
         return self._conn
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Create or migrate schema based on version."""
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < _SCHEMA_VERSION:
+            # Drop old tables and recreate
+            conn.executescript(
+                "DROP TABLE IF EXISTS memories_fts;\n"
+                "DROP TABLE IF EXISTS attachment_meta;\n"
+                "DROP TABLE IF EXISTS memories;\n"
+                "DROP TABLE IF EXISTS file_meta;\n"
+            )
+            try:
+                conn.executescript(_SCHEMA)
+            except sqlite3.OperationalError:
+                # FTS5 not available — create schema without it
+                self._fts_available = False
+                schema_no_fts = "\n".join(
+                    line
+                    for line in _SCHEMA.splitlines()
+                    if "fts5" not in line.lower()
+                    and "memories_fts" not in line
+                    and "content='memories'" not in line
+                    and "content_rowid" not in line
+                )
+                conn.executescript(schema_no_fts)
+            conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            conn.commit()
+        else:
+            # Check if FTS5 table exists
+            fts_check = conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'memories_fts'"
+            ).fetchone()
+            self._fts_available = fts_check is not None
 
     def close(self) -> None:
         if self._conn is not None:
@@ -84,6 +146,27 @@ class MemoryDB:
             return True
         return row["content_hash"] != self._file_hash(path)
 
+    @staticmethod
+    def _parse_attachments(content: str) -> list[tuple[str, str, str]]:
+        """Parse attachment references from content.
+
+        Returns list of (description, file_path, file_type) tuples.
+        file_type is 'image' for ![...] or 'file' for [...].
+        Only matches references to memory/attachments/ paths.
+        """
+        attachments: list[tuple[str, str, str]] = []
+        for line in content.splitlines():
+            for m in ATTACHMENT_RE.finditer(line):
+                desc = m.group(1)
+                fpath = m.group(2)
+                # Only index actual memory attachments
+                if "memory/attachments/" not in fpath:
+                    continue
+                # Check if it's an image reference (match starts with !)
+                file_type = "image" if m.group(0).startswith("!") else "file"
+                attachments.append((desc, fpath, file_type))
+        return attachments
+
     def _sync_file(
         self,
         conn: sqlite3.Connection,
@@ -97,30 +180,43 @@ class MemoryDB:
         now = datetime.now().isoformat()
 
         # Remove old rows for this file
-        conn.execute(
-            "DELETE FROM memories WHERE source = ? AND date = ?", (source, date)
-        )
+        conn.execute("DELETE FROM memories WHERE path = ?", (rel,))
+        conn.execute("DELETE FROM attachment_meta WHERE memory_path = ?", (rel,))
 
-        # Insert lines
+        # Read content
         try:
-            content = path.read_text(encoding="utf-8")
+            raw_content = path.read_text(encoding="utf-8")
         except OSError:
             return
+
+        # Parse tags from raw content (before stripping frontmatter)
+        tags = parse_tags(raw_content)
+
+        # Strip frontmatter for indexing
+        content = strip_frontmatter(raw_content)
 
         for i, line in enumerate(content.splitlines(), 1):
             stripped = line.strip()
             if stripped:  # skip blank lines
                 conn.execute(
-                    "INSERT INTO memories (source, date, line_num, content, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (source, date, i, stripped, now),
+                    "INSERT INTO memories (path, source, date, line_num, content, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (rel, source, date, i, stripped, now),
                 )
 
-        # Update file meta
+        # Parse and store attachment metadata
+        for desc, fpath, ftype in self._parse_attachments(content):
+            conn.execute(
+                "INSERT INTO attachment_meta (memory_path, description, file_path, file_type) "
+                "VALUES (?, ?, ?, ?)",
+                (rel, desc, fpath, ftype),
+            )
+
+        # Update file meta with tags
         conn.execute(
-            "INSERT OR REPLACE INTO file_meta (path, content_hash, synced_at) "
-            "VALUES (?, ?, ?)",
-            (rel, current_hash, now),
+            "INSERT OR REPLACE INTO file_meta (path, content_hash, synced_at, tags) "
+            "VALUES (?, ?, ?, ?)",
+            (rel, current_hash, now, json.dumps(tags)),
         )
 
     def sync(self) -> int:
@@ -128,12 +224,15 @@ class MemoryDB:
         conn = self.connect()
         synced = 0
 
-        # Sync EXPERIENCE.md (long-term memory)
-        experience_md = self.memory_dir / "EXPERIENCE.md"
-        exp_rel = "memory/EXPERIENCE.md"
-        if experience_md.exists() and self._needs_sync(conn, experience_md, exp_rel):
-            self._sync_file(conn, experience_md, exp_rel, "experience", "longterm")
-            synced += 1
+        # Sync experience/ topic files (long-term memory)
+        experience_dir = self.memory_dir / "experience"
+        if experience_dir.exists():
+            for f in sorted(experience_dir.glob("*.md")):
+                rel = f"memory/experience/{f.name}"
+                if self._needs_sync(conn, f, rel):
+                    date_str = f.stem  # e.g. "user-preferences"
+                    self._sync_file(conn, f, rel, "experience", date_str)
+                    synced += 1
 
         # Sync daily files
         if self.memory_dir.exists():
@@ -158,9 +257,22 @@ class MemoryDB:
         synced += self._cleanup_deleted(conn)
 
         conn.commit()
+
+        # Rebuild FTS index if anything changed
+        if synced and self._fts_available:
+            self._rebuild_fts(conn)
+
         if synced:
             logger.debug("Synced %d memory files to SQLite", synced)
         return synced
+
+    def _rebuild_fts(self, conn: sqlite3.Connection) -> None:
+        """Rebuild the FTS5 index from the memories table."""
+        try:
+            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+            conn.commit()
+        except sqlite3.OperationalError:
+            self._fts_available = False
 
     def _cleanup_deleted(self, conn: sqlite3.Connection) -> int:
         """Remove index entries for files that no longer exist on disk."""
@@ -171,25 +283,10 @@ class MemoryDB:
             full = self.workspace_dir / rel
             if not full.exists():
                 conn.execute("DELETE FROM file_meta WHERE path = ?", (rel,))
-                # Determine source/date from rel path
-                if rel == "memory/EXPERIENCE.md":
-                    conn.execute(
-                        "DELETE FROM memories WHERE source = 'experience' AND date = 'longterm'"
-                    )
-                elif rel.startswith("memory/summaries/"):
-                    # memory/summaries/2026-02-19_1400.md → date = 2026-02-19_1400
-                    date_str = Path(rel).stem
-                    conn.execute(
-                        "DELETE FROM memories WHERE source = 'summary' AND date = ?",
-                        (date_str,),
-                    )
-                else:
-                    # memory/2026-02-15.md → date = 2026-02-15
-                    date_str = Path(rel).stem
-                    conn.execute(
-                        "DELETE FROM memories WHERE source = 'daily' AND date = ?",
-                        (date_str,),
-                    )
+                conn.execute("DELETE FROM memories WHERE path = ?", (rel,))
+                conn.execute(
+                    "DELETE FROM attachment_meta WHERE memory_path = ?", (rel,)
+                )
                 cleaned += 1
         return cleaned
 
@@ -197,12 +294,15 @@ class MemoryDB:
     # Query
     # ------------------------------------------------------------------
 
-    def search(self, query: str, days: int | None = None) -> list[dict]:
-        """Search memories using LIKE (Chinese-friendly).
+    def search(
+        self, query: str, days: int | None = None, tag: str | None = None
+    ) -> list[dict]:
+        """Search memories using FTS5 (with LIKE fallback).
 
         Args:
-            query: Search string (case-insensitive via LIKE).
+            query: Search string.
             days: Optional — limit to daily memories from the last N days.
+            tag: Optional — filter by tag name (without # prefix).
 
         Returns:
             List of dicts with keys: source, date, line_num, content.
@@ -210,15 +310,79 @@ class MemoryDB:
         self.sync()
         conn = self.connect()
 
+        # FTS5's default tokenizer doesn't handle CJK; use LIKE directly
+        # for non-ASCII queries.  For ASCII queries, trust FTS results.
+        use_fts = self._fts_available and query.isascii()
+        if use_fts:
+            try:
+                return self._search_fts(conn, query, days, tag)
+            except sqlite3.OperationalError:
+                pass
+
+        return self._search_like(conn, query, days, tag)
+
+    def _search_fts(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        days: int | None,
+        tag: str | None,
+    ) -> list[dict]:
+        """Search using FTS5 MATCH with BM25 ranking."""
+        # Phrase search: wrap in quotes for exact substring matching
+        escaped = query.replace('"', '""')
+        fts_query = f'"{escaped}"'
+
         sql = (
-            "SELECT source, date, line_num, content FROM memories WHERE content LIKE ?"
+            "SELECT m.source, m.date, m.line_num, m.content "
+            "FROM memories_fts fts "
+            "JOIN memories m ON m.id = fts.rowid"
         )
-        params: list[str | int] = [f"%{query}%"]
+        conditions = ["memories_fts MATCH ?"]
+        params: list[str] = [fts_query]
+
+        if tag is not None:
+            sql += " JOIN file_meta fm ON fm.path = m.path"
+            conditions.append("fm.tags LIKE ?")
+            params.append(f'%"{tag}"%')
 
         if days is not None:
-            sql += " AND source = 'daily' ORDER BY date DESC, line_num ASC"
-        else:
-            sql += " ORDER BY date DESC, line_num ASC"
+            cutoff = (date.today() - timedelta(days=days)).isoformat()
+            conditions.append("m.source = 'daily'")
+            conditions.append("m.date >= ?")
+            params.append(cutoff)
+
+        sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY fts.rank"
+
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def _search_like(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        days: int | None,
+        tag: str | None,
+    ) -> list[dict]:
+        """Search using LIKE (fallback when FTS5 is unavailable)."""
+        sql = "SELECT m.source, m.date, m.line_num, m.content FROM memories m"
+        conditions = ["m.content LIKE ?"]
+        params: list[str] = [f"%{query}%"]
+
+        if tag is not None:
+            sql += " JOIN file_meta fm ON fm.path = m.path"
+            conditions.append("fm.tags LIKE ?")
+            params.append(f'%"{tag}"%')
+
+        if days is not None:
+            cutoff = (date.today() - timedelta(days=days)).isoformat()
+            conditions.append("m.source = 'daily'")
+            conditions.append("m.date >= ?")
+            params.append(cutoff)
+
+        sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY m.date DESC, m.line_num ASC"
 
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
@@ -239,6 +403,49 @@ class MemoryDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_tags(self) -> list[str]:
+        """Return all unique tags across all indexed files."""
+        self.sync()
+        conn = self.connect()
+
+        rows = conn.execute(
+            "SELECT tags FROM file_meta WHERE tags != '' AND tags != '[]'"
+        ).fetchall()
+        all_tags: set[str] = set()
+        for row in rows:
+            try:
+                tags = json.loads(row["tags"])
+                all_tags.update(tags)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return sorted(all_tags)
+
+    def list_attachments(self, date_str: str | None = None) -> list[dict]:
+        """List indexed attachment metadata.
+
+        Args:
+            date_str: Optional — filter by daily memory date (YYYY-MM-DD).
+
+        Returns:
+            List of dicts with keys: memory_path, description, file_path, file_type.
+        """
+        self.sync()
+        conn = self.connect()
+
+        if date_str:
+            rows = conn.execute(
+                "SELECT memory_path, description, file_path, file_type "
+                "FROM attachment_meta WHERE memory_path = ? "
+                "ORDER BY id",
+                (f"memory/{date_str}.md",),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT memory_path, description, file_path, file_type "
+                "FROM attachment_meta ORDER BY memory_path, id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_stats(self) -> dict:
         """Return memory statistics."""
         self.sync()
@@ -248,15 +455,16 @@ class MemoryDB:
         daily_count = conn.execute(
             "SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'daily'"
         ).fetchone()[0]
-        has_longterm = (
-            conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE source = 'experience'"
-            ).fetchone()[0]
-            > 0
-        )
+        experience_count = conn.execute(
+            "SELECT COUNT(DISTINCT date) FROM memories WHERE source = 'experience'"
+        ).fetchone()[0]
+        attachment_count = conn.execute(
+            "SELECT COUNT(*) FROM attachment_meta"
+        ).fetchone()[0]
 
         return {
             "total_lines": total_rows,
             "daily_count": daily_count,
-            "has_longterm": has_longterm,
+            "experience_count": experience_count,
+            "attachment_count": attachment_count,
         }

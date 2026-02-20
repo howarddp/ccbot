@@ -1,145 +1,84 @@
 #!/usr/bin/env python3
-"""Search BaoBao memories via SQLite index.
+"""Search BaoBao memories via SQLite index (FTS5 + tag filtering).
 
 Usage:
-    memory-search <query> [--days N] [--workspace PATH]
+    memory-search <query> [--days N] [--tag TAG] [--workspace PATH]
 
 Examples:
     memory-search "architecture"
     memory-search "tmux" --days 7
+    memory-search "login" --tag decision
 """
 
 import argparse
-import os
-import sqlite3
 import sys
-from datetime import date, datetime, timedelta
 from pathlib import Path
 
-
-def resolve_workspace() -> Path:
-    """Resolve workspace directory: --workspace > cwd (if has memory/) > error."""
-    cwd = Path.cwd()
-    if (cwd / "memory").is_dir() or (cwd / "MEMORY.md").is_file():
-        return cwd
-    print("Cannot determine workspace. Use --workspace or run from a workspace dir.", file=sys.stderr)
-    sys.exit(1)
-
-
-def sync_and_search(workspace: Path, query: str, days=None) -> None:
-    """Sync memory files to SQLite and search."""
-    db_path = workspace / "memory.db"
-    memory_dir = workspace / "memory"
-    memory_md = workspace / "MEMORY.md"
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY, source TEXT, date TEXT, line_num INTEGER, content TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS file_meta (path TEXT PRIMARY KEY, mtime REAL, size INTEGER)")
-
-    # Sync memory files
-    files_to_sync: list[tuple[str, str, str]] = []
-
-    if memory_dir.is_dir():
-        for f in memory_dir.glob("*.md"):
-            try:
-                datetime.strptime(f.stem, "%Y-%m-%d")
-            except ValueError:
-                continue
-            files_to_sync.append(("daily", f.stem, str(f)))
-
-    # Scan summaries
-    summaries_dir = memory_dir / "summaries"
-    if summaries_dir.is_dir():
-        for f in summaries_dir.glob("*.md"):
-            files_to_sync.append(("summary", f.stem, str(f)))
-
-    if memory_md.is_file():
-        files_to_sync.append(("memory_md", "", str(memory_md)))
-
-    for source, date_str, fpath in files_to_sync:
-        p = Path(fpath)
-        stat = p.stat()
-        row = conn.execute("SELECT mtime, size FROM file_meta WHERE path = ?", (fpath,)).fetchone()
-        if row and row["mtime"] == stat.st_mtime and row["size"] == stat.st_size:
-            continue
-
-        content = p.read_text(encoding="utf-8")
-        lines = [l for l in content.splitlines() if l.strip()]
-
-        if source == "daily":
-            conn.execute("DELETE FROM memories WHERE source = 'daily' AND date = ?", (date_str,))
-        elif source == "summary":
-            conn.execute("DELETE FROM memories WHERE source = 'summary' AND date = ?", (date_str,))
-        else:
-            conn.execute("DELETE FROM memories WHERE source = 'memory_md'", ())
-
-        for i, line in enumerate(lines, 1):
-            conn.execute("INSERT INTO memories (source, date, line_num, content) VALUES (?, ?, ?, ?)",
-                         (source, date_str, i, line))
-
-        conn.execute("REPLACE INTO file_meta (path, mtime, size) VALUES (?, ?, ?)",
-                     (fpath, stat.st_mtime, stat.st_size))
-
-    # Clean deleted files
-    for row in conn.execute("SELECT path FROM file_meta").fetchall():
-        if not Path(row["path"]).exists():
-            conn.execute("DELETE FROM file_meta WHERE path = ?", (row["path"],))
-            conn.execute("DELETE FROM memories WHERE source = 'daily' AND date = ?",
-                         (Path(row["path"]).stem,))
-
-    conn.commit()
-
-    # Search
-    sql = "SELECT source, date, line_num, content FROM memories WHERE content LIKE ?"
-    params: list = [f"%{query}%"]
-
-    if days is not None:
-        cutoff = (date.today() - timedelta(days=days)).isoformat()
-        sql += " AND (source = 'memory_md' OR date >= ?)"
-        params.append(cutoff)
-
-    sql += " ORDER BY date DESC, line_num ASC"
-    results = conn.execute(sql, params).fetchall()
-
-    if not results:
-        print(f"No results for: {query}")
-        conn.close()
-        sys.exit(0)
-
-    current_file = None
-    for r in results:
-        if r["source"] == "memory_md":
-            file_label = "MEMORY.md"
-        elif r["source"] == "summary":
-            file_label = f"memory/summaries/{r['date']}.md"
-        else:
-            file_label = f"memory/{r['date']}.md"
-
-        if file_label != current_file:
-            current_file = file_label
-            print(f"\n📄 {file_label}")
-
-        print(f"  L{r['line_num']}: {r['content']}")
-
-    print(f"\n({len(results)} matches)")
-    conn.close()
+# Allow importing _memory_common from the same directory
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _memory_common import (
+    connect_db,
+    format_file_label,
+    resolve_workspace,
+    search,
+    sync_workspace,
+)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Search BaoBao memories")
     parser.add_argument("query", help="Search query string")
     parser.add_argument("--days", type=int, default=None, help="Limit to last N days")
+    parser.add_argument(
+        "--tag", type=str, default=None, help="Filter by tag (without # prefix)"
+    )
     parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
     args = parser.parse_args()
 
-    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
-
+    workspace = resolve_workspace(args.workspace)
     if not workspace.exists():
         print(f"Workspace not found: {workspace}", file=sys.stderr)
         sys.exit(1)
 
-    sync_and_search(workspace, args.query, args.days)
+    conn = connect_db(workspace)
+    sync_workspace(conn, workspace)
+
+    results = search(conn, args.query, args.days, args.tag)
+
+    if not results:
+        msg = f"No results for: {args.query}"
+        if args.tag:
+            msg += f" (tag: #{args.tag})"
+        print(msg)
+        conn.close()
+        sys.exit(0)
+
+    current_file = None
+    for r in results:
+        file_label = format_file_label(r)
+        if file_label != current_file:
+            current_file = file_label
+            print(f"\n\U0001f4c4 {file_label}")
+        print(f"  L{r['line_num']}: {r['content']}")
+
+    # Also search attachment descriptions
+    att_results = conn.execute(
+        "SELECT memory_path, description, file_path, file_type "
+        "FROM attachment_meta WHERE description LIKE ?",
+        (f"%{args.query}%",),
+    ).fetchall()
+
+    if att_results:
+        print(f"\n\U0001f4ce Attachments:")
+        for r in att_results:
+            icon = "\U0001f5bc" if r["file_type"] == "image" else "\U0001f4c4"
+            print(f"  {icon} {r['description']} → {r['file_path']}")
+            print(f"     (in {r['memory_path']})")
+
+    total = len(results) + len(att_results)
+    suffix = f" [tag: #{args.tag}]" if args.tag else ""
+    print(f"\n({total} matches{suffix})")
+    conn.close()
 
 
 if __name__ == "__main__":
