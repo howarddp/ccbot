@@ -78,6 +78,10 @@ def _setup() -> None:
         if uid:
             user_ids.append(int(uid))
 
+    # Mode selection
+    mode_resp = input("Bot mode (forum/group) [forum]: ").strip().lower()
+    mode = mode_resp if mode_resp in ("forum", "group") else "forum"
+
     claude_cmd = input("Claude command [claude]: ").strip()
     if not claude_cmd:
         claude_cmd = "claude"
@@ -108,6 +112,7 @@ def _setup() -> None:
 # Agent-level settings override [global]; unset keys fall back to [global] then defaults.
 
 [global]
+allowed_users = [{users_toml}]
 claude_command = "{claude_cmd}"
 
 # Memory
@@ -130,7 +135,7 @@ show_user_messages = true      # show user messages in real-time notifications
 [[agents]]
 name = "{agent_name}"
 bot_token_env = "{token_env_var}"
-allowed_users = [{users_toml}]
+mode = "{mode}"
 # tmux_session = "{agent_name}"  # defaults to agent name
 """
     toml_path.write_text(toml_content)
@@ -234,6 +239,10 @@ def _add_agent() -> None:
         if uid:
             user_ids.append(int(uid))
 
+    # Mode selection
+    mode_resp = input("Bot mode (forum/group) [forum]: ").strip().lower()
+    mode = mode_resp if mode_resp in ("forum", "group") else "forum"
+
     # Append [[agents]] block to settings.toml
     users_toml = ", ".join(str(u) for u in user_ids)
     agent_block = f"""\
@@ -241,6 +250,7 @@ def _add_agent() -> None:
 name = "{agent_name}"
 bot_token_env = "{token_env_var}"
 allowed_users = [{users_toml}]
+mode = "{mode}"
 """
     with open(toml_path, "a") as f:
         # Ensure previous content ends with newline before appending

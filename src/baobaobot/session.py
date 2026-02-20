@@ -139,6 +139,10 @@ class SessionManager:
         self._window_to_thread: dict[tuple[int, str], int] = {}
         self._needs_migration: bool = False
 
+        # Group mode bindings (chat_id -> window_id)
+        self.group_bindings: dict[int, str] = {}
+        self.group_titles: dict[int, str] = {}
+
         self._load_state()
         self._rebuild_reverse_index()
 
@@ -162,6 +166,12 @@ class SessionManager:
             "group_chat_ids": self.group_chat_ids,
             "window_display_names": self.window_display_names,
             "topic_names": {str(tid): name for tid, name in self.topic_names.items()},
+            "group_bindings": {
+                str(cid): wid for cid, wid in self.group_bindings.items()
+            },
+            "group_titles": {
+                str(cid): title for cid, title in self.group_titles.items()
+            },
         }
         atomic_write_json(self._state_file, state)
         logger.debug("State saved to %s", self._state_file)
@@ -196,6 +206,14 @@ class SessionManager:
                 self.topic_names = {
                     int(tid): name for tid, name in state.get("topic_names", {}).items()
                 }
+                self.group_bindings = {
+                    int(cid): wid
+                    for cid, wid in state.get("group_bindings", {}).items()
+                }
+                self.group_titles = {
+                    int(cid): title
+                    for cid, title in state.get("group_titles", {}).items()
+                }
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -229,6 +247,8 @@ class SessionManager:
                 self.group_chat_ids = {}
                 self.window_display_names = {}
                 self.topic_names = {}
+                self.group_bindings = {}
+                self.group_titles = {}
                 self._needs_migration = False
         else:
             self._needs_migration = False
@@ -344,6 +364,44 @@ class SessionManager:
         empty_users = [uid for uid, b in self.thread_bindings.items() if not b]
         for uid in empty_users:
             del self.thread_bindings[uid]
+
+        # --- Migrate group_bindings ---
+        new_group_bindings: dict[int, str] = {}
+        for chat_id, wid in self.group_bindings.items():
+            if self._is_window_id(wid):
+                if wid in live_ids:
+                    new_group_bindings[chat_id] = wid
+                else:
+                    display = self.window_display_names.get(
+                        wid, self.group_titles.get(chat_id, wid)
+                    )
+                    new_id = live_by_name.get(display)
+                    if new_id:
+                        logger.info(
+                            "Re-resolved group binding %s -> %s (chat=%d)",
+                            wid,
+                            new_id,
+                            chat_id,
+                        )
+                        new_group_bindings[chat_id] = new_id
+                        self.window_display_names[new_id] = display
+                        changed = True
+                    else:
+                        logger.info(
+                            "Dropping stale group binding: chat=%d wid=%s",
+                            chat_id,
+                            wid,
+                        )
+                        changed = True
+            else:
+                new_id = live_by_name.get(wid)
+                if new_id:
+                    new_group_bindings[chat_id] = new_id
+                    self.window_display_names[new_id] = wid
+                    changed = True
+                else:
+                    changed = True
+        self.group_bindings = new_group_bindings
 
         # --- Migrate user_window_offsets ---
         for uid, offsets in self.user_window_offsets.items():
@@ -799,6 +857,68 @@ class SessionManager:
             resolved = await self.resolve_session_for_window(window_id)
             if resolved and resolved.session_id == session_id:
                 result.append((user_id, window_id, thread_id))
+        return result
+
+    # --- Group binding management (group mode) ---
+
+    def bind_group(self, chat_id: int, window_id: str, chat_title: str = "") -> None:
+        """Bind a group chat to a tmux window (group mode).
+
+        Args:
+            chat_id: Telegram group chat ID.
+            window_id: Tmux window ID (e.g. '@0').
+            chat_title: Display title for the group.
+        """
+        self.group_bindings[chat_id] = window_id
+        if chat_title:
+            self.group_titles[chat_id] = chat_title
+            self.window_display_names[window_id] = chat_title
+        self._save_state()
+        display = chat_title or self.get_display_name(window_id)
+        logger.info("Bound group %d -> window_id %s (%s)", chat_id, window_id, display)
+
+    def unbind_group(self, chat_id: int) -> str | None:
+        """Remove a group binding. Returns the previously bound window_id."""
+        window_id = self.group_bindings.pop(chat_id, None)
+        if window_id is None:
+            return None
+        self.group_titles.pop(chat_id, None)
+        self._save_state()
+        logger.info("Unbound group %d (was %s)", chat_id, window_id)
+        return window_id
+
+    def get_window_for_group(self, chat_id: int) -> str | None:
+        """Look up the window_id bound to a group chat."""
+        return self.group_bindings.get(chat_id)
+
+    def get_group_title(self, chat_id: int) -> str | None:
+        """Get persisted title for a group chat."""
+        return self.group_titles.get(chat_id)
+
+    def set_group_title(self, chat_id: int, title: str) -> None:
+        """Persist a title for a group chat."""
+        if self.group_titles.get(chat_id) != title:
+            self.group_titles[chat_id] = title
+            # Also update display name for the bound window
+            wid = self.group_bindings.get(chat_id)
+            if wid:
+                self.window_display_names[wid] = title
+            self._save_state()
+
+    def iter_group_bindings(self) -> Iterator[tuple[int, str]]:
+        """Iterate all group bindings as (chat_id, window_id)."""
+        yield from self.group_bindings.items()
+
+    async def find_groups_for_session(self, session_id: str) -> list[tuple[int, str]]:
+        """Find all group chats whose window maps to the given session_id.
+
+        Returns list of (chat_id, window_id) tuples.
+        """
+        result: list[tuple[int, str]] = []
+        for chat_id, window_id in self.group_bindings.items():
+            resolved = await self.resolve_session_for_window(window_id)
+            if resolved and resolved.session_id == session_id:
+                result.append((chat_id, window_id))
         return result
 
     # --- Group chat ID management ---

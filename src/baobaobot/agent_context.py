@@ -14,6 +14,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .cron.service import CronService
+    from .router import Router
     from .session import SessionManager
     from .session_monitor import SessionMonitor
     from .settings import AgentConfig
@@ -62,6 +63,7 @@ class AgentContext:
     config: AgentConfig
     tmux_manager: TmuxManager
     session_manager: SessionManager
+    router: Router
     session_monitor: SessionMonitor | None = None
     cron_service: CronService | None = None
 
@@ -78,8 +80,11 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
     (created later during bot startup when the Application is available).
     """
     from .cron.service import CronService
+    from .routers import create_router
     from .session import SessionManager
     from .tmux_manager import TmuxManager
+
+    router = create_router(config.mode)
 
     tmux_mgr = TmuxManager(
         session_name=config.tmux_session_name,
@@ -108,5 +113,6 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
         config=config,
         tmux_manager=tmux_mgr,
         session_manager=session_mgr,
+        router=router,
         cron_service=cron_svc,
     )

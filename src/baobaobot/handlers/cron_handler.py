@@ -27,31 +27,22 @@ logger = logging.getLogger(__name__)
 def _resolve_workspace_for_thread(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> tuple[Path | None, str]:
-    """Resolve workspace dir and name for the current thread.
+    """Resolve workspace dir and name for the current routing context.
 
+    Uses the router to extract routing key and look up bound window.
     Returns (workspace_dir, workspace_name) or (None, "") if unresolvable.
     """
-    user = update.effective_user
-    msg = update.message or (
-        update.callback_query.message if update.callback_query else None
-    )
-    if not user or not msg:
-        return None, ""
-
-    thread_id = getattr(msg, "message_thread_id", None)
-    if thread_id is None or thread_id == 1:
-        return None, ""
-
     agent_ctx = context.bot_data["agent_ctx"]
-    sm = agent_ctx.session_manager
-    cfg = agent_ctx.config
+    rk = agent_ctx.router.extract_routing_key(update)
+    if rk is None:
+        return None, ""
 
-    wid = sm.get_window_for_thread(user.id, thread_id)
+    wid = agent_ctx.router.get_window(rk, agent_ctx)
     if not wid:
         return None, ""
 
-    display_name = sm.get_display_name(wid)
-    return cfg.workspace_dir_for(display_name), display_name
+    display_name = agent_ctx.session_manager.get_display_name(wid)
+    return agent_ctx.config.workspace_dir_for(display_name), display_name
 
 
 def _get_workspace_meta(update: Update) -> WorkspaceMeta:

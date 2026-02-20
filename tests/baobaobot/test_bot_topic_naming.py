@@ -1,10 +1,10 @@
-"""Tests for topic name persistence in bot.topic_created_handler."""
+"""Tests for topic name persistence in ForumRouter._topic_created_handler."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from baobaobot.bot import topic_created_handler
+from baobaobot.routers.forum import _topic_created_handler as topic_created_handler
 
 
 def _make_update(thread_id, topic_name):

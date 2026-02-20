@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
 
 from ..terminal_parser import is_interactive_ui, parse_status_line
 from .callback_data import CB_RESTART_SESSION
@@ -229,9 +228,9 @@ async def status_poll_loop(
     bot: Bot,
     agent_ctx: AgentContext,
 ) -> None:
-    """Background task to poll terminal status for all thread-bound windows."""
-    sm = agent_ctx.session_manager
+    """Background task to poll terminal status for all bound windows."""
     tm = agent_ctx.tmux_manager
+    router = agent_ctx.router
 
     logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
     last_topic_check = 0.0
@@ -240,80 +239,73 @@ async def status_poll_loop(
             if _shutting_down:
                 break
 
-            # Periodic topic existence probe
+            bindings = router.iter_bindings(agent_ctx)
+
+            # Periodic binding existence probe (e.g. topic deletion for forum mode)
             now = time.monotonic()
             if now - last_topic_check >= TOPIC_CHECK_INTERVAL:
                 last_topic_check = now
-                for user_id, thread_id, wid in list(sm.iter_thread_bindings()):
+                for rk, wid in bindings:
                     try:
-                        await bot.unpin_all_forum_topic_messages(
-                            chat_id=sm.resolve_chat_id(user_id, thread_id),
-                            message_thread_id=thread_id,
-                        )
-                    except BadRequest as e:
-                        if "Topic_id_invalid" in str(e):
-                            # Topic deleted — kill window, unbind, and clean up state
+                        exists = await router.probe_binding_exists(rk, bot, agent_ctx)
+                        if not exists:
+                            # Binding target gone — kill window, unbind, clean up
                             w = await tm.find_window_by_id(wid)
                             if w:
                                 await tm.kill_window(w.window_id)
                             clear_window_health(wid)
-                            sm.unbind_thread(user_id, thread_id)
+                            router.unbind_window(rk, agent_ctx)
                             await clear_topic_state(
-                                user_id, thread_id, bot, agent_ctx=agent_ctx
+                                rk.user_id, rk.session_key, bot, agent_ctx=agent_ctx
                             )
                             logger.info(
-                                "Topic deleted: killed window_id '%s' and "
-                                "unbound thread %d for user %d",
+                                "Binding target gone: killed window_id '%s' "
+                                "(key=%d, user=%d)",
                                 wid,
-                                thread_id,
-                                user_id,
-                            )
-                        else:
-                            logger.debug(
-                                "Topic probe error for %s: %s",
-                                wid,
-                                e,
+                                rk.session_key,
+                                rk.user_id,
                             )
                     except Exception as e:
                         logger.debug(
-                            "Topic probe error for %s: %s",
+                            "Binding probe error for %s: %s",
                             wid,
                             e,
                         )
 
-            for user_id, thread_id, wid in list(sm.iter_thread_bindings()):
+            # Refresh bindings after potential cleanup
+            bindings = router.iter_bindings(agent_ctx)
+
+            for rk, wid in bindings:
                 try:
                     # Clean up stale bindings (window no longer exists)
                     w = await tm.find_window_by_id(wid)
                     if not w:
                         clear_window_health(wid)
-                        sm.unbind_thread(user_id, thread_id)
+                        router.unbind_window(rk, agent_ctx)
                         await clear_topic_state(
-                            user_id, thread_id, bot, agent_ctx=agent_ctx
+                            rk.user_id, rk.session_key, bot, agent_ctx=agent_ctx
                         )
                         logger.info(
-                            "Cleaned up stale binding: user=%d thread=%d window_id=%s",
-                            user_id,
-                            thread_id,
+                            "Cleaned up stale binding: key=%d window_id=%s",
+                            rk.session_key,
                             wid,
                         )
                         continue
 
-                    queue = get_message_queue(agent_ctx, user_id)
+                    # Use user_id as queue key for forum, chat_id for group
+                    queue_id = rk.user_id if rk.thread_id is not None else rk.chat_id
+                    queue = get_message_queue(agent_ctx, queue_id)
                     if queue and not queue.empty():
                         continue
                     await update_status_message(
                         bot,
-                        user_id,
+                        queue_id,
                         wid,
-                        thread_id=thread_id,
+                        thread_id=rk.thread_id,
                         agent_ctx=agent_ctx,
                     )
                 except Exception as e:
-                    logger.debug(
-                        f"Status update error for user {user_id} "
-                        f"thread {thread_id}: {e}"
-                    )
+                    logger.debug(f"Status update error for key {rk.session_key}: {e}")
         except Exception as e:
             logger.error(f"Status poll loop error: {e}")
 
