@@ -1,7 +1,7 @@
 """SQLite-based memory index — sync .md files and query via SQL.
 
 Provides an index layer over the plain-text memory files.  Claude Code
-continues to write ``memory/YYYY-MM-DD.md`` and ``MEMORY.md`` directly;
+continues to write ``memory/YYYY-MM-DD.md`` and ``memory/EXPERIENCE.md`` directly;
 this module watches for file changes and keeps a SQLite database in sync
 so that searches are fast and structured.
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS memories (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source      TEXT    NOT NULL,  -- 'daily' | 'memory_md' | 'summary'
+    source      TEXT    NOT NULL,  -- 'daily' | 'experience' | 'summary'
     date        TEXT    NOT NULL,  -- 'YYYY-MM-DD' or 'YYYY-MM-DD_HH00' or 'longterm'
     line_num    INTEGER NOT NULL,
     content     TEXT    NOT NULL,
@@ -128,10 +128,11 @@ class MemoryDB:
         conn = self.connect()
         synced = 0
 
-        # Sync MEMORY.md
-        memory_md = self.workspace_dir / "MEMORY.md"
-        if memory_md.exists() and self._needs_sync(conn, memory_md, "MEMORY.md"):
-            self._sync_file(conn, memory_md, "MEMORY.md", "memory_md", "longterm")
+        # Sync EXPERIENCE.md (long-term memory)
+        experience_md = self.memory_dir / "EXPERIENCE.md"
+        exp_rel = "memory/EXPERIENCE.md"
+        if experience_md.exists() and self._needs_sync(conn, experience_md, exp_rel):
+            self._sync_file(conn, experience_md, exp_rel, "experience", "longterm")
             synced += 1
 
         # Sync daily files
@@ -171,9 +172,9 @@ class MemoryDB:
             if not full.exists():
                 conn.execute("DELETE FROM file_meta WHERE path = ?", (rel,))
                 # Determine source/date from rel path
-                if rel == "MEMORY.md":
+                if rel == "memory/EXPERIENCE.md":
                     conn.execute(
-                        "DELETE FROM memories WHERE source = 'memory_md' AND date = 'longterm'"
+                        "DELETE FROM memories WHERE source = 'experience' AND date = 'longterm'"
                     )
                 elif rel.startswith("memory/summaries/"):
                     # memory/summaries/2026-02-19_1400.md → date = 2026-02-19_1400
@@ -249,7 +250,7 @@ class MemoryDB:
         ).fetchone()[0]
         has_longterm = (
             conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE source = 'memory_md'"
+                "SELECT COUNT(*) FROM memories WHERE source = 'experience'"
             ).fetchone()[0]
             > 0
         )

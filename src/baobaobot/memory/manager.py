@@ -3,7 +3,7 @@
 Provides MemoryManager for high-level memory operations:
   - list_daily(): list recent daily memory files.
   - cleanup(): remove daily memories older than N days.
-  - get_summary(): read MEMORY.md long-term memory.
+  - get_summary(): read memory/EXPERIENCE.md long-term memory.
 
 Key class: MemoryManager.
 """
@@ -92,12 +92,17 @@ class MemoryManager:
         return delete_daily(self.workspace_dir, date_str)
 
     def delete_all_daily(self) -> int:
-        """Delete all daily memory files and all attachments. Returns count of deleted files."""
+        """Delete all daily memory files and all attachments. Returns count of deleted files.
+
+        Preserves EXPERIENCE.md (long-term memory).
+        """
         if not self.memory_dir.exists():
             return 0
 
         count = 0
         for f in self.memory_dir.glob("*.md"):
+            if f.name == "EXPERIENCE.md":
+                continue
             try:
                 f.unlink()
                 count += 1
@@ -128,8 +133,8 @@ class MemoryManager:
         rows = self.db.search(query)
         results: list[MemorySearchResult] = []
         for row in rows:
-            if row["source"] == "memory_md":
-                file = "MEMORY.md"
+            if row["source"] == "experience":
+                file = "memory/EXPERIENCE.md"
             elif row["source"] == "summary":
                 file = f"memory/summaries/{row['date']}.md"
             else:
@@ -144,8 +149,8 @@ class MemoryManager:
         return results
 
     def get_summary(self) -> str:
-        """Read MEMORY.md long-term memory."""
-        memory_path = self.workspace_dir / "MEMORY.md"
+        """Read memory/EXPERIENCE.md long-term memory."""
+        memory_path = self.memory_dir / "EXPERIENCE.md"
         try:
             return memory_path.read_text(encoding="utf-8").strip()
         except OSError:

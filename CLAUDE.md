@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-BaoBaoClaude — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows, with persistent personality (SOUL.md), identity (IDENTITY.md), user profiles (USER.md), and memory (MEMORY.md + daily memories).
+BaoBaoClaude — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows, with persistent personality (AGENTSOUL.md), user profiles, and memory (EXPERIENCE.md + daily memories).
 
 All intelligence stays in Claude Code; BaoBaoClaude handles file management, workspace assembly, and Telegram UI.
 
@@ -38,25 +38,24 @@ uv sync                                    # Install dependencies
 src/baobaobot/
 ├── main.py                  # CLI entry: hook / add-agent / bot start + auto-tmux launch
 ├── settings.py              # TOML-based multi-agent config (AgentConfig + load_settings)
-├── bot.py                   # Telegram bot (new: /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild)
+├── bot.py                   # Telegram bot (/agentsoul, /profile, /memory, /forget, /workspace, /rebuild)
 ├── workspace/               # Workspace system
 │   ├── manager.py           # Directory init, project linking, bin/ script install
-│   ├── assembler.py         # CLAUDE.md assembly from source files
+│   ├── assembler.py         # BAOBAOBOT.md assembly from source files
 │   ├── bin/                 # Scripts deployed to ~/.baobaobot/bin/
 │   │   ├── memory-search    # SQLite memory search (used by Claude Code)
 │   │   └── memory-list      # List recent daily memories
-│   └── templates/           # Default SOUL.md, IDENTITY.md, USER.md, AGENTS.md, MEMORY.md
+│   └── templates/           # Default AGENTSOUL.md, AGENTS.md, EXPERIENCE.md
 ├── persona/                 # Persona system
-│   ├── soul.py              # SOUL.md read/write
-│   ├── identity.py          # IDENTITY.md parse/update (AgentIdentity)
-│   └── profile.py           # USER.md parse/update (UserProfile)
+│   ├── agentsoul.py         # AGENTSOUL.md read/write/parse (AgentIdentity)
+│   └── profile.py           # User profile parse/update (UserProfile)
 ├── memory/                  # Memory system
 │   ├── db.py                # SQLite index (sync .md → SQLite, search, stats)
 │   ├── manager.py           # MemoryManager (list, search via SQLite, cleanup)
 │   ├── daily.py             # Daily memory file operations
 │   └── search.py            # Legacy plain-text search (fallback)
 ├── handlers/                # Telegram handlers
-│   ├── persona_handler.py   # /soul, /identity commands
+│   ├── persona_handler.py   # /agentsoul command
 │   ├── profile_handler.py   # /profile command
 │   └── memory_handler.py    # /memory, /forget commands
 └── ...                      # session.py, tmux_manager.py, hook.py, etc.
@@ -70,26 +69,24 @@ src/baobaobot/
 ├── state.json               # Bot state (thread bindings, window states)
 ├── session_map.json         # Hook-generated window→session mapping
 ├── monitor_state.json       # Poll progress per JSONL file
-├── bin/                     # Memory tools (shared across workspaces)
-│   ├── memory-search        # SQLite-backed memory search
-│   └── memory-list          # List recent daily memories
-└── workspace/               # Default workspace (WORKSPACE_DIR)
-    ├── CLAUDE.md            # Auto-assembled (persona + memory)
-    ├── SOUL.md              # Personality definition
-    ├── IDENTITY.md          # Agent identity (name, emoji, role)
-    ├── USER.md              # User profile
-    ├── AGENTS.md            # Work instructions + memory tool usage
-    ├── MEMORY.md            # Long-term memory
-    ├── memory/              # Daily memories (YYYY-MM-DD.md)
-    ├── memory.db            # SQLite index of memory files
-    └── projects/            # Symlinked project directories
+├── shared/                  # Shared files (AGENTSOUL.md, AGENTS.md, bin/, users/)
+└── agents/<name>/           # Per-agent workspaces
+    └── workspace_<topic>/   # Per-topic workspace
+        ├── BAOBAOBOT.md     # Auto-assembled (persona instructions)
+        ├── CLAUDE.md        # Thin pointer to BAOBAOBOT.md
+        ├── memory/          # Memory directory
+        │   ├── EXPERIENCE.md    # Long-term memory
+        │   ├── YYYY-MM-DD.md    # Daily memories
+        │   └── summaries/       # Auto summaries
+        ├── memory.db        # SQLite index of memory files
+        └── projects/        # Symlinked project directories
 ```
 
 ## Core Design Constraints
 
 - **No LLM calls in Python** — all intelligence in Claude Code, BaoBaoClaude manages files only
 - **1 Topic = 1 Window = 1 Session** — all routing keyed by tmux window ID
-- **CLAUDE.md assembly** — auto-composed from SOUL/IDENTITY/USER/AGENTS/MEMORY files
-- **Two-layer memory** — MEMORY.md (long-term, curated) + memory/*.md (daily, auto)
+- **BAOBAOBOT.md assembly** — auto-composed from AGENTS + AGENTSOUL shared files
+- **Two-layer memory** — EXPERIENCE.md (long-term, curated) + memory/*.md (daily, auto)
 - **SQLite memory index** — .md files are source of truth; SQLite provides fast search via lazy sync
 - **Skill-based memory access** — Claude Code uses `~/.baobaobot/bin/memory-search` to query memories

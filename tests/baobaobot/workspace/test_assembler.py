@@ -31,26 +31,31 @@ class TestAssemble:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
-        assert "Personality (SOUL)" in content
-        assert "Identity (IDENTITY)" in content
+        assert "Agent Soul (AGENTSOUL)" in content
         assert "Work Instructions (AGENTS)" in content
-        assert "Memory (MEMORY)" in content
 
-    def test_includes_soul_from_shared(self, dirs: tuple[Path, Path]) -> None:
+    def test_includes_agentsoul_from_shared(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
-        (shared / "SOUL.md").write_text("# Soul\n\nTest personality")
+        (shared / "AGENTSOUL.md").write_text(
+            "# Agent Soul\n\n## Personality\n- Test personality"
+        )
         assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
         assert "Test personality" in content
 
-    def test_includes_memory_from_workspace(self, dirs: tuple[Path, Path]) -> None:
+    def test_does_not_embed_memory(self, dirs: tuple[Path, Path]) -> None:
+        """Memory files should NOT be embedded — Claude Code reads them on demand."""
         shared, workspace = dirs
-        (workspace / "MEMORY.md").write_text("# Memory\n\nRemember this")
+        (workspace / "memory").mkdir(exist_ok=True)
+        (workspace / "memory" / "EXPERIENCE.md").write_text(
+            "# Experience\n\nRemember this"
+        )
         assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
-        assert "Remember this" in content
+        assert "Remember this" not in content
 
-    def test_includes_recent_memories(self, dirs: tuple[Path, Path]) -> None:
+    def test_does_not_embed_daily_memories(self, dirs: tuple[Path, Path]) -> None:
+        """Daily memory files should NOT be embedded."""
         shared, workspace = dirs
         from datetime import date
 
@@ -59,10 +64,10 @@ class TestAssemble:
         memory_dir.mkdir(exist_ok=True)
         (memory_dir / f"{today}.md").write_text("## Today\n- Something happened")
 
-        assembler = ClaudeMdAssembler(shared, workspace, recent_days=7)
+        assembler = ClaudeMdAssembler(shared, workspace)
         content = assembler.assemble()
-        assert "Recent Memories" in content
-        assert "Something happened" in content
+        assert "Recent Memories" not in content
+        assert "Something happened" not in content
 
     def test_no_bin_dir_template_variable(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
@@ -72,18 +77,36 @@ class TestAssemble:
 
 
 class TestWrite:
-    def test_creates_file(self, dirs: tuple[Path, Path]) -> None:
+    def test_creates_baobaobot_md(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert (workspace / "BAOBAOBOT.md").is_file()
+
+    def test_creates_thin_claude_md(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
         assert (workspace / "CLAUDE.md").is_file()
+        claude_content = (workspace / "CLAUDE.md").read_text()
+        assert "BAOBAOBOT.md" in claude_content
 
-    def test_file_content(self, dirs: tuple[Path, Path]) -> None:
+    def test_baobaobot_md_content(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
-        content = (workspace / "CLAUDE.md").read_text()
+        content = (workspace / "BAOBAOBOT.md").read_text()
         assert "BaoBao Assistant" in content
+
+    def test_claude_md_is_thin(self, dirs: tuple[Path, Path]) -> None:
+        """CLAUDE.md should be a short reference, not the full assembled content."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        claude_content = (workspace / "CLAUDE.md").read_text()
+        baobao_content = (workspace / "BAOBAOBOT.md").read_text()
+        assert len(claude_content) < len(baobao_content)
+        assert "Agent Soul" not in claude_content  # Full content is in BAOBAOBOT.md
 
 
 class TestNeedsRebuild:
@@ -106,10 +129,13 @@ class TestNeedsRebuild:
         import time
 
         time.sleep(0.01)
-        (shared / "SOUL.md").write_text("# Soul\n\nUpdated")
+        (shared / "AGENTSOUL.md").write_text("# Agent Soul\n\nUpdated")
         assert assembler.needs_rebuild() is True
 
-    def test_true_after_workspace_memory_change(self, dirs: tuple[Path, Path]) -> None:
+    def test_memory_change_does_not_trigger_rebuild(
+        self, dirs: tuple[Path, Path]
+    ) -> None:
+        """Memory changes should NOT trigger rebuild — Claude Code reads on demand."""
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
@@ -117,5 +143,6 @@ class TestNeedsRebuild:
         import time
 
         time.sleep(0.01)
-        (workspace / "MEMORY.md").write_text("# Memory\n\nUpdated")
-        assert assembler.needs_rebuild() is True
+        (workspace / "memory").mkdir(exist_ok=True)
+        (workspace / "memory" / "EXPERIENCE.md").write_text("# Experience\n\nUpdated")
+        assert assembler.needs_rebuild() is False

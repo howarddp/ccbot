@@ -1,11 +1,11 @@
-"""Telegram handlers for /soul and /identity commands.
+"""Telegram handler for /agentsoul command.
 
-Provides read/edit operations for SOUL.md and IDENTITY.md through
-Telegram bot commands. Edit mode accepts the next message as new content.
+Provides read/edit operations for AGENTSOUL.md (merged personality + identity)
+through Telegram bot commands. Edit mode accepts the next message as new content.
 
 Persona files live in config.shared_dir (shared across all topics).
 
-Key functions: soul_command(), identity_command().
+Key functions: agentsoul_command().
 """
 
 import logging
@@ -14,13 +14,17 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_reply
-from ..persona.identity import read_identity, read_identity_raw, update_identity
-from ..persona.soul import read_soul, write_soul
+from ..persona.agentsoul import (
+    read_agentsoul,
+    read_identity,
+    update_identity,
+    write_agentsoul,
+)
 from ..workspace.assembler import rebuild_all_workspaces
 
 logger = logging.getLogger(__name__)
 
-# Track users in edit mode: user_id -> edit_target ("soul")
+# Track users in edit mode: user_id -> edit_target ("agentsoul")
 _edit_mode: dict[int, str] = {}
 
 
@@ -29,36 +33,14 @@ def _cfg(context: ContextTypes.DEFAULT_TYPE):
     return context.bot_data["agent_ctx"].config
 
 
-async def soul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /soul command — view or edit SOUL.md."""
-    user = update.effective_user
-    if not user or not update.message:
-        return
+async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /agentsoul command — view, edit, or set identity fields.
 
-    text = (update.message.text or "").strip()
-    args = text.split(maxsplit=1)
-
-    if len(args) > 1 and args[1].strip().lower() == "edit":
-        # Enter edit mode
-        _edit_mode[user.id] = "soul"
-        await safe_reply(
-            update.message,
-            "✏️ Send the new SOUL.md content. Your next message will overwrite the entire SOUL.md.\n"
-            "Send /cancel to cancel.",
-        )
-        return
-
-    # Show current soul
-    cfg = _cfg(context)
-    content = read_soul(cfg.shared_dir)
-    if content:
-        await safe_reply(update.message, f"🫀 **SOUL.md**\n\n{content}")
-    else:
-        await safe_reply(update.message, "🫀 SOUL.md is not configured yet.")
-
-
-async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /identity command — view or update identity fields."""
+    Usage:
+        /agentsoul              — show full AGENTSOUL.md with formatted identity
+        /agentsoul set <f> <v>  — update an identity field (name/emoji/role/vibe)
+        /agentsoul edit         — enter edit mode, next message overwrites AGENTSOUL.md
+    """
     user = update.effective_user
     if not user or not update.message:
         return
@@ -67,7 +49,18 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=3)
 
-    # /identity set <field> <value>
+    # /agentsoul edit
+    if len(parts) >= 2 and parts[1].strip().lower() == "edit":
+        _edit_mode[user.id] = "agentsoul"
+        await safe_reply(
+            update.message,
+            "✏️ Send the new AGENTSOUL.md content. "
+            "Your next message will overwrite the entire file.\n"
+            "Send /cancel to cancel.",
+        )
+        return
+
+    # /agentsoul set <field> <value>
     if len(parts) >= 4 and parts[1].lower() == "set":
         field = parts[2].lower()
         value = parts[3]
@@ -81,9 +74,7 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         updated = update_identity(cfg.shared_dir, **{field_map[field]: value})
-        rebuild_all_workspaces(
-            cfg.shared_dir, cfg.iter_workspace_dirs(), cfg.recent_memory_days
-        )
+        rebuild_all_workspaces(cfg.shared_dir, cfg.iter_workspace_dirs())
         await safe_reply(
             update.message,
             f"✅ Updated {field} = {value}\n\n"
@@ -92,19 +83,21 @@ async def identity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    # Show current identity
-    content = read_identity_raw(cfg.shared_dir)
+    # Show current agentsoul
+    content = read_agentsoul(cfg.shared_dir)
     if content:
         identity = read_identity(cfg.shared_dir)
         await safe_reply(
             update.message,
-            f"🪪 **IDENTITY.md**\n\n"
-            f"{identity.emoji} **{identity.name}** — {identity.role}\n"
+            f"🪪 {identity.emoji} **{identity.name}** — {identity.role}\n"
             f"Vibe: {identity.vibe}\n\n"
-            f"Use `/identity set <field> <value>` to modify",
+            f"---\n\n"
+            f"{content}\n\n"
+            f"Use `/agentsoul set <field> <value>` to modify identity fields\n"
+            f"Use `/agentsoul edit` to overwrite the entire file",
         )
     else:
-        await safe_reply(update.message, "🪪 IDENTITY.md is not configured yet.")
+        await safe_reply(update.message, "🫀 AGENTSOUL.md is not configured yet.")
 
 
 async def handle_edit_mode_message(
@@ -129,13 +122,11 @@ async def handle_edit_mode_message(
         await safe_reply(update.message, "❌ Edit cancelled.")
         return True
 
-    if target == "soul":
+    if target == "agentsoul":
         cfg = _cfg(context)
-        write_soul(cfg.shared_dir, text)
-        rebuild_all_workspaces(
-            cfg.shared_dir, cfg.iter_workspace_dirs(), cfg.recent_memory_days
-        )
-        await safe_reply(update.message, "✅ SOUL.md updated!")
+        write_agentsoul(cfg.shared_dir, text)
+        rebuild_all_workspaces(cfg.shared_dir, cfg.iter_workspace_dirs())
+        await safe_reply(update.message, "✅ AGENTSOUL.md updated!")
         return True
 
     return False

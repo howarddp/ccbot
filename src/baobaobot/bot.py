@@ -5,7 +5,7 @@ Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
   - Command handlers: /history, /screenshot, /esc, /forcekill,
-    /soul, /identity, /profile, /memory, /forget, /workspace, /rebuild,
+    /agentsoul, /profile, /memory, /forget, /workspace, /rebuild,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: history pagination,
     interactive UI navigation, screenshot refresh.
@@ -24,7 +24,7 @@ Handler modules (in handlers/):
   - interactive_ui: Interactive UI handling
   - status_polling: Terminal status polling
   - response_builder: Response message building
-  - persona_handler: /soul, /identity commands
+  - persona_handler: /agentsoul command
   - profile_handler: /profile command
   - memory_handler: /memory, /forget commands
 
@@ -110,10 +110,9 @@ from .screenshot import text_to_image
 from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
 from .terminal_parser import extract_bash_output
 from .handlers.persona_handler import (
+    agentsoul_command,
     cancel_command,
     handle_edit_mode_message,
-    identity_command,
-    soul_command,
 )
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
@@ -368,7 +367,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manually rebuild CLAUDE.md for the current topic's workspace."""
+    """Manually rebuild BAOBAOBOT.md for the current topic's workspace."""
     user = update.effective_user
     if not user or not _is_user_allowed(context, user.id):
         return
@@ -381,13 +380,11 @@ async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     ctx = _ctx(context)
-    assembler = ClaudeMdAssembler(
-        ctx.config.shared_dir, workspace_dir, ctx.config.recent_memory_days
-    )
+    assembler = ClaudeMdAssembler(ctx.config.shared_dir, workspace_dir)
     assembler.write()
     await safe_reply(
         update.message,
-        "✅ CLAUDE.md rebuilt. Send /clear to apply new settings to the current session.",
+        "✅ BAOBAOBOT.md rebuilt. Send /clear to apply new settings to the current session.",
     )
 
 
@@ -834,7 +831,7 @@ async def _auto_create_session(
     Steps:
       1. Resolve workspace name via router
       2. Create workspace directory and init workspace files
-      3. Assemble CLAUDE.md
+      3. Assemble BAOBAOBOT.md
       4. Create tmux window
       5. Bind via router → forward pending message
     """
@@ -849,10 +846,8 @@ async def _auto_create_session(
     wm = WorkspaceManager(ctx.config.shared_dir, workspace_path)
     wm.init_workspace()
 
-    # Assemble CLAUDE.md
-    assembler = ClaudeMdAssembler(
-        ctx.config.shared_dir, workspace_path, ctx.config.recent_memory_days
-    )
+    # Assemble BAOBAOBOT.md
+    assembler = ClaudeMdAssembler(ctx.config.shared_dir, workspace_path)
     assembler.write()
 
     # Create tmux window
@@ -1607,13 +1602,12 @@ async def post_init(application: Application) -> None:
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
         BotCommand("forcekill", "Kill & restart Claude in this session"),
-        BotCommand("soul", "View/edit personality (SOUL.md)"),
-        BotCommand("identity", "View/set identity fields"),
+        BotCommand("agentsoul", "View/edit agent personality & identity"),
         BotCommand("profile", "View/set user profile"),
         BotCommand("memory", "List/view/search memories"),
         BotCommand("forget", "Delete memory entries"),
         BotCommand("workspace", "Workspace status & project linking"),
-        BotCommand("rebuild", "Rebuild CLAUDE.md"),
+        BotCommand("rebuild", "Rebuild BAOBAOBOT.md"),
         BotCommand("cron", "Manage scheduled tasks"),
     ]
     # Add Claude Code slash commands
@@ -1625,17 +1619,16 @@ async def post_init(application: Application) -> None:
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await agent_ctx.session_manager.resolve_stale_ids()
 
-    # Rebuild CLAUDE.md for existing workspaces if sources changed
+    # Rebuild BAOBAOBOT.md for existing workspaces if sources changed
     workspace_dirs = agent_ctx.config.iter_workspace_dirs()
     if workspace_dirs:
         rebuilt = rebuild_all_workspaces(
             agent_ctx.config.shared_dir,
             workspace_dirs,
-            agent_ctx.config.recent_memory_days,
         )
         if rebuilt:
             logger.info(
-                "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
+                "Auto-rebuilt BAOBAOBOT.md for %d workspace(s) on startup", rebuilt
             )
 
     # Start cron service
@@ -1717,8 +1710,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     # BaoBao persona/memory/workspace commands
-    application.add_handler(CommandHandler("soul", soul_command))
-    application.add_handler(CommandHandler("identity", identity_command))
+    application.add_handler(CommandHandler("agentsoul", agentsoul_command))
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("memory", memory_command))
     application.add_handler(CommandHandler("forget", forget_command))

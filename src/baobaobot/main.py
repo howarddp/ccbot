@@ -117,8 +117,8 @@ claude_command = "{claude_cmd}"
 
 # Memory
 memory_keep_days = 30          # how long to keep daily memory files
-recent_memory_days = 7         # days of recent memory included in CLAUDE.md
-auto_assemble = true           # auto-reassemble CLAUDE.md on workspace changes
+recent_memory_days = 7         # default days shown in /memory command
+auto_assemble = true           # auto-reassemble BAOBAOBOT.md on workspace changes
 
 # Monitoring
 monitor_poll_interval = 2.0    # seconds between session polling cycles

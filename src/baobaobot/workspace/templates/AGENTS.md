@@ -16,7 +16,7 @@
 
 ### During a Session
 - When encountering important information (user preferences, decisions, TODOs), write to memory/YYYY-MM-DD.md
-- For major decisions or long-term information, update MEMORY.md
+- For major decisions or long-term information, update memory/EXPERIENCE.md
 
 ## Memory Management
 
@@ -29,7 +29,7 @@
 ### Auto Summaries (memory/summaries/)
 - System-managed directory; hourly cron job handles summary creation automatically
 
-### Long-term Memory (MEMORY.md)
+### Long-term Memory (memory/EXPERIENCE.md)
 - Important user preferences and decisions
 - Ongoing project information
 - Periodically clean up outdated information

@@ -22,20 +22,20 @@ class TestInitShared:
 
     def test_deploys_shared_templates(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
-        for filename in ["SOUL.md", "IDENTITY.md", "AGENTS.md"]:
+        for filename in ["AGENTSOUL.md", "AGENTS.md"]:
             assert (manager.shared_dir / filename).is_file()
 
-    def test_does_not_deploy_memory_md(self, manager: WorkspaceManager) -> None:
+    def test_does_not_deploy_experience_md(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
-        assert not (manager.shared_dir / "MEMORY.md").is_file()
+        assert not (manager.shared_dir / "EXPERIENCE.md").is_file()
 
     def test_idempotent(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
-        soul = manager.shared_dir / "SOUL.md"
-        soul.write_text("custom content")
+        agentsoul = manager.shared_dir / "AGENTSOUL.md"
+        agentsoul.write_text("custom content")
 
         manager.init_shared()  # Should NOT overwrite
-        assert soul.read_text() == "custom content"
+        assert agentsoul.read_text() == "custom content"
 
 
 class TestInitWorkspace:
@@ -45,22 +45,22 @@ class TestInitWorkspace:
         assert (manager.workspace_dir / "projects").is_dir()
         assert manager.memory_dir.is_dir()
 
-    def test_deploys_memory_md(self, manager: WorkspaceManager) -> None:
+    def test_deploys_experience_md(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
-        assert (manager.workspace_dir / "MEMORY.md").is_file()
+        assert (manager.memory_dir / "EXPERIENCE.md").is_file()
 
     def test_does_not_deploy_shared_templates(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
-        for filename in ["SOUL.md", "IDENTITY.md", "AGENTS.md"]:
+        for filename in ["AGENTSOUL.md", "AGENTS.md"]:
             assert not (manager.workspace_dir / filename).is_file()
 
     def test_idempotent(self, manager: WorkspaceManager) -> None:
         manager.init_workspace()
-        memory = manager.workspace_dir / "MEMORY.md"
-        memory.write_text("custom memory")
+        experience = manager.memory_dir / "EXPERIENCE.md"
+        experience.write_text("custom memory")
 
         manager.init_workspace()  # Should NOT overwrite
-        assert memory.read_text() == "custom memory"
+        assert experience.read_text() == "custom memory"
 
 
 class TestBinScripts:

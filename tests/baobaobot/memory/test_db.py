@@ -42,9 +42,9 @@ class TestSchema:
 
 class TestSync:
     def test_sync_empty_workspace(self, db: MemoryDB) -> None:
-        # MEMORY.md exists from template
+        # EXPERIENCE.md exists from template
         count = db.sync()
-        assert count >= 1  # At least MEMORY.md
+        assert count >= 1  # At least EXPERIENCE.md
 
     def test_sync_daily_file(self, db: MemoryDB, workspace: Path) -> None:
         memory_dir = workspace / "memory"
@@ -85,13 +85,15 @@ class TestSync:
         assert "- new content" in contents
         assert "- old" not in contents
 
-    def test_sync_memory_md(self, db: MemoryDB, workspace: Path) -> None:
-        (workspace / "MEMORY.md").write_text("# Memory\n\nImportant note here\n")
+    def test_sync_experience_md(self, db: MemoryDB, workspace: Path) -> None:
+        (workspace / "memory" / "EXPERIENCE.md").write_text(
+            "# Experience\n\nImportant note here\n"
+        )
         db.sync()
 
         conn = db.connect()
         rows = conn.execute(
-            "SELECT * FROM memories WHERE source = 'memory_md'"
+            "SELECT * FROM memories WHERE source = 'experience'"
         ).fetchall()
         assert len(rows) >= 1
         contents = [r["content"] for r in rows]
@@ -142,12 +144,14 @@ class TestSearch:
         results = db.search("nonexistent_xyz_999")
         assert results == []
 
-    def test_search_memory_md(self, db: MemoryDB, workspace: Path) -> None:
-        (workspace / "MEMORY.md").write_text("# Memory\n\nSpecial note\n")
+    def test_search_experience_md(self, db: MemoryDB, workspace: Path) -> None:
+        (workspace / "memory" / "EXPERIENCE.md").write_text(
+            "# Experience\n\nSpecial note\n"
+        )
 
         results = db.search("Special")
         assert len(results) >= 1
-        assert any(r["source"] == "memory_md" for r in results)
+        assert any(r["source"] == "experience" for r in results)
 
     def test_search_across_files(self, db: MemoryDB, workspace: Path) -> None:
         memory_dir = workspace / "memory"
@@ -182,7 +186,7 @@ class TestGetStats:
     def test_with_data(self, db: MemoryDB, workspace: Path) -> None:
         memory_dir = workspace / "memory"
         (memory_dir / "2026-02-15.md").write_text("- thing\n")
-        (workspace / "MEMORY.md").write_text("# Memory\n\nImportant\n")
+        (memory_dir / "EXPERIENCE.md").write_text("# Experience\n\nImportant\n")
 
         stats = db.get_stats()
         assert stats["daily_count"] == 1

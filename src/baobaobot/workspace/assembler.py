@@ -1,26 +1,26 @@
-"""CLAUDE.md assembly — composes the root CLAUDE.md from shared + workspace files.
+"""BAOBAOBOT.md assembly — composes the root BAOBAOBOT.md from shared files.
 
-Reads AGENTS.md, SOUL.md, IDENTITY.md from shared_dir, and
-MEMORY.md + recent daily memory files from workspace_dir, then writes a
-single assembled CLAUDE.md in the workspace root.
-Claude Code reads this file automatically when starting in the workspace.
+Reads AGENTS.md and AGENTSOUL.md from shared_dir, then writes a single
+assembled BAOBAOBOT.md in the workspace root. Memory (memory/EXPERIENCE.md,
+daily memories, summaries) is NOT embedded — Claude Code reads those on demand
+via skills (memory-list, memory-search).
+
+A thin CLAUDE.md is also written so Claude Code discovers the instructions.
 
 Key class: ClaudeMdAssembler.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Section order in the assembled CLAUDE.md
+# Section order in the assembled BAOBAOBOT.md
 # (filename, section_title, source)  — source is "shared" or "workspace"
 _SECTION_ORDER = [
     ("AGENTS.md", "Work Instructions (AGENTS)", "shared"),
-    ("SOUL.md", "Personality (SOUL)", "shared"),
-    ("IDENTITY.md", "Identity (IDENTITY)", "shared"),
-    ("MEMORY.md", "Memory (MEMORY)", "workspace"),
+    ("AGENTSOUL.md", "Agent Soul (AGENTSOUL)", "shared"),
 ]
 
 _HEADER = """\
@@ -31,17 +31,21 @@ _HEADER = """\
 """
 
 
-class ClaudeMdAssembler:
-    """Reads shared persona files and per-topic memory, assembles CLAUDE.md."""
+_CLAUDE_MD_CONTENT = """\
+# BaoBao Assistant
 
-    def __init__(
-        self, shared_dir: Path, workspace_dir: Path, recent_days: int = 7
-    ) -> None:
+Read BAOBAOBOT.md for detailed instructions, personality, and memory context.
+"""
+
+
+class ClaudeMdAssembler:
+    """Reads shared persona files, assembles BAOBAOBOT.md."""
+
+    def __init__(self, shared_dir: Path, workspace_dir: Path) -> None:
         self.shared_dir = shared_dir
         self.workspace_dir = workspace_dir
-        self.memory_dir = workspace_dir / "memory"
-        self.output_path = workspace_dir / "CLAUDE.md"
-        self.recent_days = recent_days
+        self.output_path = workspace_dir / "BAOBAOBOT.md"
+        self.claude_md_path = workspace_dir / "CLAUDE.md"
         self._source_mtimes: dict[str, float] = {}
 
     def _read_file(self, path: Path) -> str:
@@ -55,61 +59,8 @@ class ClaudeMdAssembler:
         """Return shared_dir or workspace_dir based on source tag."""
         return self.shared_dir if source == "shared" else self.workspace_dir
 
-    def _get_recent_memories(self) -> str:
-        """Collect content from recent daily memory files."""
-        if not self.memory_dir.exists():
-            return ""
-
-        today = datetime.now().date()
-        lines: list[str] = []
-
-        for i in range(self.recent_days):
-            date = today - timedelta(days=i)
-            date_str = date.isoformat()
-            memory_file = self.memory_dir / f"{date_str}.md"
-            content = self._read_file(memory_file)
-            if content:
-                lines.append(f"### {date_str}")
-                lines.append(content)
-                lines.append("")
-
-        return "\n".join(lines).strip()
-
-    def _get_recent_summaries(self, days: int = 3) -> str:
-        """Collect content from recent auto-summary files (memory/summaries/)."""
-        summaries_dir = self.memory_dir / "summaries"
-        if not summaries_dir.exists():
-            return ""
-
-        today = datetime.now().date()
-        lines: list[str] = []
-
-        # Collect all summary files within the date range
-        for f in sorted(summaries_dir.glob("*.md")):
-            try:
-                file_date_str = f.stem[:10]  # "YYYY-MM-DD" from "YYYY-MM-DD_HH00"
-                file_date = datetime.strptime(file_date_str, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            if (today - file_date).days > days:
-                continue
-            content = self._read_file(f)
-            if content:
-                # Format: "### YYYY-MM-DD HH:00" from stem "YYYY-MM-DD_HH00"
-                time_part = f.stem[11:] if len(f.stem) > 10 else ""
-                display_time = (
-                    f"{file_date_str} {time_part[:2]}:{time_part[2:]}"
-                    if time_part
-                    else file_date_str
-                )
-                lines.append(f"### {display_time}")
-                lines.append(content)
-                lines.append("")
-
-        return "\n".join(lines).strip()
-
     def assemble(self) -> str:
-        """Build the full CLAUDE.md content from source files."""
+        """Build the full BAOBAOBOT.md content from source files."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         parts: list[str] = [_HEADER.format(timestamp=timestamp)]
 
@@ -121,18 +72,6 @@ class ClaudeMdAssembler:
                 parts.append(f"---\n\n## {section_title}")
                 parts.append(content)
 
-        # Recent daily memories
-        recent = self._get_recent_memories()
-        if recent:
-            parts.append("---\n\n## Recent Memories")
-            parts.append(recent)
-
-        # Auto summaries (last 3 days)
-        summaries = self._get_recent_summaries(days=3)
-        if summaries:
-            parts.append("---\n\n## Auto Summaries")
-            parts.append(summaries)
-
         result = "\n\n".join(parts) + "\n"
         # Replace template variables (safety net for old AGENTS.md with {{BIN_DIR}})
         result = result.replace("{{BIN_DIR}}", str(self.shared_dir / "bin"))
@@ -141,10 +80,13 @@ class ClaudeMdAssembler:
         return result
 
     def write(self) -> None:
-        """Assemble and write CLAUDE.md to the workspace root."""
+        """Assemble and write BAOBAOBOT.md + thin CLAUDE.md to the workspace root."""
         content = self.assemble()
         self.output_path.write_text(content, encoding="utf-8")
-        logger.info("Assembled CLAUDE.md at %s", self.output_path)
+        logger.info("Assembled BAOBAOBOT.md at %s", self.output_path)
+
+        # Write thin CLAUDE.md that points to BAOBAOBOT.md
+        self.claude_md_path.write_text(_CLAUDE_MD_CONTENT, encoding="utf-8")
 
         # Update mtime cache
         self._update_mtimes()
@@ -157,19 +99,6 @@ class ClaudeMdAssembler:
             filepath = source_dir / filename
             if filepath.exists():
                 self._source_mtimes[f"{source}:{filename}"] = filepath.stat().st_mtime
-
-        # Also track memory directory
-        if self.memory_dir.exists():
-            for f in self.memory_dir.glob("*.md"):
-                key = f"memory/{f.name}"
-                self._source_mtimes[key] = f.stat().st_mtime
-
-        # Track summaries directory
-        summaries_dir = self.memory_dir / "summaries"
-        if summaries_dir.exists():
-            for f in summaries_dir.glob("*.md"):
-                key = f"memory/summaries/{f.name}"
-                self._source_mtimes[key] = f.stat().st_mtime
 
     def needs_rebuild(self) -> bool:
         """Check if any source file has been modified since last assembly."""
@@ -189,38 +118,17 @@ class ClaudeMdAssembler:
                 if current_mtime > cached:
                     return True
 
-        # Check memory files
-        if self.memory_dir.exists():
-            for f in self.memory_dir.glob("*.md"):
-                key = f"memory/{f.name}"
-                current_mtime = f.stat().st_mtime
-                cached = self._source_mtimes.get(key, 0)
-                if current_mtime > cached:
-                    return True
-
-        # Check summaries
-        summaries_dir = self.memory_dir / "summaries"
-        if summaries_dir.exists():
-            for f in summaries_dir.glob("*.md"):
-                key = f"memory/summaries/{f.name}"
-                current_mtime = f.stat().st_mtime
-                cached = self._source_mtimes.get(key, 0)
-                if current_mtime > cached:
-                    return True
-
         return False
 
 
-def rebuild_all_workspaces(
-    shared_dir: Path, workspace_dirs: list[Path], recent_days: int = 7
-) -> int:
-    """Rebuild CLAUDE.md for all workspaces where sources have changed.
+def rebuild_all_workspaces(shared_dir: Path, workspace_dirs: list[Path]) -> int:
+    """Rebuild BAOBAOBOT.md for all workspaces where sources have changed.
 
     Returns the number of workspaces rebuilt.
     """
     rebuilt = 0
     for ws in workspace_dirs:
-        assembler = ClaudeMdAssembler(shared_dir, ws, recent_days)
+        assembler = ClaudeMdAssembler(shared_dir, ws)
         if assembler.needs_rebuild():
             assembler.write()
             rebuilt += 1

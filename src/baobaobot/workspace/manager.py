@@ -1,8 +1,8 @@
 """Workspace directory initialization and project management.
 
 Manages a two-tier layout:
-  - Shared dir (config_dir): SOUL.md, IDENTITY.md, AGENTS.md, bin/, users/
-  - Per-topic workspace (workspace_<topic>): MEMORY.md, memory/, projects/, CLAUDE.md
+  - Shared dir (config_dir): AGENTSOUL.md, AGENTS.md, bin/, users/
+  - Per-topic workspace (workspace_<topic>): memory/EXPERIENCE.md, memory/, projects/, BAOBAOBOT.md
 
 Key class: WorkspaceManager.
 """
@@ -25,8 +25,7 @@ _SKILLS_DIR = Path(__file__).parent / "skills"
 
 # Files deployed to the shared dir (config_dir) — created only if missing
 _SHARED_TEMPLATE_FILES = [
-    "SOUL.md",
-    "IDENTITY.md",
+    "AGENTSOUL.md",
 ]
 
 # System-managed files always overwritten from templates
@@ -34,9 +33,9 @@ _SHARED_SYNC_FILES = [
     "AGENTS.md",
 ]
 
-# Files deployed to each per-topic workspace
+# Files deployed to each per-topic workspace (dest_subdir, filename)
 _WORKSPACE_TEMPLATE_FILES = [
-    "MEMORY.md",
+    ("memory", "EXPERIENCE.md"),
 ]
 
 # Scripts deployed to shared bin/
@@ -121,8 +120,8 @@ class WorkspaceManager:
         (self.memory_dir / "attachments").mkdir(exist_ok=True)
         (self.workspace_dir / "tmp").mkdir(exist_ok=True)
 
-        for filename in _WORKSPACE_TEMPLATE_FILES:
-            dest = self.workspace_dir / filename
+        for subdir, filename in _WORKSPACE_TEMPLATE_FILES:
+            dest = self.workspace_dir / subdir / filename
             if not dest.exists():
                 src = _TEMPLATES_DIR / filename
                 if src.exists():
