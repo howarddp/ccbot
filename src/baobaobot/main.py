@@ -375,6 +375,23 @@ def main() -> None:
         _add_agent()
         return
 
+    # Run first-time setup in foreground BEFORE launching into tmux,
+    # so the user can see and interact with the setup prompts.
+    from .utils import baobaobot_dir
+
+    config_dir = baobaobot_dir()
+    toml_path = config_dir / "settings.toml"
+
+    if not toml_path.is_file():
+        print("No settings.toml found. Running first-time setup...\n")
+        _setup()
+        # Re-resolve config_dir (setup may have changed it via dir pointer)
+        config_dir = baobaobot_dir()
+        toml_path = config_dir / "settings.toml"
+        if not toml_path.is_file():
+            print("Setup did not produce settings.toml. Exiting.")
+            sys.exit(1)
+
     # Check if we should auto-launch inside tmux
     foreground = "--foreground" in sys.argv or "-f" in sys.argv
     inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1"
@@ -393,21 +410,6 @@ def main() -> None:
 
     from .agent_context import AgentContext, create_agent_context
     from .settings import load_settings
-    from .utils import baobaobot_dir
-
-    config_dir = baobaobot_dir()
-    toml_path = config_dir / "settings.toml"
-
-    # Auto-guide setup if settings.toml is missing
-    if not toml_path.is_file():
-        print("No settings.toml found. Running first-time setup...\n")
-        _setup()
-        # Re-resolve config_dir (setup may have changed it via dir pointer)
-        config_dir = baobaobot_dir()
-        toml_path = config_dir / "settings.toml"
-        if not toml_path.is_file():
-            print("Setup did not produce settings.toml. Exiting.")
-            sys.exit(1)
 
     try:
         agent_configs = load_settings(config_dir=config_dir)
