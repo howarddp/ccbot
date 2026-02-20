@@ -276,9 +276,8 @@ mode = "{mode}"
     print("\nDone! Restart baobaobot to activate the new agent.")
 
 
-def _launch_in_tmux() -> None:
+def _launch_in_tmux(session_name: str = "baobaobot") -> None:
     """Create a tmux session and re-launch baobaobot inside it."""
-    session_name = os.getenv("TMUX_SESSION_NAME", "baobaobot")
     window_name = "__main__"
     target = f"{session_name}:{window_name}"
 
@@ -397,7 +396,19 @@ def main() -> None:
     inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1"
 
     if not foreground and not inside_tmux:
-        _launch_in_tmux()
+        # Read agent's tmux session name from settings so bot process runs
+        # in the same tmux session as the agent's Claude Code windows.
+        import tomllib
+
+        with open(toml_path, "rb") as f:
+            raw = tomllib.load(f)
+        agents = raw.get("agents", [])
+        if agents:
+            first = agents[0]
+            tmux_name = first.get("tmux_session", first.get("name", "baobaobot"))
+        else:
+            tmux_name = "baobaobot"
+        _launch_in_tmux(session_name=tmux_name)
         return
 
     # Strip --foreground / -f from argv so they don't confuse anything downstream
