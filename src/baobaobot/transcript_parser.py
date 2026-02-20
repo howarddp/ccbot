@@ -27,6 +27,9 @@ class ParsedMessage:
     tool_name: str | None = None  # For tool_use messages
 
 
+_NO_NOTIFY_TAG = "[NO_NOTIFY]"
+
+
 @dataclass
 class ParsedEntry:
     """A single parsed message entry ready for display."""
@@ -41,6 +44,7 @@ class ParsedEntry:
     tool_name: str | None = (
         None  # For tool_use entries, the tool name (e.g. "AskUserQuestion")
     )
+    no_notify: bool = False  # If True, skip sending to Telegram
 
 
 @dataclass
@@ -375,7 +379,8 @@ class TranscriptParser:
         cls,
         entries: list[dict],
         pending_tools: dict[str, PendingToolInfo] | None = None,
-    ) -> tuple[list[ParsedEntry], dict[str, PendingToolInfo]]:
+        no_notify_active: bool = False,
+    ) -> tuple[list[ParsedEntry], dict[str, PendingToolInfo], bool]:
         """Parse a list of JSONL entries into a flat list of display-ready messages.
 
         This is the shared core logic used by both get_recent_messages (history)
@@ -387,9 +392,13 @@ class TranscriptParser:
                 previous call (tool_use_id -> formatted summary). Used by the
                 monitor to handle tool_use and tool_result arriving in separate
                 poll cycles.
+            no_notify_active: Carry-over state from previous call. When True,
+                all entries are marked no_notify until a non-[NO_NOTIFY] user
+                message is seen.
 
         Returns:
-            Tuple of (parsed entries, remaining pending_tools state)
+            Tuple of (parsed entries, remaining pending_tools state,
+            no_notify_active state for carry-over)
         """
         result: list[ParsedEntry] = []
         last_cmd_name: str | None = None
@@ -448,6 +457,15 @@ class TranscriptParser:
             last_cmd_name = None
 
             if msg_type == "assistant":
+                # Pre-scan: if any text block starts with [NO_NOTIFY],
+                # mark all entries from this message as no_notify.
+                # Also inherits no_notify_active from previous user message.
+                _msg_no_notify = no_notify_active or any(
+                    isinstance(b, dict)
+                    and b.get("type") == "text"
+                    and b.get("text", "").strip().startswith(_NO_NOTIFY_TAG)
+                    for b in content
+                )
                 # Process content blocks
                 has_text = False
                 for block in content:
@@ -457,6 +475,9 @@ class TranscriptParser:
 
                     if btype == "text":
                         t = block.get("text", "").strip()
+                        # Strip [NO_NOTIFY] tag from text
+                        if t.startswith(_NO_NOTIFY_TAG):
+                            t = t[len(_NO_NOTIFY_TAG) :].strip()
                         if t and t != cls._NO_CONTENT_PLACEHOLDER:
                             result.append(
                                 ParsedEntry(
@@ -464,6 +485,7 @@ class TranscriptParser:
                                     text=t,
                                     content_type="text",
                                     timestamp=entry_timestamp,
+                                    no_notify=_msg_no_notify,
                                 )
                             )
                             has_text = True
@@ -484,6 +506,7 @@ class TranscriptParser:
                                         text=plan,
                                         content_type="text",
                                         timestamp=entry_timestamp,
+                                        no_notify=_msg_no_notify,
                                     )
                                 )
                         if tool_id:
@@ -506,6 +529,7 @@ class TranscriptParser:
                                     tool_use_id=tool_id,
                                     timestamp=entry_timestamp,
                                     tool_name=name,
+                                    no_notify=_msg_no_notify,
                                 )
                             )
                         else:
@@ -517,6 +541,7 @@ class TranscriptParser:
                                     tool_use_id=tool_id or None,
                                     timestamp=entry_timestamp,
                                     tool_name=name,
+                                    no_notify=_msg_no_notify,
                                 )
                             )
 
@@ -530,6 +555,7 @@ class TranscriptParser:
                                     text=quoted,
                                     content_type="thinking",
                                     timestamp=entry_timestamp,
+                                    no_notify=_msg_no_notify,
                                 )
                             )
                         elif not has_text:
@@ -539,11 +565,13 @@ class TranscriptParser:
                                     text="(thinking)",
                                     content_type="thinking",
                                     timestamp=entry_timestamp,
+                                    no_notify=_msg_no_notify,
                                 )
                             )
 
             elif msg_type == "user":
                 # Check for tool_result blocks and merge with pending tools
+                # tool_result blocks inherit no_notify from the active state
                 user_text_parts: list[str] = []
 
                 for block in content:
@@ -586,6 +614,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    no_notify=no_notify_active,
                                 )
                             )
                         elif is_error:
@@ -615,6 +644,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    no_notify=no_notify_active,
                                 )
                             )
                         elif tool_summary:
@@ -660,6 +690,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    no_notify=no_notify_active,
                                 )
                             )
                         elif result_text:
@@ -672,6 +703,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    no_notify=no_notify_active,
                                 )
                             )
 
@@ -683,16 +715,31 @@ class TranscriptParser:
                 # Add user text if present (skip if message was only tool_results)
                 if user_text_parts:
                     combined = "\n".join(user_text_parts)
+                    # Detect and strip [NO_NOTIFY] tag.
+                    # Also detect [System] prefix as implicit no_notify — Claude
+                    # Code strips [NO_NOTIFY] from user input before writing JSONL,
+                    # so "[NO_NOTIFY] [System] ..." becomes "[System] ..." in the
+                    # stored content. The [System] prefix is only used by the cron
+                    # service for automated messages that should not appear in Telegram.
+                    _user_no_notify = combined.startswith(
+                        _NO_NOTIFY_TAG
+                    ) or combined.startswith("[System]")
+                    if combined.startswith(_NO_NOTIFY_TAG):
+                        combined = combined[len(_NO_NOTIFY_TAG) :].strip()
+                    no_notify_active = _user_no_notify
                     # Skip if it looks like local command XML
-                    if not cls._RE_LOCAL_STDOUT.search(
+                    if (
                         combined
-                    ) and not cls._RE_COMMAND_NAME.search(combined):
+                        and not cls._RE_LOCAL_STDOUT.search(combined)
+                        and not cls._RE_COMMAND_NAME.search(combined)
+                    ):
                         result.append(
                             ParsedEntry(
                                 role="user",
                                 text=combined,
                                 content_type="text",
                                 timestamp=entry_timestamp,
+                                no_notify=_user_no_notify,
                             )
                         )
 
@@ -715,4 +762,4 @@ class TranscriptParser:
         for entry in result:
             entry.text = entry.text.strip()
 
-        return result, remaining_pending
+        return result, remaining_pending, no_notify_active

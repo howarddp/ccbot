@@ -10,6 +10,7 @@ Supports both full history and unread message range views.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -168,14 +169,15 @@ async def send_history(
 
         lines = [header]
         for msg in messages:
-            # Format timestamp as HH:MM
+            # Format timestamp as HH:MM in local time
             ts = msg.get("timestamp")
             if ts:
                 try:
-                    # ISO format: 2024-01-15T14:32:00.000Z
-                    time_part = ts.split("T")[1] if "T" in ts else ts
-                    hh_mm = time_part[:5]  # "14:32"
-                except (IndexError, TypeError):
+                    # ISO format: 2024-01-15T14:32:00.000Z → local time
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    local_dt = dt.astimezone()
+                    hh_mm = local_dt.strftime("%H:%M")
+                except (ValueError, TypeError):
                     hh_mm = ""
             else:
                 hh_mm = ""

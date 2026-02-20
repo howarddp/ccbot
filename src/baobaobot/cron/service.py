@@ -44,7 +44,7 @@ _IDLE_THRESHOLD_S = 60
 
 # Summary prompt sent to Claude Code
 _SUMMARY_PROMPT = """\
-[System] Auto-summary check: Review recent conversation and classify:
+[NO_NOTIFY] [System] Auto-summary check: Review recent conversation and classify:
 
 1. SKIP — no summary needed if:
    - Only casual chat or greetings
@@ -61,7 +61,8 @@ _SUMMARY_PROMPT = """\
 
 Format: bullet points, under 10 lines, [Name] prefix per item.
 Write in the user's preferred language.
-If nothing worth recording, reply only: "No summary needed."
+If nothing worth recording, reply only: "[NO_NOTIFY] No summary needed."
+If you recorded a summary, reply WITHOUT [NO_NOTIFY] so the user is notified.
 """
 
 

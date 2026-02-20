@@ -123,6 +123,8 @@ class SessionMonitor:
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
         # Per-session pending tool_use state carried across poll cycles
         self._pending_tools: dict[str, dict[str, Any]] = {}  # session_id -> pending
+        # Per-session [NO_NOTIFY] active state carried across poll cycles
+        self._no_notify_active: dict[str, bool] = {}  # session_id -> active
         # Track last known session_map for detecting changes
         # Keys may be window_id (@12) or window_name (old format) during transition
         self._last_session_map: dict[str, str] = {}  # window_key -> session_id
@@ -357,20 +359,29 @@ class SessionMonitor:
 
                 # Parse new entries using the shared logic, carrying over pending tools
                 carry = self._pending_tools.get(session_info.session_id, {})
-                parsed_entries, remaining = TranscriptParser.parse_entries(
+                nn_active = self._no_notify_active.get(session_info.session_id, False)
+                parsed_entries, remaining, nn_active = TranscriptParser.parse_entries(
                     new_entries,
                     pending_tools=carry,
+                    no_notify_active=nn_active,
                 )
                 if remaining:
                     self._pending_tools[session_info.session_id] = remaining
                 else:
                     self._pending_tools.pop(session_info.session_id, None)
+                if nn_active:
+                    self._no_notify_active[session_info.session_id] = True
+                else:
+                    self._no_notify_active.pop(session_info.session_id, None)
 
                 for entry in parsed_entries:
                     if not entry.text:
                         continue
                     # Skip user messages unless show_user_messages is enabled
                     if entry.role == "user" and not self._show_user_messages:
+                        continue
+                    # Skip [NO_NOTIFY] tagged messages
+                    if entry.no_notify:
                         continue
                     # Extract [SEND_FILE:path] markers from assistant text
                     file_paths: list[str] = []

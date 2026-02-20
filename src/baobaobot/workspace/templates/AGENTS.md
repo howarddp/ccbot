@@ -8,18 +8,11 @@
 - When replying to a specific user, use `@[user_id]` format to mention them, e.g. `@[7012345678] your task is done`
 - The bot automatically converts `@[user_id]` to Telegram mentions, and users will receive push notifications
 
-## Reply Style
-- Reply in the user's preferred language based on their profile
-- Follow the personality defined in SOUL.md and IDENTITY.md
-- Maintain a consistent tone and style
-
 ## Session Rituals
 
 ### At Session Start
 - Read the user's profile from `{{USERS_DIR}}/` (filename is `<user_id>.md`) to determine their preferred language, timezone, and other preferences
-- Read MEMORY.md to understand long-term memory
 - Browse recent 3 days of memory/ daily memories and memory/summaries/ auto-summaries
-- Adjust interaction based on user information
 
 ### During a Session
 - When encountering important information (user preferences, decisions, TODOs), write to memory/YYYY-MM-DD.md
@@ -33,13 +26,8 @@
 - Timestamps are recorded in the filename (date)
 - Tag which user the information belongs to, e.g. `- [Alice] requested login bug fix`
 
-### Auto Summaries (memory/summaries/YYYY-MM-DD_HH00.md)
-- System triggers hourly to check if recent conversations have content worth recording
-- If there is important content (decisions, completed tasks, new requirements, etc.), write to `memory/summaries/YYYY-MM-DD_HH00.md`
-- Format: bullet points, 10 lines max, each prefixed with `[Username]`
-- If nothing worth recording, reply "No summary needed." and move on
-- Write in the user's preferred language
-- This directory is system-managed and independent from daily memories (memory/YYYY-MM-DD.md)
+### Auto Summaries (memory/summaries/)
+- System-managed directory; hourly cron job handles summary creation automatically
 
 ### Long-term Memory (MEMORY.md)
 - Important user preferences and decisions
@@ -62,7 +50,7 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 | `projects/` | git clone, project code |
 | `scripts/` | Custom scripts, automation tools |
 | `tmp/` | Temp files, user-uploaded files |
-| `memory/` | Daily memories (system-managed, don't modify structure) |
+| `memory/` | Daily memories (create new files freely, don't rename or reorganize existing) |
 | `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
 
 ### Exceptions
@@ -70,6 +58,17 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 - Reading external files (e.g. `/etc/hosts`, system logs) is not restricted
 - Running system commands (e.g. `brew install`, `pip install`) is not restricted
 - When working with git repos cloned inside `projects/`, use that repo as the working scope
+
+## Silent Replies (`[NO_NOTIFY]`)
+
+When your reply does not need to be sent to users via Telegram, prefix it with `[NO_NOTIFY]`.
+Messages with this tag are recorded in session history but **not** delivered to Telegram.
+
+Use cases:
+- Responding to system scheduled tasks with no actionable output (e.g., `[NO_NOTIFY] No summary needed.`)
+- Any automated/routine response that would be noise to the user
+
+If the scheduled task produces meaningful results (e.g., a summary was written), reply **without** `[NO_NOTIFY]` so the user gets notified.
 
 ## File Sending
 

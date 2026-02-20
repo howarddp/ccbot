@@ -162,6 +162,7 @@ async def _cmd_list(update: Update, ws_name: str, cron_svc) -> None:
             lines.append(f"   Error: `{job.state.last_error}`")
         lines.append("")
 
+    lines.append("💡 `/cron run <id>` to trigger a job immediately")
     await safe_reply(update.message, "\n".join(lines))
 
 

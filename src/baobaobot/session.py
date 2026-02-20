@@ -900,7 +900,7 @@ class SessionManager:
             logger.error("Error reading session file %s: %s", file_path, e)
             return [], 0
 
-        parsed_entries, _ = TranscriptParser.parse_entries(entries)
+        parsed_entries, _, _ = TranscriptParser.parse_entries(entries)
         all_messages = [
             {
                 "role": e.role,

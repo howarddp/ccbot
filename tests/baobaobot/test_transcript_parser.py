@@ -5,6 +5,7 @@ import pytest
 from baobaobot.transcript_parser import (
     ParsedMessage,
     TranscriptParser,
+    _NO_NOTIFY_TAG,
 )
 
 EXPQUOTE_START = TranscriptParser.EXPANDABLE_QUOTE_START
@@ -319,7 +320,7 @@ class TestFormatToolResultText:
 class TestParseEntries:
     def test_assistant_text(self, make_jsonl_entry, make_text_block):
         entries = [make_jsonl_entry("assistant", [make_text_block("Hello!")])]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         assert len(result) == 1
         assert result[0].role == "assistant"
         assert result[0].text == "Hello!"
@@ -327,7 +328,7 @@ class TestParseEntries:
 
     def test_user_text(self, make_jsonl_entry, make_text_block):
         entries = [make_jsonl_entry("user", [make_text_block("Hi bot")])]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         assert len(result) == 1
         assert result[0].role == "user"
         assert result[0].text == "Hi bot"
@@ -349,7 +350,7 @@ class TestParseEntries:
                 [make_tool_result_block("t1", "file contents line1\nline2\nline3")],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         tool_use_entries = [e for e in result if e.content_type == "tool_use"]
         tool_result_entries = [e for e in result if e.content_type == "tool_result"]
         assert len(tool_use_entries) == 1
@@ -363,7 +364,7 @@ class TestParseEntries:
         entries = [
             make_jsonl_entry("assistant", [make_thinking_block("reasoning here")])
         ]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         assert len(result) == 1
         assert result[0].content_type == "thinking"
         assert EXPQUOTE_START in result[0].text
@@ -376,7 +377,7 @@ class TestParseEntries:
             "<local-command-stdout>all good</local-command-stdout>"
         )
         entries = [make_jsonl_entry("user", [make_text_block(xml)])]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         assert len(result) == 1
         assert result[0].content_type == "local_command"
         assert "/status" in result[0].text
@@ -387,7 +388,7 @@ class TestParseEntries:
             "t1", "ExitPlanMode", {"plan": "Step 1: do X\nStep 2: do Y"}
         )
         entries = [make_jsonl_entry("assistant", [block])]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         texts = [e for e in result if e.content_type == "text"]
         tool_uses = [e for e in result if e.content_type == "tool_use"]
         assert len(texts) == 1
@@ -415,7 +416,7 @@ class TestParseEntries:
                 [make_tool_result_block("t1", "OK")],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         tool_result_entries = [e for e in result if e.content_type == "tool_result"]
         assert len(tool_result_entries) == 1
         tr = tool_result_entries[0]
@@ -439,7 +440,7 @@ class TestParseEntries:
                 [make_tool_result_block("t1", "Permission denied", is_error=True)],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         tool_result_entries = [e for e in result if e.content_type == "tool_result"]
         assert len(tool_result_entries) == 1
         assert "Error: Permission denied" in tool_result_entries[0].text
@@ -460,7 +461,7 @@ class TestParseEntries:
                 [make_tool_result_block("t1", TranscriptParser._INTERRUPTED_TEXT)],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         tool_result_entries = [e for e in result if e.content_type == "tool_result"]
         assert len(tool_result_entries) == 1
         assert "Interrupted" in tool_result_entries[0].text
@@ -472,7 +473,7 @@ class TestParseEntries:
                 [make_tool_use_block("t1", "Read", {"file_path": "a.py"})],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries, pending_tools={})
+        result, pending, _ = TranscriptParser.parse_entries(entries, pending_tools={})
         assert "t1" in pending
         flushed = [
             e for e in result if e.content_type == "tool_use" and e.tool_use_id == "t1"
@@ -488,7 +489,7 @@ class TestParseEntries:
                 [make_tool_use_block("t1", "Read", {"file_path": "a.py"})],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries, pending_tools=None)
+        result, pending, _ = TranscriptParser.parse_entries(entries, pending_tools=None)
         tool_entries = [e for e in result if e.tool_use_id == "t1"]
         assert len(tool_entries) == 2
         assert tool_entries[0].content_type == "tool_use"
@@ -505,6 +506,378 @@ class TestParseEntries:
                 ],
             ),
         ]
-        result, pending = TranscriptParser.parse_entries(entries)
+        result, pending, _ = TranscriptParser.parse_entries(entries)
         user_entries = [e for e in result if e.role == "user"]
         assert len(user_entries) == 0
+
+
+# ── [NO_NOTIFY] tag handling ────────────────────────────────────────────
+
+
+class TestNoNotifyTag:
+    """Tests for [NO_NOTIFY] prefix tag detection, stripping, and flagging."""
+
+    def test_user_message_with_no_notify(self, make_jsonl_entry, make_text_block):
+        """User message with [NO_NOTIFY] → no_notify=True, tag stripped."""
+        entries = [
+            make_jsonl_entry(
+                "user",
+                [make_text_block("[NO_NOTIFY] [System] Auto-summary check")],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is True
+        assert result[0].text == "[System] Auto-summary check"
+        assert _NO_NOTIFY_TAG not in result[0].text
+
+    def test_user_message_without_no_notify(self, make_jsonl_entry, make_text_block):
+        """User message without tag → no_notify=False, text unchanged."""
+        entries = [
+            make_jsonl_entry("user", [make_text_block("Hello bot")]),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is False
+        assert result[0].text == "Hello bot"
+
+    def test_assistant_text_with_no_notify(self, make_jsonl_entry, make_text_block):
+        """Assistant text with [NO_NOTIFY] → no_notify=True, tag stripped."""
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("[NO_NOTIFY] No summary needed.")],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is True
+        assert result[0].text == "No summary needed."
+        assert _NO_NOTIFY_TAG not in result[0].text
+
+    def test_assistant_text_without_no_notify(self, make_jsonl_entry, make_text_block):
+        """Assistant text without tag → no_notify=False."""
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("Here is your summary: ...")],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is False
+
+    def test_assistant_thinking_plus_no_notify_text(
+        self, make_jsonl_entry, make_text_block, make_thinking_block
+    ):
+        """Assistant with thinking + [NO_NOTIFY] text → both entries no_notify=True."""
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [
+                    make_thinking_block("Let me check..."),
+                    make_text_block("[NO_NOTIFY] No summary needed."),
+                ],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 2
+        thinking_entry = [e for e in result if e.content_type == "thinking"][0]
+        text_entry = [e for e in result if e.content_type == "text"][0]
+        assert thinking_entry.no_notify is True
+        assert text_entry.no_notify is True
+        assert text_entry.text == "No summary needed."
+
+    def test_assistant_thinking_without_no_notify_text(
+        self, make_jsonl_entry, make_text_block, make_thinking_block
+    ):
+        """Assistant with thinking + normal text → both entries no_notify=False."""
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [
+                    make_thinking_block("Let me write the summary..."),
+                    make_text_block(
+                        "Summary written to memory/summaries/2026-02-20.md"
+                    ),
+                ],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 2
+        for entry in result:
+            assert entry.no_notify is False
+
+    def test_no_notify_only_tag_no_content(self, make_jsonl_entry, make_text_block):
+        """[NO_NOTIFY] with no other content → stripped to empty, no entry produced."""
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("[NO_NOTIFY]")],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        text_entries = [e for e in result if e.content_type == "text"]
+        assert len(text_entries) == 0
+
+    def test_no_notify_user_only_tag(self, make_jsonl_entry, make_text_block):
+        """User message with only [NO_NOTIFY] → stripped to empty, no entry."""
+        entries = [
+            make_jsonl_entry("user", [make_text_block("[NO_NOTIFY]")]),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 0
+
+    def test_no_notify_mid_text_not_detected(self, make_jsonl_entry, make_text_block):
+        """[NO_NOTIFY] not at start → no_notify=False, text unchanged."""
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("Some text [NO_NOTIFY] here")],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is False
+        assert result[0].text == "Some text [NO_NOTIFY] here"
+
+    def test_no_notify_cron_summary_prompt(self, make_jsonl_entry, make_text_block):
+        """Simulates actual cron summary prompt with [NO_NOTIFY] prefix."""
+        prompt = (
+            "[NO_NOTIFY] [System] Auto-summary check: "
+            "Review recent conversation and classify..."
+        )
+        entries = [make_jsonl_entry("user", [make_text_block(prompt)])]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is True
+        assert result[0].text.startswith("[System]")
+
+    def test_system_prefix_implicit_no_notify(self, make_jsonl_entry, make_text_block):
+        """[System] prefix in user message → implicit no_notify (Claude Code strips [NO_NOTIFY])."""
+        prompt = (
+            "[System] Auto-summary check: Review recent conversation and classify..."
+        )
+        entries = [make_jsonl_entry("user", [make_text_block(prompt)])]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        assert len(result) == 1
+        assert result[0].no_notify is True
+        assert result[0].text.startswith("[System]")
+        # no_notify_active should be True for carry-over
+        assert nn is True
+
+    def test_system_prefix_propagates_to_assistant(
+        self, make_jsonl_entry, make_text_block
+    ):
+        """[System] user message sets no_notify_active, suppressing subsequent assistant."""
+        entries = [
+            make_jsonl_entry(
+                "user",
+                [make_text_block("[System] Auto-summary check: ...")],
+            ),
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("[NO_NOTIFY] No summary needed.")],
+            ),
+        ]
+        result, _, _ = TranscriptParser.parse_entries(entries)
+        for entry in result:
+            assert entry.no_notify is True
+
+    def test_normal_user_after_system_resets_no_notify(
+        self, make_jsonl_entry, make_text_block
+    ):
+        """Normal user message after [System] message resets no_notify_active."""
+        entries = [
+            make_jsonl_entry(
+                "user",
+                [make_text_block("[System] Auto-summary check: ...")],
+            ),
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("[NO_NOTIFY] No summary needed.")],
+            ),
+            make_jsonl_entry("user", [make_text_block("Hello bot")]),
+        ]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        user_entries = [e for e in result if e.role == "user"]
+        assert user_entries[0].no_notify is True  # [System] message
+        assert user_entries[1].no_notify is False  # Normal message
+        assert nn is False
+
+
+# ── Stateful [NO_NOTIFY] propagation ──────────────────────────────────
+
+
+class TestNoNotifyStateful:
+    """Tests for stateful [NO_NOTIFY] propagation across entries.
+
+    After a [NO_NOTIFY] user message, all subsequent assistant entries
+    (text, thinking, tool_use, tool_result) should be no_notify=True
+    until the next non-[NO_NOTIFY] user message.
+    """
+
+    def test_tool_use_after_no_notify_user(
+        self, make_jsonl_entry, make_text_block, make_tool_use_block
+    ):
+        """tool_use after [NO_NOTIFY] user message → no_notify=True."""
+        entries = [
+            make_jsonl_entry(
+                "user", [make_text_block("[NO_NOTIFY] Auto-summary check")]
+            ),
+            make_jsonl_entry(
+                "assistant",
+                [make_tool_use_block("t1", "Bash", {"command": "curl http://wttr.in"})],
+            ),
+        ]
+        # Use carry-over mode (pending_tools={}) like session_monitor
+        result, pending, nn = TranscriptParser.parse_entries(entries, pending_tools={})
+        # User entry should be no_notify
+        user_entries = [e for e in result if e.role == "user"]
+        assert len(user_entries) == 1
+        assert user_entries[0].no_notify is True
+
+        # tool_use should inherit no_notify
+        tool_entries = [e for e in result if e.content_type == "tool_use"]
+        assert len(tool_entries) == 1
+        assert tool_entries[0].no_notify is True
+        assert nn is True
+
+    def test_tool_result_after_no_notify_user(
+        self,
+        make_jsonl_entry,
+        make_text_block,
+        make_tool_use_block,
+        make_tool_result_block,
+    ):
+        """tool_result after [NO_NOTIFY] user message → no_notify=True."""
+        entries = [
+            make_jsonl_entry(
+                "user", [make_text_block("[NO_NOTIFY] Auto-summary check")]
+            ),
+            make_jsonl_entry(
+                "assistant",
+                [make_tool_use_block("t1", "Bash", {"command": "curl http://wttr.in"})],
+            ),
+            make_jsonl_entry(
+                "user",
+                [make_tool_result_block("t1", "HTTP 200 OK\nweather data...")],
+            ),
+        ]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        tool_result_entries = [e for e in result if e.content_type == "tool_result"]
+        assert len(tool_result_entries) == 1
+        assert tool_result_entries[0].no_notify is True
+        assert nn is True
+
+    def test_assistant_text_after_no_notify_user(
+        self, make_jsonl_entry, make_text_block
+    ):
+        """Assistant text after [NO_NOTIFY] user → no_notify=True (inherited)."""
+        entries = [
+            make_jsonl_entry(
+                "user", [make_text_block("[NO_NOTIFY] Auto-summary check")]
+            ),
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("[NO_NOTIFY] No summary needed.")],
+            ),
+        ]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        assistant_entries = [e for e in result if e.role == "assistant"]
+        assert len(assistant_entries) == 1
+        assert assistant_entries[0].no_notify is True
+        assert assistant_entries[0].text == "No summary needed."
+
+    def test_normal_user_resets_no_notify(self, make_jsonl_entry, make_text_block):
+        """Normal user message after [NO_NOTIFY] → resets no_notify_active."""
+        entries = [
+            make_jsonl_entry("user", [make_text_block("[NO_NOTIFY] Silent prompt")]),
+            make_jsonl_entry(
+                "assistant", [make_text_block("[NO_NOTIFY] Silent reply")]
+            ),
+            make_jsonl_entry("user", [make_text_block("Hello, this is normal")]),
+            make_jsonl_entry("assistant", [make_text_block("Normal reply")]),
+        ]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        # Last assistant should NOT be no_notify
+        normal_reply = [
+            e for e in result if e.role == "assistant" and e.text == "Normal reply"
+        ]
+        assert len(normal_reply) == 1
+        assert normal_reply[0].no_notify is False
+        assert nn is False
+
+    def test_no_notify_carry_over_state(self, make_jsonl_entry, make_text_block):
+        """parse_entries returns no_notify_active for carry-over across calls."""
+        # First batch: [NO_NOTIFY] user, no response yet
+        entries1 = [
+            make_jsonl_entry("user", [make_text_block("[NO_NOTIFY] Auto-summary")]),
+        ]
+        result1, pending1, nn1 = TranscriptParser.parse_entries(
+            entries1, pending_tools={}, no_notify_active=False
+        )
+        assert nn1 is True
+
+        # Second batch: assistant responds (should inherit state)
+        entries2 = [
+            make_jsonl_entry("assistant", [make_text_block("No summary needed.")]),
+        ]
+        result2, _, nn2 = TranscriptParser.parse_entries(
+            entries2, pending_tools=pending1, no_notify_active=nn1
+        )
+        assert len(result2) == 1
+        assert result2[0].no_notify is True
+        assert nn2 is True
+
+    def test_full_cron_scenario(
+        self,
+        make_jsonl_entry,
+        make_text_block,
+        make_thinking_block,
+        make_tool_use_block,
+        make_tool_result_block,
+    ):
+        """Full cron summary scenario: prompt → thinking → tool → reply."""
+        entries = [
+            # Cron sends [NO_NOTIFY] prompt
+            make_jsonl_entry(
+                "user",
+                [make_text_block("[NO_NOTIFY] [System] Auto-summary check")],
+            ),
+            # Claude thinks, uses a tool, then replies
+            make_jsonl_entry(
+                "assistant",
+                [
+                    make_thinking_block("Let me check for activity..."),
+                    make_tool_use_block("t1", "Bash", {"command": "cat recent.log"}),
+                ],
+            ),
+            # Tool result
+            make_jsonl_entry(
+                "user",
+                [make_tool_result_block("t1", "no recent activity")],
+            ),
+            # Final reply
+            make_jsonl_entry(
+                "assistant",
+                [make_text_block("[NO_NOTIFY] No summary needed.")],
+            ),
+        ]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        # ALL entries should be no_notify
+        for entry in result:
+            assert entry.no_notify is True, (
+                f"Entry {entry.content_type} '{entry.text[:30]}' should be no_notify"
+            )
+
+    def test_no_notify_initial_state_false(self, make_jsonl_entry, make_text_block):
+        """Default no_notify_active=False → normal messages are not suppressed."""
+        entries = [
+            make_jsonl_entry("user", [make_text_block("Hello")]),
+            make_jsonl_entry("assistant", [make_text_block("Hi there!")]),
+        ]
+        result, _, nn = TranscriptParser.parse_entries(entries)
+        for entry in result:
+            assert entry.no_notify is False
+        assert nn is False
