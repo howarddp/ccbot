@@ -15,6 +15,8 @@ bin scripts are short-lived single-process commands (one DB per run).
 Used by: memory-search, memory-list
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import re
