@@ -90,9 +90,8 @@ Steps:
    - Update existing topic files if the info fits an existing topic
    - Create new topic files (kebab-case naming) for new topics
    - Remove duplicates with existing experience content
-4. After consolidation, delete the processed daily memory files:
-   `rm memory/YYYY-MM-DD.md` for each fully processed file
-5. Keep recent daily memories (< {age_days} days old) untouched
+4. Do NOT delete any daily memory files — they are kept as permanent records
+5. Keep recent daily memories (< {age_days} days old) untouched (no consolidation needed)
 
 Guidelines:
 - Only consolidate content worth keeping long-term
@@ -564,18 +563,21 @@ class CronService:
         ws_dir = self._workspace_dirs.get(workspace_name)
         if not ws_dir:
             return False
-        memory_dir = ws_dir / "memory"
-        if not memory_dir.is_dir():
+        daily_dir = ws_dir / "memory" / "daily"
+        if not daily_dir.is_dir():
             return False
 
         cutoff = date.today() - timedelta(days=_CONSOLIDATION_AGE_DAYS)
-        for f in memory_dir.glob("*.md"):
-            try:
-                file_date = date.fromisoformat(f.stem)
-                if file_date < cutoff:
-                    return True
-            except ValueError:
+        for month_dir in daily_dir.iterdir():
+            if not month_dir.is_dir():
                 continue
+            for f in month_dir.glob("*.md"):
+                try:
+                    file_date = date.fromisoformat(f"{month_dir.name}-{f.stem}")
+                    if file_date < cutoff:
+                        return True
+                except ValueError:
+                    continue
         return False
 
     # --- Window resolution ---

@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Save a file as a memory attachment.
+"""Save text or files to BaoBao's memory.
 
-Copies the file to memory/attachments/ and appends a Markdown reference
-to today's daily memory file (memory/YYYY-MM-DD.md).
+Supports three modes:
+  1. Text to daily memory:     memory-save "learned something"
+  2. Text to experience:       memory-save -e topic "long-term info"
+  3. File attachment to daily:  memory-save /path/to/file "description"
+  4. File attachment to experience: memory-save -e topic /path/to/file "description"
 
-NOTE: The core logic (timestamp format, image extensions, Markdown reference
-format) is duplicated from baobaobot.memory.daily.save_attachment because
-bin scripts run standalone without access to the package. Keep both in sync.
+Auto-detection: if the first positional argument is an existing file path,
+attachment mode is used (requires a description). Otherwise, text mode is used.
+
+NOTE: Core logic for attachments is duplicated from baobaobot.memory.daily
+because bin scripts run standalone without access to the package. Keep in sync.
 
 Usage:
-    memory-save <file> <description> [--user NAME] [--workspace PATH]
+    memory-save <text_or_file> [description] [--user NAME] [-e TOPIC]
+    memory-save --text "content" [--user NAME] [-e TOPIC]
 
 Examples:
-    memory-save /path/to/screenshot.png "System architecture diagram"
-    memory-save report.pdf "Monthly report" --user Alice
+    memory-save "TODO: implement command extension" --user Alice
+    memory-save "OpenClaw uses register(api) pattern" -e openclaw-research
+    memory-save /path/to/screenshot.png "architecture diagram" --user Alice
+    memory-save -e project-notes /path/to/diagram.png "system diagram"
 """
 
 from __future__ import annotations
@@ -51,21 +59,92 @@ def resolve_workspace() -> Path:
     sys.exit(1)
 
 
-def save_attachment(
-    workspace: Path, source: Path, description: str, user_name: Optional[str] = None
-) -> str:
-    """Copy file to memory/attachments/ and append reference to daily memory.
+def _daily_path(workspace: Path, date_str: str) -> Path:
+    """Get the path for a daily memory file: memory/daily/YYYY-MM/DD.md."""
+    parts = date_str.split("-")
+    year_month = f"{parts[0]}-{parts[1]}"
+    day = parts[2]
+    return workspace / "memory" / "daily" / year_month / f"{day}.md"
 
-    Returns the relative path of the saved attachment.
+
+def _ensure_daily(workspace: Path, date_str: str) -> Path:
+    """Ensure today's daily memory file exists with frontmatter."""
+    path = _daily_path(workspace, date_str)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(
+            _DAILY_FRONTMATTER_TEMPLATE.format(date=date_str), encoding="utf-8"
+        )
+    return path
+
+
+def save_text_daily(
+    workspace: Path, text: str, user_name: Optional[str] = None
+) -> str:
+    """Append text to today's daily memory file.
+
+    Returns the relative path of the daily file.
+    """
+    today_str = date.today().isoformat()
+    path = _ensure_daily(workspace, today_str)
+
+    tag = f"[{user_name}] " if user_name else ""
+    line = f"- {tag}{text}\n"
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+    year_month = today_str[:7]
+    day = today_str[8:]
+    return f"memory/daily/{year_month}/{day}.md"
+
+
+def _append_to_experience_file(
+    workspace: Path, topic: str, line: str
+) -> str:
+    """Append a line to an experience topic file, creating it if needed.
+
+    Returns the relative path of the experience file.
+    """
+    exp_dir = workspace / "memory" / "experience"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    path = exp_dir / f"{topic}.md"
+
+    if not path.exists():
+        heading = topic.replace("-", " ").title()
+        path.write_text(f"# {heading}\n\n{line}\n", encoding="utf-8")
+    else:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    return f"memory/experience/{topic}.md"
+
+
+def save_text_experience(
+    workspace: Path, topic: str, text: str, user_name: Optional[str] = None
+) -> str:
+    """Append text to an experience topic file.
+
+    Returns the relative path of the experience file.
+    """
+    tag = f"[{user_name}] " if user_name else ""
+    return _append_to_experience_file(workspace, topic, f"- {tag}{text}")
+
+
+def _copy_to_attachments(
+    workspace: Path, source: Path
+) -> tuple[str, str]:
+    """Copy a file into memory/attachments/YYYY-MM-DD/ with dedup naming.
+
+    Returns (rel_path, dest_name) tuple.
     """
     att_dir = workspace / "memory" / "attachments"
 
-    # Use local time so date subdir matches date.today() used for daily .md filenames.
+    # Use local time so date subdir matches date.today()
     date_str = datetime.now().strftime("%Y-%m-%d")
     date_dir = att_dir / date_str
     date_dir.mkdir(parents=True, exist_ok=True)
 
-    # Strip tmp timestamp prefix (YYYYMMDD_HHMMSS_) and use clean filename
+    # Strip tmp timestamp prefix
     clean_name = _TMP_PREFIX_RE.sub("", source.name)
     dest_name = clean_name
     dest = date_dir / dest_name
@@ -80,36 +159,67 @@ def save_attachment(
     shutil.copy2(source, dest)
 
     rel_path = f"memory/attachments/{date_str}/{dest_name}"
+    return rel_path, dest_name
 
-    # Markdown reference: image vs file
+
+def _attachment_ref(source: Path, description: str, rel_path: str) -> str:
+    """Build a Markdown reference for an attachment (image vs file link)."""
     suffix = source.suffix.lower()
     if suffix in _IMAGE_EXTENSIONS:
-        ref = f"![{description}]({rel_path})"
-    else:
-        ref = f"[{description}]({rel_path})"
+        return f"![{description}]({rel_path})"
+    return f"[{description}]({rel_path})"
 
-    # Append to today's daily memory
-    memory_dir = workspace / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    today_str = date.today().isoformat()
-    daily_path = memory_dir / f"{today_str}.md"
-    if not daily_path.exists():
-        daily_path.write_text(
-            _DAILY_FRONTMATTER_TEMPLATE.format(date=today_str), encoding="utf-8"
-        )
+
+def save_attachment(
+    workspace: Path,
+    source: Path,
+    description: str,
+    user_name: Optional[str] = None,
+    topic: Optional[str] = None,
+) -> str:
+    """Copy file to memory/attachments/ and append reference to daily or experience memory.
+
+    Returns the relative path of the saved attachment.
+    """
+    rel_path, _ = _copy_to_attachments(workspace, source)
+    ref = _attachment_ref(source, description, rel_path)
     tag = f"[{user_name}] " if user_name else ""
-    line = f"- {tag}{ref}\n"
-    with daily_path.open("a", encoding="utf-8") as f:
-        f.write(line)
+    line = f"- {tag}{ref}"
+
+    if topic:
+        _append_to_experience_file(workspace, topic, line)
+    else:
+        today_str = date.today().isoformat()
+        path = _ensure_daily(workspace, today_str)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     return rel_path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Save a file as a memory attachment")
-    parser.add_argument("file", help="Path to the file to save")
-    parser.add_argument("description", help="Description of the attachment")
+    parser = argparse.ArgumentParser(
+        description="Save text or files to BaoBao's memory"
+    )
+    parser.add_argument(
+        "content",
+        help="Text to save, or path to a file (auto-detected)",
+    )
+    parser.add_argument(
+        "description",
+        nargs="?",
+        default=None,
+        help="Description (required for file attachments, ignored for text mode)",
+    )
     parser.add_argument("--user", type=str, default=None, help="User name to tag")
+    parser.add_argument(
+        "-e",
+        "--experience",
+        type=str,
+        default=None,
+        metavar="TOPIC",
+        help="Save to memory/experience/<topic>.md instead of daily",
+    )
     parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
     args = parser.parse_args()
 
@@ -118,13 +228,32 @@ def main() -> None:
         print(f"Workspace not found: {workspace}", file=sys.stderr)
         sys.exit(1)
 
-    source = Path(args.file)
-    if not source.is_file():
-        print(f"File not found: {source}", file=sys.stderr)
-        sys.exit(1)
+    source = Path(args.content)
+    is_file = source.is_file()
 
-    rel_path = save_attachment(workspace, source, args.description, args.user)
-    print(f"💾 Saved to memory: {rel_path}")
+    if is_file:
+        # Attachment mode — description is required
+        if not args.description:
+            print("Error: description is required for file attachments", file=sys.stderr)
+            print(f"Usage: memory-save {args.content} \"description\"", file=sys.stderr)
+            sys.exit(1)
+
+        rel_path = save_attachment(
+            workspace, source, args.description, args.user, args.experience
+        )
+        target = args.experience or "daily"
+        print(f"💾 Saved to memory ({target}): {rel_path}")
+    else:
+        # Text mode
+        text = args.content
+        if args.experience:
+            rel_path = save_text_experience(
+                workspace, args.experience, text, args.user
+            )
+            print(f"💾 Saved to experience: {rel_path}")
+        else:
+            rel_path = save_text_daily(workspace, text, args.user)
+            print(f"💾 Saved to daily: {rel_path}")
 
 
 if __name__ == "__main__":

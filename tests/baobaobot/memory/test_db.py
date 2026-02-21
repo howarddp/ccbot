@@ -8,6 +8,8 @@ from baobaobot.memory.db import MemoryDB
 from baobaobot.memory.utils import parse_tags, strip_frontmatter
 from baobaobot.workspace.manager import WorkspaceManager
 
+from .conftest import write_daily
+
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
@@ -43,7 +45,7 @@ class TestSchema:
     def test_schema_version_set(self, db: MemoryDB) -> None:
         conn = db.connect()
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version >= 3
+        assert version >= 4
 
     def test_attachment_meta_table_exists(self, db: MemoryDB) -> None:
         conn = db.connect()
@@ -72,8 +74,7 @@ class TestSync:
         assert count == 0
 
     def test_sync_daily_file(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("## Test\n- thing one\n- thing two\n")
+        write_daily(workspace, "2026-02-15", "## Test\n- thing one\n- thing two\n")
 
         count = db.sync()
         assert count >= 1
@@ -85,28 +86,24 @@ class TestSync:
         assert len(rows) == 3
 
     def test_sync_stores_path(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("## Test\n")
+        write_daily(workspace, "2026-02-15", "## Test\n")
         db.sync()
 
         conn = db.connect()
         row = conn.execute(
             "SELECT path FROM memories WHERE date = '2026-02-15'"
         ).fetchone()
-        assert row["path"] == "memory/2026-02-15.md"
+        assert row["path"] == "memory/daily/2026-02/15.md"
 
     def test_sync_skips_unchanged(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("## Test\n- thing\n")
+        write_daily(workspace, "2026-02-15", "## Test\n- thing\n")
 
         db.sync()
         count = db.sync()  # Second sync — nothing changed
         assert count == 0
 
     def test_sync_detects_change(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        f = memory_dir / "2026-02-15.md"
-        f.write_text("## Test\n- old\n")
+        f = write_daily(workspace, "2026-02-15", "## Test\n- old\n")
         db.sync()
 
         f.write_text("## Test\n- new content\n- extra line\n")
@@ -151,9 +148,7 @@ class TestSync:
         assert "topic-b" in dates
 
     def test_cleanup_deleted_file(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        f = memory_dir / "2026-02-15.md"
-        f.write_text("## Test\n- will be deleted\n")
+        f = write_daily(workspace, "2026-02-15", "## Test\n- will be deleted\n")
         db.sync()
 
         f.unlink()
@@ -184,6 +179,24 @@ class TestSync:
         ).fetchall()
         assert len(rows) == 0
 
+    def test_migrates_legacy_daily_files(self, db: MemoryDB, workspace: Path) -> None:
+        """Legacy memory/YYYY-MM-DD.md files should be auto-migrated on sync."""
+        memory_dir = workspace / "memory"
+        (memory_dir / "2026-01-10.md").write_text("## Old format\n- legacy\n")
+
+        db.sync()
+
+        # Legacy file should be moved
+        assert not (memory_dir / "2026-01-10.md").exists()
+        assert (memory_dir / "daily" / "2026-01" / "10.md").exists()
+
+        # Content should be indexed
+        conn = db.connect()
+        rows = conn.execute(
+            "SELECT * FROM memories WHERE date = '2026-01-10'"
+        ).fetchall()
+        assert len(rows) >= 1
+
 
 class TestFrontmatterStrip:
     def test_strips_frontmatter(self) -> None:
@@ -197,9 +210,9 @@ class TestFrontmatterStrip:
         assert strip_frontmatter(text) == text
 
     def test_sync_strips_frontmatter(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "---\ndate: 2026-02-15\ntags: []\n---\n## Test\n- thing\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "---\ndate: 2026-02-15\ntags: []\n---\n## Test\n- thing\n",
         )
         db.sync()
 
@@ -240,7 +253,6 @@ class TestParseTags:
         text = "## Heading\n### Sub\nSome #decision here\n"
         tags = parse_tags(text)
         assert "decision" in tags
-        # "Heading" and "Sub" should NOT be tags (## is not a tag)
         assert "heading" not in tags
         assert "sub" not in tags
 
@@ -258,7 +270,6 @@ class TestParseTags:
         assert "project/my-app" in tags
 
     def test_uppercase_tags_normalized(self) -> None:
-        """Uppercase tags like #TODO should be normalized to lowercase."""
         text = "- #TODO fix this\n- #BUG found issue\n"
         tags = parse_tags(text)
         assert "todo" in tags
@@ -272,15 +283,15 @@ class TestParseTags:
     def test_sync_stores_tags(self, db: MemoryDB, workspace: Path) -> None:
         import json
 
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "---\ndate: 2026-02-15\ntags: [decision, bug]\n---\n## Test\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "---\ndate: 2026-02-15\ntags: [decision, bug]\n---\n## Test\n",
         )
         db.sync()
 
         conn = db.connect()
         row = conn.execute(
-            "SELECT tags FROM file_meta WHERE path = 'memory/2026-02-15.md'"
+            "SELECT tags FROM file_meta WHERE path = 'memory/daily/2026-02/15.md'"
         ).fetchone()
         tags = json.loads(row["tags"])
         assert "decision" in tags
@@ -289,23 +300,20 @@ class TestParseTags:
 
 class TestSearch:
     def test_basic_search(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("## Test\n- found keyword here\n")
+        write_daily(workspace, "2026-02-15", "## Test\n- found keyword here\n")
 
         results = db.search("keyword")
         assert len(results) >= 1
         assert any("keyword" in r["content"] for r in results)
 
     def test_case_insensitive(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("Found KEYWORD here\n")
+        write_daily(workspace, "2026-02-15", "Found KEYWORD here\n")
 
         results = db.search("keyword")
         assert len(results) >= 1
 
     def test_chinese_search(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("## 會議\n- 討論了架構重構方案\n")
+        write_daily(workspace, "2026-02-15", "## 會議\n- 討論了架構重構方案\n")
 
         results = db.search("架構")
         assert len(results) >= 1
@@ -324,35 +332,33 @@ class TestSearch:
         assert any(r["source"] == "experience" for r in results)
 
     def test_search_across_files(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("- shared keyword\n")
-        (memory_dir / "2026-02-16.md").write_text("- shared keyword again\n")
+        write_daily(workspace, "2026-02-15", "- shared keyword\n")
+        write_daily(workspace, "2026-02-16", "- shared keyword again\n")
 
         results = db.search("shared keyword")
         assert len(results) >= 2
 
     def test_search_with_tag_filter(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "---\ndate: 2026-02-15\ntags: [decision]\n---\n## Design\n- chose REST API\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "---\ndate: 2026-02-15\ntags: [decision]\n---\n## Design\n- chose REST API\n",
         )
-        (memory_dir / "2026-02-16.md").write_text(
-            "---\ndate: 2026-02-16\ntags: [todo]\n---\n## Tasks\n- chose framework\n"
+        write_daily(
+            workspace, "2026-02-16",
+            "---\ndate: 2026-02-16\ntags: [todo]\n---\n## Tasks\n- chose framework\n",
         )
 
-        # Both have "chose"
         all_results = db.search("chose")
         assert len(all_results) == 2
 
-        # Filter by decision tag
         decision_results = db.search("chose", tag="decision")
         assert len(decision_results) == 1
         assert decision_results[0]["date"] == "2026-02-15"
 
     def test_search_with_tag_no_match(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "---\ntags: [decision]\n---\n## Notes\n- content here\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "---\ntags: [decision]\n---\n## Notes\n- content here\n",
         )
 
         results = db.search("content", tag="nonexistent")
@@ -365,9 +371,8 @@ class TestListDates:
         assert dates == []
 
     def test_lists_dates(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("- thing\n")
-        (memory_dir / "2026-02-16.md").write_text("- thing 1\n- thing 2\n")
+        write_daily(workspace, "2026-02-15", "- thing\n")
+        write_daily(workspace, "2026-02-16", "- thing 1\n- thing 2\n")
 
         dates = db.list_dates()
         assert len(dates) == 2
@@ -381,20 +386,20 @@ class TestListTags:
         assert tags == []
 
     def test_lists_unique_tags(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "---\ntags: [decision, bug]\n---\n## Notes\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "---\ntags: [decision, bug]\n---\n## Notes\n",
         )
-        (memory_dir / "2026-02-16.md").write_text(
-            "---\ntags: [decision, todo]\n---\n## Tasks\n"
+        write_daily(
+            workspace, "2026-02-16",
+            "---\ntags: [decision, todo]\n---\n## Tasks\n",
         )
 
         tags = db.list_tags()
         assert tags == ["bug", "decision", "todo"]
 
     def test_includes_inline_tags(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("## Notes\n- #learning today\n")
+        write_daily(workspace, "2026-02-15", "## Notes\n- #learning today\n")
 
         tags = db.list_tags()
         assert "learning" in tags
@@ -406,9 +411,8 @@ class TestGetStats:
         assert stats["daily_count"] == 0
 
     def test_with_data(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text("- thing\n")
-        exp_dir = memory_dir / "experience"
+        write_daily(workspace, "2026-02-15", "- thing\n")
+        exp_dir = workspace / "memory" / "experience"
         (exp_dir / "notes.md").write_text("Important\n")
 
         stats = db.get_stats()
@@ -420,10 +424,10 @@ class TestGetStats:
 
 class TestAttachments:
     def test_sync_parses_image_attachment(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
+        write_daily(
+            workspace, "2026-02-15",
             "## Notes\n"
-            "- ![Architecture diagram](memory/attachments/2026-02-15/arch.png)\n"
+            "- ![Architecture diagram](memory/attachments/2026-02-15/arch.png)\n",
         )
         db.sync()
 
@@ -435,9 +439,9 @@ class TestAttachments:
         assert rows[0]["file_type"] == "image"
 
     def test_sync_parses_file_attachment(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "## Notes\n- [Monthly report](memory/attachments/2026-02-15/report.pdf)\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "## Notes\n- [Monthly report](memory/attachments/2026-02-15/report.pdf)\n",
         )
         db.sync()
 
@@ -450,11 +454,11 @@ class TestAttachments:
     def test_sync_parses_multiple_attachments(
         self, db: MemoryDB, workspace: Path
     ) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
+        write_daily(
+            workspace, "2026-02-15",
             "## Notes\n"
             "- ![Screenshot](memory/attachments/2026-02-15/shot.png)\n"
-            "- [Config file](memory/attachments/2026-02-15/config.yaml)\n"
+            "- [Config file](memory/attachments/2026-02-15/config.yaml)\n",
         )
         db.sync()
 
@@ -466,12 +470,11 @@ class TestAttachments:
         assert "Config file" in descs
 
     def test_ignores_non_attachment_links(self, db: MemoryDB, workspace: Path) -> None:
-        """Regular markdown links (not in memory/attachments/) should be ignored."""
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
+        write_daily(
+            workspace, "2026-02-15",
             "## Notes\n"
             "- See [docs](https://example.com/docs)\n"
-            "- Also [readme](projects/myapp/README.md)\n"
+            "- Also [readme](projects/myapp/README.md)\n",
         )
         db.sync()
 
@@ -482,9 +485,10 @@ class TestAttachments:
     def test_cleanup_removes_attachment_meta(
         self, db: MemoryDB, workspace: Path
     ) -> None:
-        memory_dir = workspace / "memory"
-        f = memory_dir / "2026-02-15.md"
-        f.write_text("- ![img](memory/attachments/2026-02-15/shot.png)\n")
+        f = write_daily(
+            workspace, "2026-02-15",
+            "- ![img](memory/attachments/2026-02-15/shot.png)\n",
+        )
         db.sync()
 
         f.unlink()
@@ -495,24 +499,26 @@ class TestAttachments:
         assert len(rows) == 0
 
     def test_list_attachments_all(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "- ![img](memory/attachments/2026-02-15/shot.png)\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "- ![img](memory/attachments/2026-02-15/shot.png)\n",
         )
-        (memory_dir / "2026-02-16.md").write_text(
-            "- [doc](memory/attachments/2026-02-16/file.pdf)\n"
+        write_daily(
+            workspace, "2026-02-16",
+            "- [doc](memory/attachments/2026-02-16/file.pdf)\n",
         )
 
         attachments = db.list_attachments()
         assert len(attachments) == 2
 
     def test_list_attachments_by_date(self, db: MemoryDB, workspace: Path) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
-            "- ![img](memory/attachments/2026-02-15/shot.png)\n"
+        write_daily(
+            workspace, "2026-02-15",
+            "- ![img](memory/attachments/2026-02-15/shot.png)\n",
         )
-        (memory_dir / "2026-02-16.md").write_text(
-            "- [doc](memory/attachments/2026-02-16/file.pdf)\n"
+        write_daily(
+            workspace, "2026-02-16",
+            "- [doc](memory/attachments/2026-02-16/file.pdf)\n",
         )
 
         attachments = db.list_attachments(date_str="2026-02-15")
@@ -522,10 +528,10 @@ class TestAttachments:
     def test_stats_includes_attachment_count(
         self, db: MemoryDB, workspace: Path
     ) -> None:
-        memory_dir = workspace / "memory"
-        (memory_dir / "2026-02-15.md").write_text(
+        write_daily(
+            workspace, "2026-02-15",
             "- ![img](memory/attachments/2026-02-15/shot.png)\n"
-            "- [doc](memory/attachments/2026-02-15/file.pdf)\n"
+            "- [doc](memory/attachments/2026-02-15/file.pdf)\n",
         )
 
         stats = db.get_stats()

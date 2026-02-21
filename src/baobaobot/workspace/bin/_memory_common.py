@@ -37,7 +37,7 @@ _INLINE_TAG_RE = re.compile(r"(?:^|(?<=\s))#([a-zA-Z][a-zA-Z0-9/-]*)")
 _ATTACHMENT_RE = re.compile(r"!?\[([^\]]+)\]\(([^)]+)\)")
 
 # Schema version — MUST match baobaobot.memory.db._SCHEMA_VERSION
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -266,8 +266,38 @@ def _rebuild_fts(conn: sqlite3.Connection) -> None:
         _fts_available = False
 
 
+def _migrate_legacy_daily_files(workspace: Path) -> int:
+    """Move legacy memory/YYYY-MM-DD.md files to memory/daily/YYYY-MM/DD.md."""
+    memory_dir = workspace / "memory"
+    if not memory_dir.is_dir():
+        return 0
+
+    daily_re = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+    daily_dir = memory_dir / "daily"
+    migrated = 0
+
+    for f in sorted(memory_dir.glob("*.md")):
+        if not daily_re.match(f.name):
+            continue
+        date_str = f.stem
+        parts = date_str.split("-")
+        year_month = f"{parts[0]}-{parts[1]}"
+        day = parts[2]
+        new_path = daily_dir / year_month / f"{day}.md"
+        if new_path.exists():
+            continue
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        f.rename(new_path)
+        migrated += 1
+
+    return migrated
+
+
 def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
     """Sync all memory files to SQLite. Returns number of files synced."""
+    # Auto-migrate legacy daily files
+    _migrate_legacy_daily_files(workspace)
+
     memory_dir = workspace / "memory"
     synced = 0
 
@@ -281,14 +311,19 @@ def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
                 _sync_file(conn, f, rel, "experience", date_str)
                 synced += 1
 
-    # Sync daily files
-    if memory_dir.exists():
-        for f in sorted(memory_dir.glob("*.md")):
-            rel = f"memory/{f.name}"
-            if _needs_sync(conn, f, rel):
-                date_str = f.stem
-                _sync_file(conn, f, rel, "daily", date_str)
-                synced += 1
+    # Sync daily files (memory/daily/YYYY-MM/DD.md)
+    daily_dir = memory_dir / "daily"
+    if daily_dir.exists():
+        for month_dir in sorted(daily_dir.iterdir()):
+            if not month_dir.is_dir():
+                continue
+            for f in sorted(month_dir.glob("*.md")):
+                rel = f"memory/daily/{month_dir.name}/{f.name}"
+                if _needs_sync(conn, f, rel):
+                    # Reconstruct full date: YYYY-MM + DD
+                    date_str = f"{month_dir.name}-{f.stem}"
+                    _sync_file(conn, f, rel, "daily", date_str)
+                    synced += 1
 
     # Sync summary files
     summaries_dir = memory_dir / "summaries"
@@ -434,4 +469,6 @@ def format_file_label(row: sqlite3.Row) -> str:
     elif row["source"] == "summary":
         return f"memory/summaries/{row['date']}.md"
     else:
-        return f"memory/{row['date']}.md"
+        # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/DD.md'
+        d = row["date"]
+        return f"memory/daily/{d[:7]}/{d[8:]}.md"

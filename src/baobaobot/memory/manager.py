@@ -11,7 +11,7 @@ Key class: MemoryManager.
 import logging
 import shutil
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .daily import delete_daily, get_daily
@@ -37,10 +37,13 @@ class MemoryManager:
     def __init__(self, workspace_dir: Path) -> None:
         self.workspace_dir = workspace_dir
         self.memory_dir = workspace_dir / "memory"
+        self.daily_dir = self.memory_dir / "daily"
         self.db = MemoryDB(workspace_dir)
 
     def list_daily(self, days: int = 7) -> list[DailyMemory]:
         """List recent daily memory files.
+
+        Scans memory/daily/YYYY-MM/DD.md files.
 
         Args:
             days: Number of recent days to include.
@@ -48,39 +51,45 @@ class MemoryManager:
         Returns:
             List of DailyMemory sorted by date (newest first).
         """
-        if not self.memory_dir.exists():
+        if not self.daily_dir.exists():
             return []
 
         results: list[DailyMemory] = []
         today = date.today()
+        cutoff = today - timedelta(days=days)
 
-        # Collect all .md files that match date format
-        for f in sorted(self.memory_dir.glob("*.md"), reverse=True):
-            name = f.stem  # e.g. "2026-02-15"
-            try:
-                file_date = datetime.strptime(name, "%Y-%m-%d").date()
-            except ValueError:
+        for month_dir in sorted(self.daily_dir.iterdir(), reverse=True):
+            if not month_dir.is_dir():
                 continue
+            for f in sorted(month_dir.glob("*.md"), reverse=True):
+                # Reconstruct full date: YYYY-MM + DD
+                date_str = f"{month_dir.name}-{f.stem}"
+                try:
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
 
-            if (today - file_date).days > days:
-                continue
+                if file_date < cutoff:
+                    continue
 
-            try:
-                raw = f.read_text(encoding="utf-8").strip()
-                content = strip_frontmatter(raw).strip()
-                first_line = content.split("\n")[0] if content else ""
-                if len(first_line) > 60:
-                    first_line = first_line[:57] + "..."
-                results.append(
-                    DailyMemory(
-                        date=name,
-                        size=f.stat().st_size,
-                        preview=first_line,
+                try:
+                    raw = f.read_text(encoding="utf-8").strip()
+                    content = strip_frontmatter(raw).strip()
+                    first_line = content.split("\n")[0] if content else ""
+                    if len(first_line) > 60:
+                        first_line = first_line[:57] + "..."
+                    results.append(
+                        DailyMemory(
+                            date=date_str,
+                            size=f.stat().st_size,
+                            preview=first_line,
+                        )
                     )
-                )
-            except OSError:
-                continue
+                except OSError:
+                    continue
 
+        # Sort by date descending (in case month_dir iteration order wasn't perfect)
+        results.sort(key=lambda m: m.date, reverse=True)
         return results
 
     def get_daily(self, date_str: str) -> str | None:
@@ -98,18 +107,24 @@ class MemoryManager:
 
         Preserves experience/ topic files (long-term memory).
         """
-        if not self.memory_dir.exists():
+        if not self.daily_dir.exists():
             return 0
 
         count = 0
-        for f in self.memory_dir.glob("*.md"):
-            if f.name == "EXPERIENCE.md":  # Legacy — may exist in old workspaces
+        for month_dir in self.daily_dir.iterdir():
+            if not month_dir.is_dir():
                 continue
+            for f in month_dir.glob("*.md"):
+                try:
+                    f.unlink()
+                    count += 1
+                except OSError:
+                    continue
+            # Remove empty month directories
             try:
-                f.unlink()
-                count += 1
+                month_dir.rmdir()
             except OSError:
-                continue
+                pass
 
         # Clean up all attachment subdirectories
         att_dir = self.memory_dir / "attachments"
@@ -140,7 +155,9 @@ class MemoryManager:
             elif row["source"] == "summary":
                 file = f"memory/summaries/{row['date']}.md"
             else:
-                file = f"memory/{row['date']}.md"
+                # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/DD.md'
+                d = row["date"]
+                file = f"memory/daily/{d[:7]}/{d[8:]}.md"
             results.append(
                 MemorySearchResult(
                     file=file,

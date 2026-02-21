@@ -2,11 +2,14 @@
 
 from datetime import date
 from pathlib import Path
+
 import pytest
 
 from baobaobot.memory.daily import save_attachment
 from baobaobot.memory.manager import MemoryManager
 from baobaobot.workspace.manager import WorkspaceManager
+
+from .conftest import daily_file, write_daily
 
 
 @pytest.fixture
@@ -41,19 +44,18 @@ class TestSaveAttachment:
         assert att_path.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg"
 
         # Daily memory was updated
-        daily = (workspace / "memory" / f"{today}.md").read_text()
+        daily = daily_file(workspace, today).read_text()
         assert "![a nice photo]" in daily
         assert "[Alice]" in daily
 
     def test_image_uses_bang_syntax(self, workspace: Path) -> None:
+        today = date.today().isoformat()
         for ext in (".jpg", ".png", ".gif", ".webp"):
             src = workspace / "tmp" / f"img{ext}"
             src.write_bytes(b"data")
             rel = save_attachment(workspace, src, f"test{ext}")
             assert rel is not None
-            daily = (
-                workspace / "memory" / f"{date.today().isoformat()}.md"
-            ).read_text()
+            daily = daily_file(workspace, today).read_text()
             assert f"![test{ext}]" in daily
 
     def test_non_image_uses_link_syntax(self, workspace: Path) -> None:
@@ -61,7 +63,8 @@ class TestSaveAttachment:
         src.write_bytes(b"%PDF-1.4")
         rel = save_attachment(workspace, src, "monthly report")
         assert rel is not None
-        daily = (workspace / "memory" / f"{date.today().isoformat()}.md").read_text()
+        today = date.today().isoformat()
+        daily = daily_file(workspace, today).read_text()
         assert "[monthly report](" in daily
         assert "![monthly report]" not in daily
 
@@ -144,7 +147,7 @@ class TestAttachmentCleanup:
         att_dir = workspace / "memory" / "attachments"
         (att_dir / "2026-02-10").mkdir(parents=True, exist_ok=True)
         (att_dir / "2026-02-10" / "pic.jpg").write_bytes(b"data")
-        (workspace / "memory" / "2026-02-10.md").write_text("- entry\n")
+        write_daily(workspace, "2026-02-10", "- entry\n")
 
         result = mm.delete_daily("2026-02-10")
         assert result is True
@@ -158,8 +161,8 @@ class TestAttachmentCleanup:
         (att_dir / "2026-02-10" / "a.jpg").write_bytes(b"a")
         (att_dir / "2026-02-11").mkdir(parents=True, exist_ok=True)
         (att_dir / "2026-02-11" / "b.png").write_bytes(b"b")
-        (workspace / "memory" / "2026-02-10.md").write_text("- a\n")
-        (workspace / "memory" / "2026-02-11.md").write_text("- b\n")
+        write_daily(workspace, "2026-02-10", "- a\n")
+        write_daily(workspace, "2026-02-11", "- b\n")
 
         count = mm.delete_all_daily()
         assert count == 2

@@ -17,14 +17,15 @@
 - Use `{{BIN_DIR}}/memory-search <query>` to find specific past information when needed
 
 ### During a Session
-- When encountering important information (user preferences, decisions, TODOs), write to memory/YYYY-MM-DD.md
-- For major decisions or long-term information, write to `memory/experience/` (one topic per file, kebab-case naming)
+- Use `{{BIN_DIR}}/memory-save "content"` to record important information (preferences, decisions, TODOs)
+- Use `{{BIN_DIR}}/memory-save -e <topic> "content"` to record long-term knowledge to a specific topic
+- Use `{{BIN_DIR}}/memory-save /path/to/file "description"` to save file attachments to memory
 
 ## Memory Management
 
-### Daily Memory (memory/YYYY-MM-DD.md)
+### Daily Memory (memory/daily/YYYY-MM/DD.md)
 
-Daily memory files use Obsidian-compatible YAML frontmatter:
+Daily memory files are organized by month and use Obsidian-compatible YAML frontmatter:
 
 ```yaml
 ---
@@ -38,6 +39,7 @@ Content guidelines:
 - Keep it concise, 1-2 lines per memory entry
 - Tag which user the information belongs to, e.g. `- [Alice] requested login bug fix`
 - Add tags to the frontmatter as appropriate: `#decision`, `#preference`, `#todo`, `#bug`, `#learning`, `#project`
+- Daily memories are permanent — they are never deleted
 
 ### Auto Summaries (memory/summaries/)
 - System-managed directory; hourly cron job handles summary creation automatically
@@ -45,8 +47,8 @@ Content guidelines:
 ### Memory Consolidation
 - A weekly system job reviews daily memories older than 21 days
 - Important content is consolidated into `memory/experience/` topic files
-- Old daily files are deleted after consolidation
-- This keeps the daily memory directory manageable while preserving long-term knowledge
+- Daily files are preserved permanently as a complete record
+- Consolidation extracts key insights into experience files without deleting originals
 
 ### Long-term Memory (memory/experience/)
 
@@ -82,9 +84,10 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 | `projects/` | git clone, project code |
 | `scripts/` | Custom scripts, automation tools |
 | `tmp/` | Temp files, user-uploaded files |
-| `memory/` | Daily memories (create new files freely, don't rename or reorganize existing) |
+| `memory/daily/` | Daily memories organized by month (memory/daily/YYYY-MM/DD.md) |
 | `memory/experience/` | Long-term topic memories (one topic per file, kebab-case naming) |
 | `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
+| `memory/attachments/` | File attachments organized by date |
 
 ### Exceptions
 - When the user **explicitly requests** operations outside the workspace, you may proceed
@@ -116,18 +119,26 @@ When you need to send a file to the user, use this marker in your reply:
 - Multiple `[SEND_FILE:...]` markers can be included in a single message
 - Files sent by users via Telegram are saved to `tmp/`, and you'll receive a file path notification
 
-## File Memory
+## Memory Save
 
-When you need to save a file to memory, use the `/memory-save` skill:
+Use the `/memory-save` skill for all memory writes:
 
+**Text memories:**
 ```
-{{BIN_DIR}}/memory-save /path/to/file "description"
+{{BIN_DIR}}/memory-save "important decision or observation" --user Alice
+{{BIN_DIR}}/memory-save -e topic-name "long-term knowledge" --user Alice
+```
+
+**File attachments:**
+```
 {{BIN_DIR}}/memory-save /path/to/file "description" --user Alice
+{{BIN_DIR}}/memory-save -e topic-name /path/to/file "description"
 ```
 
-- The file is copied to `memory/attachments/YYYY-MM-DD/` (organized by date), and a Markdown reference is added to today's daily memory
-- Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format, other files use `[description](path)` format
-- Attachments are cleaned up together with daily memories (deleting a day's memory also deletes that day's attachment directory)
+- Auto-detects mode: existing file path → attachment, otherwise → text
+- `-e TOPIC` saves to `memory/experience/<topic>.md` instead of daily
+- Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format
+- Attachments are stored in `memory/attachments/YYYY-MM-DD/`
 
 ### Memory Attachments (Auto-summary)
 

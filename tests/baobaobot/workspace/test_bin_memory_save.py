@@ -14,6 +14,13 @@ BIN_DIR = (
 )
 
 
+def _daily_file(workspace: Path, date_str: str) -> Path:
+    """Helper to get the daily file path in new directory structure."""
+    year_month = date_str[:7]
+    day = date_str[8:]
+    return workspace / "memory" / "daily" / year_month / f"{day}.md"
+
+
 def run_script(args: list[str], workspace: Path) -> subprocess.CompletedProcess[str]:
     """Run memory-save as a subprocess."""
     script = BIN_DIR / "memory-save"
@@ -24,7 +31,54 @@ def run_script(args: list[str], workspace: Path) -> subprocess.CompletedProcess[
     )
 
 
-class TestMemorySave:
+class TestMemorySaveText:
+    """Tests for text mode (new)."""
+
+    def test_saves_text_to_daily(self, tmp_path: Path) -> None:
+        ws = tmp_path / "workspace"
+        (ws / "memory").mkdir(parents=True)
+
+        result = run_script(["learned something important"], ws)
+        assert result.returncode == 0
+        assert "Saved to daily" in result.stdout
+
+        today = date.today().isoformat()
+        daily = _daily_file(ws, today).read_text()
+        assert "learned something important" in daily
+
+    def test_saves_text_with_user(self, tmp_path: Path) -> None:
+        ws = tmp_path / "workspace"
+        (ws / "memory").mkdir(parents=True)
+
+        result = run_script(
+            ["TODO: fix that bug", "--user", "Alice"], ws
+        )
+        assert result.returncode == 0
+
+        today = date.today().isoformat()
+        daily = _daily_file(ws, today).read_text()
+        assert "[Alice]" in daily
+        assert "TODO: fix that bug" in daily
+
+    def test_saves_text_to_experience(self, tmp_path: Path) -> None:
+        ws = tmp_path / "workspace"
+        (ws / "memory").mkdir(parents=True)
+
+        result = run_script(
+            ["-e", "project-notes", "uses register(api) pattern"], ws
+        )
+        assert result.returncode == 0
+        assert "Saved to experience" in result.stdout
+
+        exp_file = ws / "memory" / "experience" / "project-notes.md"
+        assert exp_file.exists()
+        content = exp_file.read_text()
+        assert "uses register(api) pattern" in content
+
+
+class TestMemorySaveAttachment:
+    """Tests for attachment mode (file auto-detection)."""
+
     def test_saves_image(self, tmp_path: Path) -> None:
         ws = tmp_path / "workspace"
         (ws / "memory").mkdir(parents=True)
@@ -42,7 +96,7 @@ class TestMemorySave:
         assert att_file.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg"
 
         # Daily memory updated with image syntax
-        daily = (ws / "memory" / f"{today}.md").read_text()
+        daily = _daily_file(ws, today).read_text()
         assert "![nice photo](" in daily
 
     def test_saves_non_image(self, tmp_path: Path) -> None:
@@ -55,7 +109,7 @@ class TestMemorySave:
         assert result.returncode == 0
 
         today = date.today().isoformat()
-        daily = (ws / "memory" / f"{today}.md").read_text()
+        daily = _daily_file(ws, today).read_text()
         assert "[monthly report](" in daily
         assert "![monthly report]" not in daily
 
@@ -69,16 +123,44 @@ class TestMemorySave:
         assert result.returncode == 0
 
         today = date.today().isoformat()
-        daily = (ws / "memory" / f"{today}.md").read_text()
+        daily = _daily_file(ws, today).read_text()
         assert "[Alice]" in daily
 
-    def test_file_not_found(self, tmp_path: Path) -> None:
+    def test_saves_attachment_to_experience(self, tmp_path: Path) -> None:
+        ws = tmp_path / "workspace"
+        (ws / "memory").mkdir(parents=True)
+        src = tmp_path / "diagram.png"
+        src.write_bytes(b"png-data")
+
+        result = run_script(
+            ["-e", "project-arch", str(src), "system diagram"], ws
+        )
+        assert result.returncode == 0
+        assert "Saved to memory" in result.stdout
+
+        # Attachment file was created
+        today = date.today().isoformat()
+        att_file = ws / "memory" / "attachments" / today / "diagram.png"
+        assert att_file.exists()
+
+        # Experience file was created with image reference
+        exp_file = ws / "memory" / "experience" / "project-arch.md"
+        assert exp_file.exists()
+        content = exp_file.read_text()
+        assert "![system diagram](" in content
+
+    def test_nonexistent_path_treated_as_text(self, tmp_path: Path) -> None:
         ws = tmp_path / "workspace"
         (ws / "memory").mkdir(parents=True)
 
         result = run_script(["/nonexistent/file.txt", "missing"], ws)
-        assert result.returncode != 0
-        assert "not found" in result.stderr.lower()
+        # Should be treated as text mode (not a file), saved to daily
+        assert result.returncode == 0
+        assert "Saved to daily" in result.stdout
+
+        today = date.today().isoformat()
+        daily = _daily_file(ws, today).read_text()
+        assert "/nonexistent/file.txt" in daily
 
     def test_workspace_not_found(self, tmp_path: Path) -> None:
         src = tmp_path / "file.txt"
