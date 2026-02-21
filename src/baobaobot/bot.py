@@ -129,7 +129,7 @@ from .persona.profile import (
     ensure_user_profile,
 )
 from .workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
-from .workspace.manager import WorkspaceManager
+from .workspace.manager import WorkspaceManager, refresh_all_skills
 
 logger = logging.getLogger(__name__)
 
@@ -1857,7 +1857,7 @@ async def post_init(application: Application) -> None:
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await agent_ctx.session_manager.resolve_stale_ids()
 
-    # Rebuild CLAUDE.md for existing workspaces if sources changed
+    # Rebuild CLAUDE.md and refresh skills for existing workspaces
     workspace_dirs = agent_ctx.config.iter_workspace_dirs()
     if workspace_dirs:
         rebuilt = rebuild_all_workspaces(
@@ -1868,6 +1868,13 @@ async def post_init(application: Application) -> None:
         if rebuilt:
             logger.info(
                 "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
+            )
+        refreshed = refresh_all_skills(
+            agent_ctx.config.shared_dir, workspace_dirs
+        )
+        if refreshed:
+            logger.info(
+                "Refreshed skills for %d workspace(s) on startup", refreshed
             )
 
     # Start cron service

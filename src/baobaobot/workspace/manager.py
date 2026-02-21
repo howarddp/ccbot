@@ -156,6 +156,10 @@ class WorkspaceManager:
             dest.write_text(content, encoding="utf-8")
             logger.debug("Installed skill: %s", dest)
 
+    def refresh_skills(self) -> None:
+        """Re-deploy skills to an existing workspace (skips directory init)."""
+        self._install_skills()
+
     def _install_bin_scripts(self) -> None:
         """Copy bin/ scripts to shared_dir/bin/ and make them executable."""
         self.bin_dir.mkdir(parents=True, exist_ok=True)
@@ -171,3 +175,16 @@ class WorkspaceManager:
                 logger.debug("Installed script: %s", dest)
             else:
                 logger.warning("Script not found: %s", src)
+
+
+def refresh_all_skills(shared_dir: Path, workspace_dirs: list[Path]) -> int:
+    """Re-deploy skills to all existing workspaces.
+
+    Returns the number of workspaces refreshed.
+    """
+    refreshed = 0
+    for ws in workspace_dirs:
+        wm = WorkspaceManager(shared_dir, ws)
+        wm.refresh_skills()
+        refreshed += 1
+    return refreshed
