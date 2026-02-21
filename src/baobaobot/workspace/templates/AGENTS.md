@@ -51,7 +51,22 @@ Content guidelines:
 - Daily memories are permanent — they are never deleted
 
 ### Auto Summaries (memory/summaries/)
+
+Summary files use Obsidian-compatible YAML frontmatter:
+
+```yaml
+---
+date: 2026-02-15
+period: "14:00"
+tags: []
+---
+```
+
 - System-managed directory; hourly cron job handles summary creation automatically
+- When creating summaries, always include the frontmatter block above
+- `date`: the date being summarized (YYYY-MM-DD)
+- `period`: the hour being summarized (HH:MM, 24h format)
+- `tags`: relevant tags extracted from the summarized content
 
 ### Memory Consolidation
 - A weekly system job reviews daily memories older than 21 days
@@ -62,7 +77,10 @@ Content guidelines:
 ### Long-term Memory (memory/experience/)
 
 Topic-based long-term memory files. Each file covers a single topic:
-- Filename: kebab-case descriptive name (e.g. `user-preferences.md`, `project-architecture.md`)
+- Filename: use the system locale language for topic names (e.g. for `zh-TW`: `使用者偏好.md`; for `en-US`: `user-preferences.md`)
+- English topic names use kebab-case (e.g. `user-preferences`); non-ASCII names use natural language directly
+- New files are auto-created with YAML frontmatter (topic, tags, created, updated) via `memory-save -e`
+- The `updated` field is automatically bumped on each append
 - You decide when to create, update, or remove topic files
 - Periodically clean up outdated information
 - Files are Obsidian-compatible Markdown (wikilinks, tags OK)
@@ -94,7 +112,7 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 | `scripts/` | Custom scripts, automation tools |
 | `tmp/` | Temp files, user-uploaded files |
 | `memory/daily/` | Daily memories organized by month (memory/daily/YYYY-MM/YYYY-MM-DD.md) |
-| `memory/experience/` | Long-term topic memories (one topic per file, kebab-case naming) |
+| `memory/experience/` | Long-term topic memories (one topic per file, locale language naming) |
 | `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
 | `memory/attachments/` | File attachments organized by date |
 
@@ -135,17 +153,17 @@ Use the `/memory-save` skill for all memory writes:
 **Text memories:**
 ```
 {{BIN_DIR}}/memory-save "important decision or observation" --user Alice
-{{BIN_DIR}}/memory-save -e topic-name "long-term knowledge" --user Alice
+{{BIN_DIR}}/memory-save -e 使用者偏好 "long-term knowledge" --user Alice
 ```
 
 **File attachments:**
 ```
 {{BIN_DIR}}/memory-save /path/to/file "description" --user Alice
-{{BIN_DIR}}/memory-save -e topic-name /path/to/file "description"
+{{BIN_DIR}}/memory-save -e 專案筆記 /path/to/file "description"
 ```
 
 - Auto-detects mode: existing file path → attachment, otherwise → text
-- `-e TOPIC` saves to `memory/experience/<topic>.md` instead of daily
+- `-e TOPIC` saves to `memory/experience/<topic>.md` instead of daily (use locale language for topic names)
 - Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format
 - Attachments are stored in `memory/attachments/YYYY-MM-DD/`
 

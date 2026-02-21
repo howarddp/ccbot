@@ -27,6 +27,18 @@ tags: []
 ---
 """
 
+_EXPERIENCE_FRONTMATTER_TEMPLATE = """\
+---
+topic: "{topic}"
+tags: []
+created: {date}
+updated: {date}
+---
+"""
+
+# Regex to match `updated: YYYY-MM-DD` in YAML frontmatter
+_UPDATED_RE = re.compile(r"^(updated:\s*)\d{4}-\d{2}-\d{2}", re.MULTILINE)
+
 
 def _daily_dir(workspace_dir: Path) -> Path:
     """Get the daily memory directory path (memory/daily/)."""
@@ -234,6 +246,18 @@ def save_attachment(
 # Keep both copies in sync when modifying.
 
 
+def _experience_heading(topic: str) -> str:
+    """Generate a heading from a topic name.
+
+    If the topic looks like kebab-case ASCII (e.g. 'user-preferences'),
+    convert to title case ('User Preferences'). Otherwise use as-is
+    (e.g. Chinese '使用者偏好' stays unchanged).
+    """
+    if re.fullmatch(r"[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*", topic):
+        return topic.replace("-", " ").title()
+    return topic
+
+
 def _append_to_experience_file(
     workspace_dir: Path,
     topic: str,
@@ -241,9 +265,12 @@ def _append_to_experience_file(
 ) -> str:
     """Append a line to an experience topic file, creating it if needed.
 
+    New files get YAML frontmatter (topic, tags, created, updated) and a heading.
+    Existing files get the ``updated`` field bumped to today.
+
     Args:
         workspace_dir: Workspace root path.
-        topic: Topic name in kebab-case.
+        topic: Topic name (kebab-case or locale language).
         line: The full line to append (without trailing newline).
 
     Returns:
@@ -252,13 +279,22 @@ def _append_to_experience_file(
     exp_dir = workspace_dir / "memory" / "experience"
     exp_dir.mkdir(parents=True, exist_ok=True)
     path = exp_dir / f"{topic}.md"
+    today = date.today().isoformat()
 
     if not path.exists():
-        heading = topic.replace("-", " ").title()
-        path.write_text(f"# {heading}\n\n{line}\n", encoding="utf-8")
+        heading = _experience_heading(topic)
+        frontmatter = _EXPERIENCE_FRONTMATTER_TEMPLATE.format(
+            topic=topic, date=today
+        )
+        path.write_text(
+            f"{frontmatter}# {heading}\n\n{line}\n", encoding="utf-8"
+        )
     else:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        content = path.read_text(encoding="utf-8")
+        content = _UPDATED_RE.sub(rf"\g<1>{today}", content, count=1)
+        if not content.endswith("\n"):
+            content += "\n"
+        path.write_text(content + line + "\n", encoding="utf-8")
 
     return f"memory/experience/{topic}.md"
 
