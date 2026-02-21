@@ -8,6 +8,15 @@
 - When replying to a specific user, use `@[user_id]` format to mention them, e.g. `@[7012345678] your task is done`
 - The bot automatically converts `@[user_id]` to Telegram mentions, and users will receive push notifications
 
+## Language & Locale
+
+System locale: `{{LOCALE}}`
+
+- Use the system locale as the default language for all responses, memory entries, and cron messages
+- Each user's profile has a `Language` field (locale code like `zh-TW`, `en-US`, `ja-JP`) that overrides the system locale for that user
+- When writing to memory, use the language that matches the user's locale (or system locale if unset)
+- Locale codes follow BCP 47 format: `{language}-{REGION}` (e.g. `zh-TW`, `en-US`, `ja-JP`)
+
 ## Session Rituals
 
 ### At Session Start
@@ -23,7 +32,7 @@
 
 ## Memory Management
 
-### Daily Memory (memory/daily/YYYY-MM/DD.md)
+### Daily Memory (memory/daily/YYYY-MM/YYYY-MM-DD.md)
 
 Daily memory files are organized by month and use Obsidian-compatible YAML frontmatter:
 
@@ -84,7 +93,7 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 | `projects/` | git clone, project code |
 | `scripts/` | Custom scripts, automation tools |
 | `tmp/` | Temp files, user-uploaded files |
-| `memory/daily/` | Daily memories organized by month (memory/daily/YYYY-MM/DD.md) |
+| `memory/daily/` | Daily memories organized by month (memory/daily/YYYY-MM/YYYY-MM-DD.md) |
 | `memory/experience/` | Long-term topic memories (one topic per file, kebab-case naming) |
 | `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
 | `memory/attachments/` | File attachments organized by date |

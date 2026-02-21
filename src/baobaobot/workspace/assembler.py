@@ -1,12 +1,10 @@
-"""BAOBAOBOT.md assembly — composes the root BAOBAOBOT.md from shared files.
+"""CLAUDE.md assembly — composes the workspace CLAUDE.md from shared files.
 
 Reads AGENTS.md and AGENTSOUL.md from shared_dir, then writes a single
-assembled BAOBAOBOT.md in the workspace root.  A dynamic "Memory Context"
+assembled CLAUDE.md in the workspace root.  A dynamic "Memory Context"
 section lists available experience/ topic files so Claude Code knows what
 long-term memory exists.  Daily memories are NOT embedded — Claude Code
 reads those on demand via skills (memory-list, memory-search).
-
-A thin CLAUDE.md is also written so Claude Code discovers the instructions.
 
 Key class: ClaudeMdAssembler.
 """
@@ -20,7 +18,7 @@ from baobaobot.memory.utils import strip_frontmatter
 
 logger = logging.getLogger(__name__)
 
-# Section order in the assembled BAOBAOBOT.md
+# Section order in the assembled CLAUDE.md
 # (filename, section_title, source)  — source is "shared" or "workspace"
 _SECTION_ORDER = [
     ("AGENTS.md", "Work Instructions (AGENTS)", "shared"),
@@ -35,21 +33,16 @@ _HEADER = """\
 """
 
 
-_CLAUDE_MD_CONTENT = """\
-# BaoBao Assistant
-
-Read BAOBAOBOT.md for detailed instructions, personality, and memory context.
-"""
-
-
 class ClaudeMdAssembler:
-    """Reads shared persona files, assembles BAOBAOBOT.md."""
+    """Reads shared persona files, assembles CLAUDE.md."""
 
-    def __init__(self, shared_dir: Path, workspace_dir: Path) -> None:
+    def __init__(
+        self, shared_dir: Path, workspace_dir: Path, locale: str = "en-US"
+    ) -> None:
         self.shared_dir = shared_dir
         self.workspace_dir = workspace_dir
-        self.output_path = workspace_dir / "BAOBAOBOT.md"
-        self.claude_md_path = workspace_dir / "CLAUDE.md"
+        self.locale = locale
+        self.output_path = workspace_dir / "CLAUDE.md"
         self._source_mtimes: dict[str, float] = {}
 
     def _read_file(self, path: Path) -> str:
@@ -78,7 +71,7 @@ class ClaudeMdAssembler:
         return "\n".join(lines)
 
     def assemble(self) -> str:
-        """Build the full BAOBAOBOT.md content from source files."""
+        """Build the full CLAUDE.md content from source files."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         parts: list[str] = [_HEADER.format(timestamp=timestamp)]
 
@@ -100,16 +93,20 @@ class ClaudeMdAssembler:
         result = result.replace("{{BIN_DIR}}", str(self.shared_dir / "bin"))
         result = result.replace("{{USERS_DIR}}", str(self.shared_dir / "users"))
         result = result.replace("{{WORKSPACE_DIR}}", str(self.workspace_dir))
+        result = result.replace("{{LOCALE}}", self.locale)
         return result
 
     def write(self) -> None:
-        """Assemble and write BAOBAOBOT.md + thin CLAUDE.md to the workspace root."""
+        """Assemble and write CLAUDE.md to the workspace root."""
         content = self.assemble()
         self.output_path.write_text(content, encoding="utf-8")
-        logger.info("Assembled BAOBAOBOT.md at %s", self.output_path)
+        logger.info("Assembled CLAUDE.md at %s", self.output_path)
 
-        # Write thin CLAUDE.md that points to BAOBAOBOT.md
-        self.claude_md_path.write_text(_CLAUDE_MD_CONTENT, encoding="utf-8")
+        # Clean up legacy BAOBAOBOT.md if present
+        legacy = self.workspace_dir / "BAOBAOBOT.md"
+        if legacy.exists():
+            legacy.unlink()
+            logger.info("Removed legacy BAOBAOBOT.md from %s", self.workspace_dir)
 
         # Update mtime cache
         self._update_mtimes()
@@ -157,14 +154,16 @@ class ClaudeMdAssembler:
         return False
 
 
-def rebuild_all_workspaces(shared_dir: Path, workspace_dirs: list[Path]) -> int:
-    """Rebuild BAOBAOBOT.md for all workspaces where sources have changed.
+def rebuild_all_workspaces(
+    shared_dir: Path, workspace_dirs: list[Path], locale: str = "en-US"
+) -> int:
+    """Rebuild CLAUDE.md for all workspaces where sources have changed.
 
     Returns the number of workspaces rebuilt.
     """
     rebuilt = 0
     for ws in workspace_dirs:
-        assembler = ClaudeMdAssembler(shared_dir, ws)
+        assembler = ClaudeMdAssembler(shared_dir, ws, locale=locale)
         if assembler.needs_rebuild():
             assembler.write()
             rebuilt += 1

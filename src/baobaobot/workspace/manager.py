@@ -2,7 +2,7 @@
 
 Manages a two-tier layout:
   - Shared dir (config_dir): AGENTSOUL.md, AGENTS.md, bin/, users/
-  - Per-topic workspace (workspace_<topic>): memory/, memory/experience/, projects/, BAOBAOBOT.md
+  - Per-topic workspace (workspace_<topic>): memory/, memory/experience/, projects/, CLAUDE.md
 
 Key class: WorkspaceManager.
 """

@@ -37,11 +37,11 @@ uv sync                                    # Install dependencies
 ```
 src/baobaobot/
 ├── main.py                  # CLI entry: hook / add-agent / bot start + auto-tmux launch
-├── settings.py              # TOML-based multi-agent config (AgentConfig + load_settings)
+├── settings.py              # TOML-based multi-agent config (AgentConfig + load_settings, locale)
 ├── bot.py                   # Telegram bot (/agentsoul, /profile, /memory, /forget, /workspace, /rebuild)
 ├── workspace/               # Workspace system
 │   ├── manager.py           # Directory init, project linking, bin/ script install
-│   ├── assembler.py         # BAOBAOBOT.md assembly from source files
+│   ├── assembler.py         # CLAUDE.md assembly from source files
 │   ├── bin/                 # Scripts deployed to ~/.baobaobot/bin/
 │   │   ├── memory-search    # SQLite memory search (used by Claude Code)
 │   │   └── memory-list      # List recent daily memories
@@ -72,11 +72,10 @@ src/baobaobot/
 ├── shared/                  # Shared files (AGENTSOUL.md, AGENTS.md, bin/, users/)
 └── agents/<name>/           # Per-agent workspaces
     └── workspace_<topic>/   # Per-topic workspace
-        ├── BAOBAOBOT.md     # Auto-assembled (persona instructions)
-        ├── CLAUDE.md        # Thin pointer to BAOBAOBOT.md
+        ├── CLAUDE.md        # Auto-assembled (persona instructions)
         ├── memory/          # Memory directory
-        │   ├── EXPERIENCE.md    # Long-term memory
-        │   ├── YYYY-MM-DD.md    # Daily memories
+        │   ├── daily/           # Daily memories (YYYY-MM/YYYY-MM-DD.md)
+        │   ├── experience/      # Long-term topic memories
         │   └── summaries/       # Auto summaries
         ├── memory.db        # SQLite index of memory files
         └── projects/        # Symlinked project directories
@@ -86,7 +85,7 @@ src/baobaobot/
 
 - **No LLM calls in Python** — all intelligence in Claude Code, BaoBaoClaude manages files only
 - **1 Topic = 1 Window = 1 Session** — all routing keyed by tmux window ID
-- **BAOBAOBOT.md assembly** — auto-composed from AGENTS + AGENTSOUL shared files
-- **Two-layer memory** — EXPERIENCE.md (long-term, curated) + memory/*.md (daily, auto)
+- **CLAUDE.md assembly** — auto-composed from AGENTS + AGENTSOUL shared files
+- **Two-layer memory** — experience/*.md (long-term, curated) + daily/YYYY-MM/YYYY-MM-DD.md (daily, auto)
 - **SQLite memory index** — .md files are source of truth; SQLite provides fast search via lazy sync
 - **Skill-based memory access** — Claude Code uses `~/.baobaobot/bin/memory-search` to query memories

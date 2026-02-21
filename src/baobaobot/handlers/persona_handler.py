@@ -74,7 +74,9 @@ async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
 
         updated = update_identity(cfg.shared_dir, **{field_map[field]: value})
-        rebuild_all_workspaces(cfg.shared_dir, cfg.iter_workspace_dirs())
+        rebuild_all_workspaces(
+            cfg.shared_dir, cfg.iter_workspace_dirs(), locale=cfg.locale
+        )
         await safe_reply(
             update.message,
             f"✅ Updated {field} = {value}\n\n"
@@ -125,7 +127,9 @@ async def handle_edit_mode_message(
     if target == "agentsoul":
         cfg = _cfg(context)
         write_agentsoul(cfg.shared_dir, text)
-        rebuild_all_workspaces(cfg.shared_dir, cfg.iter_workspace_dirs())
+        rebuild_all_workspaces(
+            cfg.shared_dir, cfg.iter_workspace_dirs(), locale=cfg.locale
+        )
         await safe_reply(update.message, "✅ AGENTSOUL.md updated!")
         return True
 

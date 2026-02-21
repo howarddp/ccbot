@@ -1,11 +1,11 @@
-"""Daily memory file management — read/write memory/daily/YYYY-MM/DD.md files.
+"""Daily memory file management — read/write memory/daily/YYYY-MM/YYYY-MM-DD.md files.
 
 Each daily memory file captures conversation highlights, decisions, and
 observations from a single day. Files are created by Claude Code during
 sessions and managed by MemoryManager for lifecycle operations.
 
 Directory structure:
-    memory/daily/YYYY-MM/DD.md   (e.g. memory/daily/2026-02/21.md)
+    memory/daily/YYYY-MM/YYYY-MM-DD.md   (e.g. memory/daily/2026-02/2026-02-21.md)
 
 Key functions: get_daily(), write_daily(), delete_daily(), save_attachment(),
                append_to_experience(), migrate_legacy_daily_files().
@@ -38,18 +38,22 @@ def _date_parts(date_str: str) -> tuple[str, str]:
 
     >>> _date_parts('2026-02-21')
     ('2026-02', '21')
+
+    Raises ValueError if format is invalid.
     """
     parts = date_str.split("-")
+    if len(parts) != 3:
+        raise ValueError(f"Invalid date format (expected YYYY-MM-DD): {date_str!r}")
     return f"{parts[0]}-{parts[1]}", parts[2]
 
 
 def _daily_path(workspace_dir: Path, date_str: str) -> Path:
     """Get the path for a specific daily memory file.
 
-    Returns: workspace/memory/daily/YYYY-MM/DD.md
+    Returns: workspace/memory/daily/YYYY-MM/YYYY-MM-DD.md
     """
-    year_month, day = _date_parts(date_str)
-    return _daily_dir(workspace_dir) / year_month / f"{day}.md"
+    year_month, _day = _date_parts(date_str)
+    return _daily_dir(workspace_dir) / year_month / f"{date_str}.md"
 
 
 def get_daily(workspace_dir: Path, date_str: str) -> str | None:
@@ -110,6 +114,9 @@ def delete_daily(workspace_dir: Path, date_str: str) -> bool:
 
 
 # --- Attachment support ---
+# NOTE: Constants and helpers below are duplicated in
+# workspace/bin/_memory_common.py for standalone bin script use.
+# Keep both copies in sync when modifying.
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
@@ -222,6 +229,9 @@ def save_attachment(
 
 
 # --- Experience support ---
+# NOTE: _append_to_experience_file is duplicated in
+# workspace/bin/_memory_common.py for standalone bin script use.
+# Keep both copies in sync when modifying.
 
 
 def _append_to_experience_file(
@@ -315,9 +325,14 @@ def save_attachment_to_experience(
 # Matches daily memory filename: YYYY-MM-DD.md
 _DAILY_FILENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
 
+# Matches old-format DD.md (day-only filename within daily/YYYY-MM/ subdirs)
+_DAY_ONLY_RE = re.compile(r"^\d{2}\.md$")
+
 
 def migrate_legacy_daily_files(workspace_dir: Path) -> int:
-    """Move legacy memory/YYYY-MM-DD.md files to memory/daily/YYYY-MM/DD.md.
+    """Move legacy memory/YYYY-MM-DD.md files to memory/daily/YYYY-MM/YYYY-MM-DD.md.
+
+    Also migrates old-format memory/daily/YYYY-MM/DD.md to YYYY-MM-DD.md.
 
     Returns the number of files migrated.
     """
@@ -326,21 +341,40 @@ def migrate_legacy_daily_files(workspace_dir: Path) -> int:
         return 0
 
     migrated = 0
+
+    # Phase 1: memory/YYYY-MM-DD.md → memory/daily/YYYY-MM/YYYY-MM-DD.md
     for f in sorted(memory_dir.glob("*.md")):
         if not _DAILY_FILENAME_RE.match(f.name):
             continue
         date_str = f.stem  # e.g. "2026-02-21"
         new_path = _daily_path(workspace_dir, date_str)
         if new_path.exists():
-            # Target already exists — skip (don't overwrite)
-            logger.warning(
-                "Migration skip: %s already exists at %s", f.name, new_path
-            )
+            logger.warning("Migration skip: %s already exists at %s", f.name, new_path)
             continue
         new_path.parent.mkdir(parents=True, exist_ok=True)
         f.rename(new_path)
         migrated += 1
         logger.info("Migrated daily memory: %s -> %s", f.name, new_path)
+
+    # Phase 2: memory/daily/YYYY-MM/DD.md → memory/daily/YYYY-MM/YYYY-MM-DD.md
+    daily_dir = _daily_dir(workspace_dir)
+    if daily_dir.is_dir():
+        for month_dir in sorted(daily_dir.iterdir()):
+            if not month_dir.is_dir():
+                continue
+            for f in sorted(month_dir.glob("*.md")):
+                if not _DAY_ONLY_RE.match(f.name):
+                    continue
+                date_str = f"{month_dir.name}-{f.stem}"
+                new_path = month_dir / f"{date_str}.md"
+                if new_path.exists():
+                    logger.warning(
+                        "Migration skip: %s already exists at %s", f.name, new_path
+                    )
+                    continue
+                f.rename(new_path)
+                migrated += 1
+                logger.info("Migrated daily memory: %s -> %s", f.name, new_path)
 
     if migrated:
         logger.info("Migrated %d legacy daily memory files", migrated)

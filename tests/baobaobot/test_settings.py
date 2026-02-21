@@ -107,8 +107,6 @@ class TestAgentConfig:
         assert cfg.tmux_main_window_name == "__main__"
         assert cfg.claude_command == "claude"
         assert cfg.monitor_poll_interval == 2.0
-        assert cfg.show_user_messages is True
-        assert cfg.auto_assemble is True
         assert cfg.whisper_model == "small"
         assert cfg.cron_default_tz == ""
 

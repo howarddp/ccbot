@@ -43,7 +43,7 @@ class MemoryManager:
     def list_daily(self, days: int = 7) -> list[DailyMemory]:
         """List recent daily memory files.
 
-        Scans memory/daily/YYYY-MM/DD.md files.
+        Scans memory/daily/YYYY-MM/YYYY-MM-DD.md files.
 
         Args:
             days: Number of recent days to include.
@@ -62,8 +62,8 @@ class MemoryManager:
             if not month_dir.is_dir():
                 continue
             for f in sorted(month_dir.glob("*.md"), reverse=True):
-                # Reconstruct full date: YYYY-MM + DD
-                date_str = f"{month_dir.name}-{f.stem}"
+                # Filename is YYYY-MM-DD.md — stem is the full date
+                date_str = f.stem
                 try:
                     file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 except ValueError:
@@ -155,9 +155,9 @@ class MemoryManager:
             elif row["source"] == "summary":
                 file = f"memory/summaries/{row['date']}.md"
             else:
-                # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/DD.md'
+                # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/YYYY-MM-DD.md'
                 d = row["date"]
-                file = f"memory/daily/{d[:7]}/{d[8:]}.md"
+                file = f"memory/daily/{d[:7]}/{d}.md"
             results.append(
                 MemorySearchResult(
                     file=file,

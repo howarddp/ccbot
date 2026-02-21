@@ -104,6 +104,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
         session_manager=session_mgr,
         tmux_manager=tmux_mgr,
         cron_default_tz=config.cron_default_tz,
+        locale=config.locale,
         users_dir=config.users_dir,
         workspace_dir_for=config.workspace_dir_for,
         iter_workspace_dirs=config.iter_workspace_dirs,

@@ -127,6 +127,30 @@ class TestTopicNames:
         assert mgr.get_topic_name(42) == "new-name"
 
 
+class TestVerbosity:
+    def test_default_is_normal(self, mgr: SessionManager) -> None:
+        assert mgr.get_verbosity(42) == "normal"
+
+    def test_set_and_get(self, mgr: SessionManager) -> None:
+        mgr.set_verbosity(42, "quiet")
+        assert mgr.get_verbosity(42) == "quiet"
+
+    def test_set_verbose(self, mgr: SessionManager) -> None:
+        mgr.set_verbosity(42, "verbose")
+        assert mgr.get_verbosity(42) == "verbose"
+
+    def test_invalid_level_raises(self, mgr: SessionManager) -> None:
+        with pytest.raises(ValueError, match="Invalid verbosity"):
+            mgr.set_verbosity(42, "invalid")
+
+    def test_different_users(self, mgr: SessionManager) -> None:
+        mgr.set_verbosity(1, "quiet")
+        mgr.set_verbosity(2, "verbose")
+        assert mgr.get_verbosity(1) == "quiet"
+        assert mgr.get_verbosity(2) == "verbose"
+        assert mgr.get_verbosity(3) == "normal"  # default
+
+
 class TestIsWindowId:
     def test_valid_ids(self, mgr: SessionManager) -> None:
         assert mgr._is_window_id("@0") is True

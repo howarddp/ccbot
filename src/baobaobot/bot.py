@@ -76,6 +76,7 @@ from .handlers.callback_data import (
     CB_KEYS_PREFIX,
     CB_RESTART_SESSION,
     CB_SCREENSHOT_REFRESH,
+    CB_VERBOSITY,
 )
 from .handlers.history import send_history
 from .handlers.interactive_ui import (
@@ -116,6 +117,11 @@ from .handlers.persona_handler import (
 )
 from .handlers.profile_handler import profile_command
 from .handlers.memory_handler import forget_command, memory_command
+from .handlers.verbosity_handler import (
+    handle_verbosity_callback,
+    should_skip_message,
+    verbosity_command,
+)
 from .handlers.cron_handler import cron_command
 from .persona.profile import (
     NAME_NOT_SET_SENTINELS,
@@ -367,7 +373,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manually rebuild BAOBAOBOT.md for the current topic's workspace."""
+    """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
     if not user or not _is_user_allowed(context, user.id):
         return
@@ -380,11 +386,13 @@ async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     ctx = _ctx(context)
-    assembler = ClaudeMdAssembler(ctx.config.shared_dir, workspace_dir)
+    assembler = ClaudeMdAssembler(
+        ctx.config.shared_dir, workspace_dir, locale=ctx.config.locale
+    )
     assembler.write()
     await safe_reply(
         update.message,
-        "✅ BAOBAOBOT.md rebuilt. Send /clear to apply new settings to the current session.",
+        "✅ CLAUDE.md rebuilt. Send /clear to apply new settings to the current session.",
     )
 
 
@@ -831,7 +839,7 @@ async def _auto_create_session(
     Steps:
       1. Resolve workspace name via router
       2. Create workspace directory and init workspace files
-      3. Assemble BAOBAOBOT.md
+      3. Assemble CLAUDE.md
       4. Create tmux window
       5. Bind via router → forward pending message
     """
@@ -846,8 +854,10 @@ async def _auto_create_session(
     wm = WorkspaceManager(ctx.config.shared_dir, workspace_path)
     wm.init_workspace()
 
-    # Assemble BAOBAOBOT.md
-    assembler = ClaudeMdAssembler(ctx.config.shared_dir, workspace_path)
+    # Assemble CLAUDE.md
+    assembler = ClaudeMdAssembler(
+        ctx.config.shared_dir, workspace_path, locale=ctx.config.locale
+    )
     assembler.write()
 
     # Create tmux window
@@ -1225,6 +1235,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             pass
         await query.answer()
 
+    # Verbosity setting
+    elif data.startswith(CB_VERBOSITY):
+        await handle_verbosity_callback(query, ctx)
+
     elif data == "noop":
         await query.answer()
 
@@ -1491,6 +1505,13 @@ async def _deliver_message(
     if get_interactive_msg_id(agent_ctx, queue_id, thread_id or 0):
         await clear_interactive_msg(queue_id, bot, thread_id, agent_ctx=agent_ctx)
 
+    # Verbosity filter — skip messages based on per-user setting
+    # (interactive tools are already handled above and always shown)
+    if msg.tool_name not in INTERACTIVE_TOOL_NAMES:
+        verbosity = sm.get_verbosity(queue_id)
+        if should_skip_message(msg.content_type, msg.role, verbosity):
+            return
+
     # Send files if [SEND_FILE:path] markers are present
     if msg.file_paths:
         chat_id = (
@@ -1607,8 +1628,9 @@ async def post_init(application: Application) -> None:
         BotCommand("memory", "List/view/search memories"),
         BotCommand("forget", "Delete memory entries"),
         BotCommand("workspace", "Workspace status & project linking"),
-        BotCommand("rebuild", "Rebuild BAOBAOBOT.md"),
+        BotCommand("rebuild", "Rebuild CLAUDE.md"),
         BotCommand("cron", "Manage scheduled tasks"),
+        BotCommand("verbosity", "Set message display verbosity"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1619,16 +1641,17 @@ async def post_init(application: Application) -> None:
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await agent_ctx.session_manager.resolve_stale_ids()
 
-    # Rebuild BAOBAOBOT.md for existing workspaces if sources changed
+    # Rebuild CLAUDE.md for existing workspaces if sources changed
     workspace_dirs = agent_ctx.config.iter_workspace_dirs()
     if workspace_dirs:
         rebuilt = rebuild_all_workspaces(
             agent_ctx.config.shared_dir,
             workspace_dirs,
+            locale=agent_ctx.config.locale,
         )
         if rebuilt:
             logger.info(
-                "Auto-rebuilt BAOBAOBOT.md for %d workspace(s) on startup", rebuilt
+                "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
             )
 
     # Start cron service
@@ -1641,7 +1664,6 @@ async def post_init(application: Application) -> None:
         session_manager=agent_ctx.session_manager,
         session_map_file=agent_ctx.config.session_map_file,
         tmux_session_name=agent_ctx.config.tmux_session_name,
-        show_user_messages=agent_ctx.config.show_user_messages,
         projects_path=agent_ctx.config.claude_projects_path,
         poll_interval=agent_ctx.config.monitor_poll_interval,
         state_file=agent_ctx.config.monitor_state_file,
@@ -1717,6 +1739,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("workspace", workspace_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cron", cron_command))
+    application.add_handler(CommandHandler("verbosity", verbosity_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Register mode-specific lifecycle handlers (e.g. topic created/closed for forum)

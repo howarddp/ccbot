@@ -12,7 +12,7 @@ Regex patterns should match ``baobaobot.memory.utils``.
 NOTE: Module-level ``_fts_available`` global is acceptable here because
 bin scripts are short-lived single-process commands (one DB per run).
 
-Used by: memory-search, memory-list
+Used by: memory-search, memory-list, memory-save
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -121,6 +122,10 @@ def connect_db(workspace: Path) -> sqlite3.Connection:
 
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < _SCHEMA_VERSION:
+        print(
+            f"Recreating memory DB (schema v{version} -> v{_SCHEMA_VERSION})",
+            file=__import__("sys").stderr,
+        )
         conn.executescript(
             "DROP TABLE IF EXISTS memories_fts;\n"
             "DROP TABLE IF EXISTS attachment_meta;\n"
@@ -267,28 +272,47 @@ def _rebuild_fts(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_legacy_daily_files(workspace: Path) -> int:
-    """Move legacy memory/YYYY-MM-DD.md files to memory/daily/YYYY-MM/DD.md."""
+    """Move legacy memory/YYYY-MM-DD.md files to memory/daily/YYYY-MM/YYYY-MM-DD.md.
+
+    Also migrates old-format memory/daily/YYYY-MM/DD.md to YYYY-MM-DD.md.
+    """
     memory_dir = workspace / "memory"
     if not memory_dir.is_dir():
         return 0
 
     daily_re = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+    day_only_re = re.compile(r"^\d{2}\.md$")
     daily_dir = memory_dir / "daily"
     migrated = 0
 
+    # Phase 1: memory/YYYY-MM-DD.md → memory/daily/YYYY-MM/YYYY-MM-DD.md
     for f in sorted(memory_dir.glob("*.md")):
         if not daily_re.match(f.name):
             continue
         date_str = f.stem
         parts = date_str.split("-")
         year_month = f"{parts[0]}-{parts[1]}"
-        day = parts[2]
-        new_path = daily_dir / year_month / f"{day}.md"
+        new_path = daily_dir / year_month / f"{date_str}.md"
         if new_path.exists():
             continue
         new_path.parent.mkdir(parents=True, exist_ok=True)
         f.rename(new_path)
         migrated += 1
+
+    # Phase 2: memory/daily/YYYY-MM/DD.md → memory/daily/YYYY-MM/YYYY-MM-DD.md
+    if daily_dir.is_dir():
+        for month_dir in sorted(daily_dir.iterdir()):
+            if not month_dir.is_dir():
+                continue
+            for f in sorted(month_dir.glob("*.md")):
+                if not day_only_re.match(f.name):
+                    continue
+                date_str = f"{month_dir.name}-{f.stem}"
+                new_path = month_dir / f"{date_str}.md"
+                if new_path.exists():
+                    continue
+                f.rename(new_path)
+                migrated += 1
 
     return migrated
 
@@ -311,7 +335,7 @@ def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
                 _sync_file(conn, f, rel, "experience", date_str)
                 synced += 1
 
-    # Sync daily files (memory/daily/YYYY-MM/DD.md)
+    # Sync daily files (memory/daily/YYYY-MM/YYYY-MM-DD.md)
     daily_dir = memory_dir / "daily"
     if daily_dir.exists():
         for month_dir in sorted(daily_dir.iterdir()):
@@ -320,8 +344,8 @@ def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
             for f in sorted(month_dir.glob("*.md")):
                 rel = f"memory/daily/{month_dir.name}/{f.name}"
                 if _needs_sync(conn, f, rel):
-                    # Reconstruct full date: YYYY-MM + DD
-                    date_str = f"{month_dir.name}-{f.stem}"
+                    # Filename is YYYY-MM-DD.md — stem is the full date
+                    date_str = f.stem
                     _sync_file(conn, f, rel, "daily", date_str)
                     synced += 1
 
@@ -462,6 +486,104 @@ def list_tags(conn: sqlite3.Connection) -> list[str]:
     return sorted(all_tags)
 
 
+# ---------------------------------------------------------------------------
+# Daily file write utilities (shared by memory-save)
+# NOTE: Keep in sync with baobaobot.memory.daily
+# ---------------------------------------------------------------------------
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+# Matches tmp download prefix: YYYYMMDD_HHMMSS_
+TMP_TIMESTAMP_RE = re.compile(r"^\d{8}_\d{6}_")
+
+DAILY_FRONTMATTER_TEMPLATE = """\
+---
+date: {date}
+tags: []
+---
+"""
+
+
+def daily_file_path(workspace: Path, date_str: str) -> Path:
+    """Get path for daily memory file: memory/daily/YYYY-MM/YYYY-MM-DD.md.
+
+    Raises ValueError if date_str is not in YYYY-MM-DD format.
+    """
+    parts = date_str.split("-")
+    if len(parts) != 3:
+        raise ValueError(f"Invalid date format (expected YYYY-MM-DD): {date_str!r}")
+    year_month = f"{parts[0]}-{parts[1]}"
+    return workspace / "memory" / "daily" / year_month / f"{date_str}.md"
+
+
+def ensure_daily_file(workspace: Path, date_str: str) -> Path:
+    """Ensure daily memory file exists with frontmatter. Returns path."""
+    path = daily_file_path(workspace, date_str)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(
+            DAILY_FRONTMATTER_TEMPLATE.format(date=date_str), encoding="utf-8"
+        )
+    return path
+
+
+def copy_to_attachments(workspace: Path, source: Path) -> tuple[str, str]:
+    """Copy file to memory/attachments/YYYY-MM-DD/ with dedup naming.
+
+    Returns (rel_path, dest_name) tuple.
+    """
+    att_dir = workspace / "memory" / "attachments"
+
+    # Use local time so date subdir matches date.today()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_dir = att_dir / date_str
+    date_dir.mkdir(parents=True, exist_ok=True)
+
+    # Strip tmp timestamp prefix
+    clean_name = TMP_TIMESTAMP_RE.sub("", source.name)
+    dest_name = clean_name
+    dest = date_dir / dest_name
+    if dest.exists():
+        stem = Path(clean_name).stem
+        ext = Path(clean_name).suffix
+        n = 2
+        while dest.exists():
+            dest_name = f"{stem}_{n}{ext}"
+            dest = date_dir / dest_name
+            n += 1
+    shutil.copy2(source, dest)
+
+    rel_path = f"memory/attachments/{date_str}/{dest_name}"
+    return rel_path, dest_name
+
+
+def attachment_ref(source: Path, description: str, rel_path: str) -> str:
+    """Build Markdown reference for attachment (image vs file link)."""
+    suffix = source.suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        return f"![{description}]({rel_path})"
+    return f"[{description}]({rel_path})"
+
+
+def append_to_experience_file(workspace: Path, topic: str, line: str) -> str:
+    """Append line to experience topic file, creating if needed.
+
+    Returns relative path of the experience file.
+    """
+    exp_dir = workspace / "memory" / "experience"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    path = exp_dir / f"{topic}.md"
+
+    if not path.exists():
+        heading = topic.replace("-", " ").title()
+        path.write_text(f"# {heading}\n\n{line}\n", encoding="utf-8")
+    else:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    return f"memory/experience/{topic}.md"
+
+
 def format_file_label(row: sqlite3.Row) -> str:
     """Convert a result row's source/date into a human-readable file label."""
     if row["source"] == "experience":
@@ -469,6 +591,6 @@ def format_file_label(row: sqlite3.Row) -> str:
     elif row["source"] == "summary":
         return f"memory/summaries/{row['date']}.md"
     else:
-        # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/DD.md'
+        # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/YYYY-MM-DD.md'
         d = row["date"]
-        return f"memory/daily/{d[:7]}/{d[8:]}.md"
+        return f"memory/daily/{d[:7]}/{d}.md"

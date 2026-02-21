@@ -53,3 +53,6 @@ CB_FILE_CANCEL = "fa:cancel:"  # fa:cancel:<file_key>
 
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
+
+# Verbosity setting
+CB_VERBOSITY = "vb:"  # vb:<level>

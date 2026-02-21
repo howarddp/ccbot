@@ -59,42 +59,37 @@ def _detect_timezone() -> str:
     return _cached_tz
 
 
-_TZ_LANG_MAP: dict[str, str] = {
-    "Asia/Taipei": "繁體中文",
-    "Asia/Hong_Kong": "繁體中文",
-    "Asia/Shanghai": "简体中文",
-    "Asia/Chongqing": "简体中文",
-    "Asia/Tokyo": "日本語",
-    "Asia/Seoul": "한국어",
-}
-
-
 def _detect_language() -> str:
-    """Detect display language from system locale and timezone."""
+    """Detect user locale code from system locale and timezone.
+
+    Returns a BCP 47 locale code (e.g. 'zh-TW', 'en-US').
+    """
+    from ..locale_utils import TZ_LOCALE_MAP
+
     global _cached_lang
     if _cached_lang is not None:
         return _cached_lang
     lang = (locale.getlocale()[0] or "").lower()
     if lang.startswith("zh_tw") or lang.startswith("zh_hant"):
-        _cached_lang = "繁體中文"
+        _cached_lang = "zh-TW"
         return _cached_lang
     if lang.startswith("zh_cn") or lang.startswith("zh_hans"):
-        _cached_lang = "简体中文"
+        _cached_lang = "zh-CN"
         return _cached_lang
     if lang.startswith("ja"):
-        _cached_lang = "日本語"
+        _cached_lang = "ja-JP"
         return _cached_lang
     if lang.startswith("ko"):
-        _cached_lang = "한국어"
+        _cached_lang = "ko-KR"
         return _cached_lang
     # Fallback: infer from timezone (many Asian devs use en_US locale)
     if lang.startswith("en") or not lang:
         tz = _detect_timezone()
-        tz_lang = _TZ_LANG_MAP.get(tz)
-        if tz_lang:
-            _cached_lang = tz_lang
+        tz_locale = TZ_LOCALE_MAP.get(tz)
+        if tz_locale:
+            _cached_lang = tz_locale
             return _cached_lang
-    _cached_lang = "English"
+    _cached_lang = "en-US"
     return _cached_lang
 
 

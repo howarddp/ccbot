@@ -19,6 +19,7 @@ from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
 from .message_sender import safe_edit, safe_reply, safe_send
+from .verbosity_handler import should_skip_message
 
 if TYPE_CHECKING:
     from ..agent_context import AgentContext
@@ -100,7 +101,13 @@ async def send_history(
         agent_ctx: AgentContext for accessing services.
     """
     sm = agent_ctx.session_manager
-    show_user_messages = agent_ctx.config.show_user_messages
+    # Determine verbosity: use user_id if provided, else try from target
+    _hist_user_id = user_id
+    if _hist_user_id is None:
+        _hist_user = getattr(target, "from_user", None)
+        if _hist_user:
+            _hist_user_id = _hist_user.id
+    verbosity = sm.get_verbosity(_hist_user_id) if _hist_user_id else "normal"
 
     display_name = sm.get_display_name(window_id)
     # Determine if this is unread mode (specific byte range)
@@ -131,13 +138,15 @@ async def send_history(
         _start = TranscriptParser.EXPANDABLE_QUOTE_START
         _end = TranscriptParser.EXPANDABLE_QUOTE_END
 
-        # Filter messages based on config
-        if show_user_messages:
-            # Keep both user and assistant messages
-            pass
-        else:
-            # Filter to assistant messages only
-            messages = [m for m in messages if m["role"] == "assistant"]
+        # Filter messages based on per-user verbosity
+        if verbosity != "verbose":
+            messages = [
+                m
+                for m in messages
+                if not should_skip_message(
+                    m.get("content_type", "text"), m.get("role", "assistant"), verbosity
+                )
+            ]
         total = len(messages)
         if total == 0:
             if is_unread:

@@ -17,8 +17,7 @@ BIN_DIR = (
 def _daily_file(workspace: Path, date_str: str) -> Path:
     """Helper to get the daily file path in new directory structure."""
     year_month = date_str[:7]
-    day = date_str[8:]
-    return workspace / "memory" / "daily" / year_month / f"{day}.md"
+    return workspace / "memory" / "daily" / year_month / f"{date_str}.md"
 
 
 def run_script(args: list[str], workspace: Path) -> subprocess.CompletedProcess[str]:
@@ -50,9 +49,7 @@ class TestMemorySaveText:
         ws = tmp_path / "workspace"
         (ws / "memory").mkdir(parents=True)
 
-        result = run_script(
-            ["TODO: fix that bug", "--user", "Alice"], ws
-        )
+        result = run_script(["TODO: fix that bug", "--user", "Alice"], ws)
         assert result.returncode == 0
 
         today = date.today().isoformat()
@@ -64,9 +61,7 @@ class TestMemorySaveText:
         ws = tmp_path / "workspace"
         (ws / "memory").mkdir(parents=True)
 
-        result = run_script(
-            ["-e", "project-notes", "uses register(api) pattern"], ws
-        )
+        result = run_script(["-e", "project-notes", "uses register(api) pattern"], ws)
         assert result.returncode == 0
         assert "Saved to experience" in result.stdout
 
@@ -132,9 +127,7 @@ class TestMemorySaveAttachment:
         src = tmp_path / "diagram.png"
         src.write_bytes(b"png-data")
 
-        result = run_script(
-            ["-e", "project-arch", str(src), "system diagram"], ws
-        )
+        result = run_script(["-e", "project-arch", str(src), "system diagram"], ws)
         assert result.returncode == 0
         assert "Saved to memory" in result.stdout
 
@@ -157,6 +150,8 @@ class TestMemorySaveAttachment:
         # Should be treated as text mode (not a file), saved to daily
         assert result.returncode == 0
         assert "Saved to daily" in result.stdout
+        # Should warn about path-like text
+        assert "looks like a file path" in result.stderr
 
         today = date.today().isoformat()
         daily = _daily_file(ws, today).read_text()

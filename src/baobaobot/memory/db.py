@@ -1,7 +1,7 @@
 """SQLite-based memory index — sync .md files and query via SQL.
 
 Provides an index layer over the plain-text memory files.  Claude Code
-writes ``memory/daily/YYYY-MM/DD.md`` (daily) and ``memory/experience/*.md``
+writes ``memory/daily/YYYY-MM/YYYY-MM-DD.md`` (daily) and ``memory/experience/*.md``
 (topic-based long-term memory) directly; this module watches for file
 changes and keeps a SQLite database in sync so that searches are fast
 and structured.
@@ -76,6 +76,7 @@ class MemoryDB:
         self.db_path = workspace_dir / "memory.db"
         self._conn: sqlite3.Connection | None = None
         self._fts_available: bool = True
+        self._migration_done: bool = False
 
     # ------------------------------------------------------------------
     # Connection management
@@ -94,6 +95,11 @@ class MemoryDB:
         """Create or migrate schema based on version."""
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < _SCHEMA_VERSION:
+            logger.info(
+                "Recreating memory DB (schema v%d -> v%d), full re-sync will follow",
+                version,
+                _SCHEMA_VERSION,
+            )
             # Drop old tables and recreate
             conn.executescript(
                 "DROP TABLE IF EXISTS memories_fts;\n"
@@ -222,10 +228,11 @@ class MemoryDB:
 
     def sync(self) -> int:
         """Sync all memory files to SQLite.  Returns number of files synced."""
-        from .daily import migrate_legacy_daily_files
+        if not self._migration_done:
+            from .daily import migrate_legacy_daily_files
 
-        # Auto-migrate legacy memory/YYYY-MM-DD.md files
-        migrate_legacy_daily_files(self.workspace_dir)
+            migrate_legacy_daily_files(self.workspace_dir)
+            self._migration_done = True
 
         conn = self.connect()
         synced = 0
@@ -240,7 +247,7 @@ class MemoryDB:
                     self._sync_file(conn, f, rel, "experience", date_str)
                     synced += 1
 
-        # Sync daily files (memory/daily/YYYY-MM/DD.md)
+        # Sync daily files (memory/daily/YYYY-MM/YYYY-MM-DD.md)
         if self.daily_dir.exists():
             for month_dir in sorted(self.daily_dir.iterdir()):
                 if not month_dir.is_dir():
@@ -248,8 +255,8 @@ class MemoryDB:
                 for f in sorted(month_dir.glob("*.md")):
                     rel = f"memory/daily/{month_dir.name}/{f.name}"
                     if self._needs_sync(conn, f, rel):
-                        # Reconstruct full date: YYYY-MM + DD
-                        date_str = f"{month_dir.name}-{f.stem}"
+                        # Filename is YYYY-MM-DD.md — stem is the full date
+                        date_str = f.stem
                         self._sync_file(conn, f, rel, "daily", date_str)
                         synced += 1
 
@@ -444,8 +451,7 @@ class MemoryDB:
 
         if date_str:
             year_month = date_str[:7]  # e.g. "2026-02"
-            day = date_str[8:]  # e.g. "15"
-            memory_path = f"memory/daily/{year_month}/{day}.md"
+            memory_path = f"memory/daily/{year_month}/{date_str}.md"
             rows = conn.execute(
                 "SELECT memory_path, description, file_path, file_type "
                 "FROM attachment_meta WHERE memory_path = ? "

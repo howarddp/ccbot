@@ -52,7 +52,7 @@ _CONSOLIDATION_AGE_DAYS = 21
 # Idle threshold: JSONL must not have been written to in the last N seconds
 _IDLE_THRESHOLD_S = 60
 
-# Summary prompt sent to Claude Code
+# Summary prompt sent to Claude Code (use .format(locale=...) before sending)
 _SUMMARY_PROMPT = """\
 [NO_NOTIFY] [System] Auto-summary check: Review recent conversation and classify:
 
@@ -70,7 +70,7 @@ _SUMMARY_PROMPT = """\
    - Anything you'd want to remember in a future session
 
 Format: bullet points, under 10 lines, [Name] prefix per item.
-Write in the user's preferred language.
+Write in the user's preferred language (system locale: {locale}).
 If nothing worth recording, reply only: "[NO_NOTIFY] No summary needed."
 If you recorded a summary, reply WITHOUT [NO_NOTIFY] so the user is notified.
 """
@@ -97,7 +97,7 @@ Guidelines:
 - Only consolidate content worth keeping long-term
 - Use concise bullet points in experience files
 - Preserve user attribution ([Username]) where relevant
-- Write in the user's preferred language
+- Write in the user's preferred language (system locale: {locale})
 
 If nothing worth consolidating, reply: "[NO_NOTIFY] No consolidation needed."
 If you consolidated content, reply WITHOUT [NO_NOTIFY] with a brief summary.
@@ -121,6 +121,7 @@ class CronService:
         session_manager: SessionManager,
         tmux_manager: TmuxManager,
         cron_default_tz: str,
+        locale: str = "en-US",
         users_dir: Path,
         workspace_dir_for: Callable[[str], Path],
         iter_workspace_dirs: Callable[[], list[Path]],
@@ -128,6 +129,7 @@ class CronService:
         self._session_manager = session_manager
         self._tmux_manager = tmux_manager
         self._cron_default_tz = cron_default_tz
+        self._locale = locale
         self._users_dir = users_dir
         self._workspace_dir_for = workspace_dir_for
         self._iter_workspace_dirs = iter_workspace_dirs
@@ -573,7 +575,8 @@ class CronService:
                 continue
             for f in month_dir.glob("*.md"):
                 try:
-                    file_date = date.fromisoformat(f"{month_dir.name}-{f.stem}")
+                    # Filename is YYYY-MM-DD.md — stem is the full date
+                    file_date = date.fromisoformat(f.stem)
                     if file_date < cutoff:
                         return True
                 except ValueError:
@@ -674,7 +677,7 @@ class CronService:
                     id=uuid.uuid4().hex[:8],
                     name=_SYSTEM_SUMMARY_JOB_NAME,
                     schedule=schedule,
-                    message=_SUMMARY_PROMPT,
+                    message=_SUMMARY_PROMPT.format(locale=self._locale),
                     enabled=True,
                     system=True,
                     created_at=now,
@@ -696,7 +699,9 @@ class CronService:
                     kind="every", every_seconds=_CONSOLIDATION_INTERVAL_S
                 )
                 next_run = compute_next_run(schedule, now, self._cron_default_tz)
-                prompt = _CONSOLIDATION_PROMPT.format(age_days=_CONSOLIDATION_AGE_DAYS)
+                prompt = _CONSOLIDATION_PROMPT.format(
+                    age_days=_CONSOLIDATION_AGE_DAYS, locale=self._locale
+                )
                 job = CronJob(
                     id=uuid.uuid4().hex[:8],
                     name=_SYSTEM_CONSOLIDATION_JOB_NAME,

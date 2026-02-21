@@ -78,38 +78,45 @@ class TestAssemble:
         content = assembler.assemble()
         assert "{{BIN_DIR}}" not in content
 
+    def test_locale_template_variable(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace, locale="zh-TW")
+        content = assembler.assemble()
+        assert "{{LOCALE}}" not in content
+        assert "zh-TW" in content
+
 
 class TestWrite:
-    def test_creates_baobaobot_md(self, dirs: tuple[Path, Path]) -> None:
-        shared, workspace = dirs
-        assembler = ClaudeMdAssembler(shared, workspace)
-        assembler.write()
-        assert (workspace / "BAOBAOBOT.md").is_file()
-
-    def test_creates_thin_claude_md(self, dirs: tuple[Path, Path]) -> None:
+    def test_creates_claude_md(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
         assert (workspace / "CLAUDE.md").is_file()
-        claude_content = (workspace / "CLAUDE.md").read_text()
-        assert "BAOBAOBOT.md" in claude_content
 
-    def test_baobaobot_md_content(self, dirs: tuple[Path, Path]) -> None:
+    def test_claude_md_has_full_content(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
-        content = (workspace / "BAOBAOBOT.md").read_text()
+        content = (workspace / "CLAUDE.md").read_text()
         assert "BaoBao Assistant" in content
+        assert "Agent Soul" in content
 
-    def test_claude_md_is_thin(self, dirs: tuple[Path, Path]) -> None:
-        """CLAUDE.md should be a short reference, not the full assembled content."""
+    def test_no_baobaobot_md(self, dirs: tuple[Path, Path]) -> None:
+        """BAOBAOBOT.md should not be created — everything goes in CLAUDE.md."""
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
-        claude_content = (workspace / "CLAUDE.md").read_text()
-        baobao_content = (workspace / "BAOBAOBOT.md").read_text()
-        assert len(claude_content) < len(baobao_content)
-        assert "Agent Soul" not in claude_content  # Full content is in BAOBAOBOT.md
+        assert not (workspace / "BAOBAOBOT.md").exists()
+
+    def test_removes_legacy_baobaobot_md(self, dirs: tuple[Path, Path]) -> None:
+        """write() should delete a pre-existing BAOBAOBOT.md."""
+        shared, workspace = dirs
+        legacy = workspace / "BAOBAOBOT.md"
+        legacy.write_text("old content")
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert not legacy.exists()
+        assert (workspace / "CLAUDE.md").is_file()
 
 
 class TestNeedsRebuild:

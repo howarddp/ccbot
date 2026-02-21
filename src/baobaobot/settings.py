@@ -63,17 +63,18 @@ class AgentConfig:
         default_factory=lambda: Path.home() / ".claude" / "projects"
     )
     monitor_poll_interval: float = 2.0
-    show_user_messages: bool = True
 
     # Workspace / persona
     recent_memory_days: int = 7
-    auto_assemble: bool = True
 
     # Voice
     whisper_model: str = "small"
 
     # Cron
     cron_default_tz: str = ""
+
+    # Locale (e.g. "zh-TW", "en-US", "ja-JP")
+    locale: str = "en-US"
 
     # --- Derived path helpers (use agent_dir) ---
 
@@ -131,10 +132,9 @@ _MERGEABLE_KEYS = {
     "claude_command",
     "whisper_model",
     "cron_default_tz",
+    "locale",
     "recent_memory_days",
-    "auto_assemble",
     "monitor_poll_interval",
-    "show_user_messages",
 }
 
 
@@ -235,9 +235,8 @@ def _build_agent_config(
         config_dir=config_dir,
         agent_dir=agent_dir,
         monitor_poll_interval=float(_get("monitor_poll_interval", 2.0)),
-        show_user_messages=bool(_get("show_user_messages", True)),
         recent_memory_days=int(_get("recent_memory_days", 7)),
-        auto_assemble=bool(_get("auto_assemble", True)),
         whisper_model=str(_get("whisper_model", "small")),
         cron_default_tz=str(_get("cron_default_tz", "")),
+        locale=str(_get("locale", "en-US")),
     )

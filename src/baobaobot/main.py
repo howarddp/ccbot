@@ -19,6 +19,27 @@ import sys
 import time
 
 
+def _tz_to_locale() -> str:
+    """Auto-detect locale from OS timezone. Falls back to en-US."""
+    from .locale_utils import TZ_LOCALE_MAP
+
+    try:
+        import subprocess as _sp
+
+        result = _sp.run(
+            ["readlink", "/etc/localtime"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and "zoneinfo/" in result.stdout:
+            tz = result.stdout.strip().split("zoneinfo/")[-1]
+            if tz in TZ_LOCALE_MAP:
+                return TZ_LOCALE_MAP[tz]
+    except Exception:
+        pass
+    return "en-US"
+
+
 def _setup() -> None:
     """Interactive first-time setup — produces .env (secrets) + settings.toml."""
     from pathlib import Path
@@ -86,6 +107,11 @@ def _setup() -> None:
     if not claude_cmd:
         claude_cmd = "claude"
 
+    # Locale auto-detect from OS timezone
+    detected_locale = _tz_to_locale()
+    locale_input = input(f"Locale [{detected_locale}]: ").strip()
+    locale = locale_input if locale_input else detected_locale
+
     # Optional: voice transcription
     whisper_model = ""
     voice_resp = input(
@@ -114,14 +140,13 @@ def _setup() -> None:
 [global]
 allowed_users = [{users_toml}]
 claude_command = "{claude_cmd}"
+locale = "{locale}"
 
 # Memory
 recent_memory_days = 7         # default days shown in /memory command
-auto_assemble = true           # auto-reassemble BAOBAOBOT.md on workspace changes
 
 # Monitoring
 monitor_poll_interval = 2.0    # seconds between session polling cycles
-show_user_messages = true      # show user messages in real-time notifications
 
 # Voice transcription (requires faster-whisper)
 {whisper_line}

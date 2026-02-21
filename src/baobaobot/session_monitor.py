@@ -102,7 +102,6 @@ class SessionMonitor:
         session_manager: SessionManager,
         session_map_file: Path,
         tmux_session_name: str,
-        show_user_messages: bool = True,
         projects_path: Path,
         poll_interval: float,
         state_file: Path,
@@ -111,7 +110,6 @@ class SessionMonitor:
         self._session_manager = session_manager
         self._session_map_file = session_map_file
         self._tmux_session_name = tmux_session_name
-        self._show_user_messages = show_user_messages
         self.projects_path = projects_path
         self.poll_interval = poll_interval
 
@@ -376,9 +374,6 @@ class SessionMonitor:
 
                 for entry in parsed_entries:
                     if not entry.text:
-                        continue
-                    # Skip user messages unless show_user_messages is enabled
-                    if entry.role == "user" and not self._show_user_messages:
                         continue
                     # Skip [NO_NOTIFY] tagged messages
                     if entry.no_notify:
