@@ -129,26 +129,33 @@ class TestTopicNames:
 
 class TestVerbosity:
     def test_default_is_normal(self, mgr: SessionManager) -> None:
-        assert mgr.get_verbosity(42) == "normal"
+        assert mgr.get_verbosity(42, 0) == "normal"
 
     def test_set_and_get(self, mgr: SessionManager) -> None:
-        mgr.set_verbosity(42, "quiet")
-        assert mgr.get_verbosity(42) == "quiet"
+        mgr.set_verbosity(42, 100, "quiet")
+        assert mgr.get_verbosity(42, 100) == "quiet"
 
     def test_set_verbose(self, mgr: SessionManager) -> None:
-        mgr.set_verbosity(42, "verbose")
-        assert mgr.get_verbosity(42) == "verbose"
+        mgr.set_verbosity(42, 100, "verbose")
+        assert mgr.get_verbosity(42, 100) == "verbose"
 
     def test_invalid_level_raises(self, mgr: SessionManager) -> None:
         with pytest.raises(ValueError, match="Invalid verbosity"):
-            mgr.set_verbosity(42, "invalid")
+            mgr.set_verbosity(42, 100, "invalid")
 
     def test_different_users(self, mgr: SessionManager) -> None:
-        mgr.set_verbosity(1, "quiet")
-        mgr.set_verbosity(2, "verbose")
-        assert mgr.get_verbosity(1) == "quiet"
-        assert mgr.get_verbosity(2) == "verbose"
-        assert mgr.get_verbosity(3) == "normal"  # default
+        mgr.set_verbosity(1, 100, "quiet")
+        mgr.set_verbosity(2, 200, "verbose")
+        assert mgr.get_verbosity(1, 100) == "quiet"
+        assert mgr.get_verbosity(2, 200) == "verbose"
+        assert mgr.get_verbosity(3, 0) == "normal"  # default
+
+    def test_different_threads_same_user(self, mgr: SessionManager) -> None:
+        mgr.set_verbosity(42, 100, "quiet")
+        mgr.set_verbosity(42, 200, "verbose")
+        assert mgr.get_verbosity(42, 100) == "quiet"
+        assert mgr.get_verbosity(42, 200) == "verbose"
+        assert mgr.get_verbosity(42, 300) == "normal"  # unset thread
 
 
 class TestIsWindowId:

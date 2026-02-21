@@ -142,8 +142,8 @@ class SessionManager:
         # Group mode bindings (chat_id -> window_id)
         self.group_bindings: dict[int, str] = {}
         self.group_titles: dict[int, str] = {}
-        # Per-user verbosity level (user_id -> "quiet"/"normal"/"verbose")
-        self.user_verbosity: dict[int, str] = {}
+        # Per-workspace verbosity: user_id -> {thread_id -> level}
+        self.user_verbosity: dict[int, dict[int, str]] = {}
 
         self._load_state()
         self._rebuild_reverse_index()
@@ -175,7 +175,8 @@ class SessionManager:
                 str(cid): title for cid, title in self.group_titles.items()
             },
             "user_verbosity": {
-                str(uid): level for uid, level in self.user_verbosity.items()
+                str(uid): {str(tid): level for tid, level in threads.items()}
+                for uid, threads in self.user_verbosity.items()
             },
         }
         atomic_write_json(self._state_file, state)
@@ -219,10 +220,15 @@ class SessionManager:
                     int(cid): title
                     for cid, title in state.get("group_titles", {}).items()
                 }
-                self.user_verbosity = {
-                    int(uid): level
-                    for uid, level in state.get("user_verbosity", {}).items()
-                }
+                raw_verbosity = state.get("user_verbosity", {})
+                self.user_verbosity = {}
+                for uid, val in raw_verbosity.items():
+                    if isinstance(val, dict):
+                        # New nested format: {thread_id: level}
+                        self.user_verbosity[int(uid)] = {
+                            int(tid): lv for tid, lv in val.items()
+                        }
+                    # else: old flat format ("quiet"), silently discard
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -935,16 +941,21 @@ class SessionManager:
 
     VERBOSITY_LEVELS = ("quiet", "normal", "verbose")
 
-    def get_verbosity(self, user_id: int) -> str:
-        """Get the user's verbosity level. Defaults to 'normal'."""
-        return self.user_verbosity.get(user_id, "normal")
+    def get_verbosity(self, user_id: int, thread_id: int = 0) -> str:
+        """Get verbosity for a workspace. Defaults to 'normal'."""
+        threads = self.user_verbosity.get(user_id)
+        if threads is None:
+            return "normal"
+        return threads.get(thread_id, "normal")
 
-    def set_verbosity(self, user_id: int, level: str) -> None:
-        """Set the user's verbosity level and persist."""
+    def set_verbosity(self, user_id: int, thread_id: int, level: str) -> None:
+        """Set verbosity for a workspace and persist."""
         if level not in self.VERBOSITY_LEVELS:
             raise ValueError(f"Invalid verbosity level: {level}")
-        if self.user_verbosity.get(user_id) != level:
-            self.user_verbosity[user_id] = level
+        if user_id not in self.user_verbosity:
+            self.user_verbosity[user_id] = {}
+        if self.user_verbosity[user_id].get(thread_id) != level:
+            self.user_verbosity[user_id][thread_id] = level
             self._save_state()
 
     # --- Group chat ID management ---

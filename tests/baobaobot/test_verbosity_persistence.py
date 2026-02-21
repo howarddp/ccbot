@@ -22,26 +22,38 @@ class TestVerbosityPersistence:
     def test_roundtrip(self, tmp_path: Path):
         """Verbosity survives save/load cycle."""
         mgr1 = _make_mgr(tmp_path)
-        mgr1.set_verbosity(42, "quiet")
-        mgr1.set_verbosity(99, "verbose")
+        mgr1.set_verbosity(42, 100, "quiet")
+        mgr1.set_verbosity(42, 200, "verbose")
+        mgr1.set_verbosity(99, 300, "verbose")
 
         # Create a new manager that loads from the same state file
         mgr2 = _make_mgr(tmp_path)
-        assert mgr2.get_verbosity(42) == "quiet"
-        assert mgr2.get_verbosity(99) == "verbose"
-        assert mgr2.get_verbosity(1) == "normal"  # default
+        assert mgr2.get_verbosity(42, 100) == "quiet"
+        assert mgr2.get_verbosity(42, 200) == "verbose"
+        assert mgr2.get_verbosity(99, 300) == "verbose"
+        assert mgr2.get_verbosity(42, 999) == "normal"  # unset thread
+        assert mgr2.get_verbosity(1, 0) == "normal"  # unset user
 
     def test_serialized_in_state_json(self, tmp_path: Path):
-        """Verify the JSON structure in state.json."""
+        """Verify the nested JSON structure in state.json."""
         mgr = _make_mgr(tmp_path)
-        mgr.set_verbosity(42, "quiet")
+        mgr.set_verbosity(42, 100, "quiet")
 
         state = json.loads((tmp_path / "state.json").read_text())
         assert "user_verbosity" in state
-        assert state["user_verbosity"]["42"] == "quiet"
+        assert state["user_verbosity"]["42"] == {"100": "quiet"}
 
     def test_missing_key_loads_empty(self, tmp_path: Path):
         """Old state.json without user_verbosity loads cleanly."""
         (tmp_path / "state.json").write_text("{}")
         mgr = _make_mgr(tmp_path)
-        assert mgr.get_verbosity(42) == "normal"
+        assert mgr.get_verbosity(42, 0) == "normal"
+
+    def test_old_flat_format_discarded(self, tmp_path: Path):
+        """Old flat format (user_id -> level) is silently discarded."""
+        state = {"user_verbosity": {"42": "quiet", "99": "verbose"}}
+        (tmp_path / "state.json").write_text(json.dumps(state))
+        mgr = _make_mgr(tmp_path)
+        # Old flat values are discarded, everything defaults to normal
+        assert mgr.get_verbosity(42, 0) == "normal"
+        assert mgr.get_verbosity(99, 0) == "normal"

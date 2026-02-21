@@ -1453,6 +1453,203 @@ async def handle_new_message(
         await _deliver_message(msg, bot, agent_ctx, user_id, wid, thread_id=thread_id)
 
 
+async def _send_files_background(
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    files: list[Path],
+) -> None:
+    """Send files to Telegram in background (fire-and-forget).
+
+    Runs as an asyncio task so it doesn't block the session monitor.
+    Sends periodic heartbeat messages while uploading.
+    """
+    for fpath in files:
+        try:
+            suffix = fpath.suffix.lower()
+            file_size = fpath.stat().st_size
+            logger.info(
+                "SEND_FILE: uploading %s (%d bytes) to chat_id=%s thread=%s",
+                fpath.name,
+                file_size,
+                chat_id,
+                thread_id,
+            )
+            # Launch upload with periodic heartbeat
+            await _upload_with_heartbeat(
+                bot, chat_id, thread_id, fpath, suffix, file_size
+            )
+            logger.info("Sent file to Telegram: %s", fpath)
+        except Exception as e:
+            logger.error("Failed to send file %s: %s", fpath, e)
+            # Brief delay so httpx connection pool can recover after upload failure
+            await asyncio.sleep(2)
+            await _notify_send_error(bot, chat_id, thread_id, fpath.name, e)
+
+
+_UPLOAD_TIMEOUT = 120
+_HEARTBEAT_INTERVAL = 5
+
+
+async def _upload_with_heartbeat(
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    fpath: Path,
+    suffix: str,
+    file_size: int,
+) -> None:
+    """Upload a file with periodic heartbeat messages every 30s."""
+    size_kb = file_size / 1024
+    status_msg = await bot.send_message(
+        chat_id=chat_id,
+        text=f"📤 Uploading {fpath.name} ({size_kb:.0f} KB)...",
+        message_thread_id=thread_id,
+        connect_timeout=10,
+        write_timeout=10,
+        read_timeout=10,
+    )
+    msg_id = status_msg.message_id
+
+    # Run upload and heartbeat as independent concurrent tasks.
+    # Upload runs in a thread executor so httpx I/O cannot block the event loop.
+    loop = asyncio.get_running_loop()
+    upload_task = asyncio.create_task(
+        _do_upload_in_executor(loop, bot, chat_id, thread_id, fpath, suffix)
+    )
+    heartbeat_task = asyncio.create_task(
+        _heartbeat_loop(bot, chat_id, msg_id, fpath.name, size_kb)
+    )
+
+    try:
+        await upload_task
+        # Success: edit status to done
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=f"📤 Sent {fpath.name} ({size_kb:.0f} KB)",
+            )
+        except Exception:
+            pass
+    except Exception:
+        # On failure, delete the status message (error notification sent by caller)
+        try:
+            await bot.delete_message(
+                chat_id=chat_id,
+                message_id=msg_id,
+                connect_timeout=10,
+                write_timeout=10,
+                read_timeout=10,
+            )
+        except Exception:
+            pass
+        raise
+    finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _heartbeat_loop(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    filename: str,
+    size_kb: float,
+) -> None:
+    """Edit the status message every HEARTBEAT_INTERVAL seconds."""
+    elapsed = 0
+    while True:
+        await asyncio.sleep(_HEARTBEAT_INTERVAL)
+        elapsed += _HEARTBEAT_INTERVAL
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"📤 Uploading {filename} ({size_kb:.0f} KB)... {elapsed}s elapsed",
+            )
+            logger.debug("SEND_FILE heartbeat: %s %ds elapsed", filename, elapsed)
+        except Exception as e:
+            logger.debug("SEND_FILE heartbeat edit failed: %s", e)
+
+
+async def _do_upload_in_executor(
+    loop: asyncio.AbstractEventLoop,
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    fpath: Path,
+    suffix: str,
+) -> None:
+    """Upload a file in a thread executor so httpx I/O cannot block the event loop."""
+    await loop.run_in_executor(
+        None,
+        lambda: _do_upload_sync(bot, chat_id, thread_id, fpath, suffix),
+    )
+
+
+def _do_upload_sync(
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    fpath: Path,
+    suffix: str,
+) -> None:
+    """Synchronous file upload — runs inside a thread executor."""
+    import httpx
+
+    url = f"https://api.telegram.org/bot{bot.token}/"
+    timeout = httpx.Timeout(connect=30, write=_UPLOAD_TIMEOUT, read=60, pool=10)
+    with httpx.Client(timeout=timeout) as client:
+        with open(fpath, "rb") as f:
+            files = {"document": (fpath.name, f)}
+            data: dict[str, object] = {"chat_id": chat_id}
+            if thread_id is not None:
+                data["message_thread_id"] = thread_id
+
+            if suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                files = {"photo": (fpath.name, f)}
+                resp = client.post(url + "sendPhoto", data=data, files=files)
+            else:
+                resp = client.post(url + "sendDocument", data=data, files=files)
+
+        if resp.status_code != 200:
+            body = resp.text[:200]
+            raise RuntimeError(f"Telegram API {resp.status_code}: {body}")
+
+
+async def _notify_send_error(
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    filename: str,
+    error: object,
+) -> None:
+    """Send file-send error notification to Telegram (best-effort, with retry)."""
+    text = f"❌ Failed to send file {filename}: {error}"
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                await asyncio.sleep(2)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                message_thread_id=thread_id,
+                connect_timeout=10,
+                write_timeout=10,
+                read_timeout=10,
+            )
+            return
+        except Exception as e2:
+            logger.error(
+                "Failed to notify file send error (attempt %d): %s", attempt + 1, e2
+            )
+    logger.error("All notification attempts failed for file %s", filename)
+
+
 async def _deliver_message(
     msg: NewMessage,
     bot: Bot,
@@ -1505,10 +1702,10 @@ async def _deliver_message(
     if get_interactive_msg_id(agent_ctx, queue_id, thread_id or 0):
         await clear_interactive_msg(queue_id, bot, thread_id, agent_ctx=agent_ctx)
 
-    # Verbosity filter — skip messages based on per-user setting
+    # Verbosity filter — skip messages based on per-workspace setting
     # (interactive tools are already handled above and always shown)
     if msg.tool_name not in INTERACTIVE_TOOL_NAMES:
-        verbosity = sm.get_verbosity(queue_id)
+        verbosity = sm.get_verbosity(queue_id, thread_id or 0)
         if should_skip_message(msg.content_type, msg.role, verbosity):
             return
 
@@ -1519,10 +1716,17 @@ async def _deliver_message(
             if thread_id is not None
             else queue_id
         )
+        # Collect validated file paths, then send in background
+        validated_files: list[Path] = []
         for fpath_str in msg.file_paths:
             fpath = Path(fpath_str)
             if not fpath.is_file():
                 logger.warning("SEND_FILE: file not found: %s", fpath)
+                asyncio.create_task(
+                    _notify_send_error(
+                        bot, chat_id, thread_id, fpath.name, "file not found"
+                    )
+                )
                 continue
             # Security: file must be within agent directory
             try:
@@ -1530,6 +1734,15 @@ async def _deliver_message(
                 config_resolved = agent_ctx.config.config_dir.resolve()
                 if not str(fpath_resolved).startswith(str(config_resolved)):
                     logger.warning("SEND_FILE: path outside workspace: %s", fpath)
+                    asyncio.create_task(
+                        _notify_send_error(
+                            bot,
+                            chat_id,
+                            thread_id,
+                            fpath.name,
+                            "path outside workspace",
+                        )
+                    )
                     continue
             except (OSError, ValueError):
                 continue
@@ -1537,29 +1750,24 @@ async def _deliver_message(
             try:
                 if fpath.stat().st_size > 50 * 1024 * 1024:
                     logger.warning("SEND_FILE: file too large: %s", fpath)
+                    asyncio.create_task(
+                        _notify_send_error(
+                            bot,
+                            chat_id,
+                            thread_id,
+                            fpath.name,
+                            "file too large (>50MB)",
+                        )
+                    )
                     continue
             except OSError:
                 continue
-            # Send as photo or document based on extension
-            try:
-                suffix = fpath.suffix.lower()
-                with open(fpath, "rb") as f:
-                    if suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-                        await bot.send_photo(
-                            chat_id=chat_id,
-                            photo=f,
-                            message_thread_id=thread_id,
-                        )
-                    else:
-                        await bot.send_document(
-                            chat_id=chat_id,
-                            document=f,
-                            filename=fpath.name,
-                            message_thread_id=thread_id,
-                        )
-                logger.info("Sent file to Telegram: %s", fpath)
-            except Exception as e:
-                logger.error("Failed to send file %s: %s", fpath, e)
+            validated_files.append(fpath)
+        # Fire-and-forget: send files in background to avoid blocking monitor
+        if validated_files:
+            asyncio.create_task(
+                _send_files_background(bot, chat_id, thread_id, validated_files)
+            )
         # Strip [SEND_FILE:...] markers from the text
         msg = NewMessage(
             session_id=msg.session_id,

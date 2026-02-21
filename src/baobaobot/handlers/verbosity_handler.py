@@ -57,7 +57,7 @@ _LEVEL_DESCRIPTIONS = {
 }
 
 
-def _build_verbosity_keyboard(current: str) -> InlineKeyboardMarkup:
+def _build_verbosity_keyboard(current: str, thread_id: int) -> InlineKeyboardMarkup:
     """Build inline keyboard with verbosity level buttons."""
     buttons = []
     for level, desc in _LEVEL_DESCRIPTIONS.items():
@@ -65,7 +65,7 @@ def _build_verbosity_keyboard(current: str) -> InlineKeyboardMarkup:
         buttons.append(
             InlineKeyboardButton(
                 f"{level}{check}",
-                callback_data=f"{CB_VERBOSITY}{level}",
+                callback_data=f"{CB_VERBOSITY}{thread_id}:{level}",
             )
         )
     return InlineKeyboardMarkup([buttons])
@@ -87,9 +87,10 @@ async def verbosity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not agent_ctx.config.is_user_allowed(user.id):
         return
 
-    current = agent_ctx.session_manager.get_verbosity(user.id)
+    thread_id = update.message.message_thread_id or 0
+    current = agent_ctx.session_manager.get_verbosity(user.id, thread_id)
     text = _build_verbosity_text(current)
-    keyboard = _build_verbosity_keyboard(current)
+    keyboard = _build_verbosity_keyboard(current, thread_id)
     await safe_reply(update.message, text, reply_markup=keyboard)
 
 
@@ -108,14 +109,24 @@ async def handle_verbosity_callback(
         return
 
     data = query.data or ""
-    level = data[len(CB_VERBOSITY) :]
+    payload = data[len(CB_VERBOSITY) :]
+    # Format: "<thread_id>:<level>"
+    if ":" not in payload:
+        await query.answer("Invalid data")
+        return
+    tid_str, level = payload.split(":", 1)
+    try:
+        thread_id = int(tid_str)
+    except ValueError:
+        await query.answer("Invalid data")
+        return
     if level not in _LEVEL_DESCRIPTIONS:
         await query.answer("Invalid level")
         return
 
-    agent_ctx.session_manager.set_verbosity(user.id, level)
+    agent_ctx.session_manager.set_verbosity(user.id, thread_id, level)
     text = _build_verbosity_text(level)
-    keyboard = _build_verbosity_keyboard(level)
+    keyboard = _build_verbosity_keyboard(level, thread_id)
 
     try:
         await safe_edit(query, text, reply_markup=keyboard)

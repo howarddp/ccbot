@@ -107,7 +107,11 @@ async def send_history(
         _hist_user = getattr(target, "from_user", None)
         if _hist_user:
             _hist_user_id = _hist_user.id
-    verbosity = sm.get_verbosity(_hist_user_id) if _hist_user_id else "normal"
+    verbosity = (
+        sm.get_verbosity(_hist_user_id, message_thread_id or 0)
+        if _hist_user_id
+        else "normal"
+    )
 
     display_name = sm.get_display_name(window_id)
     # Determine if this is unread mode (specific byte range)
