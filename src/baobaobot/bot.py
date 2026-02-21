@@ -1531,7 +1531,7 @@ async def _upload_with_heartbeat(
     )
 
     try:
-        await upload_task
+        await asyncio.wait_for(upload_task, timeout=_UPLOAD_TIMEOUT)
         # Success: edit status to done
         try:
             await bot.edit_message_text(
@@ -1611,7 +1611,7 @@ def _do_upload_sync(
     import httpx
 
     url = f"https://api.telegram.org/bot{bot.token}/"
-    timeout = httpx.Timeout(connect=30, write=_UPLOAD_TIMEOUT, read=60, pool=10)
+    timeout = httpx.Timeout(connect=30, write=30, read=60, pool=10)
     with httpx.Client(timeout=timeout) as client:
         with open(fpath, "rb") as f:
             files = {"document": (fpath.name, f)}
@@ -1939,8 +1939,8 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     request = HTTPXRequest(
         connection_pool_size=16,
         connect_timeout=10.0,
-        read_timeout=15.0,
-        write_timeout=15.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
         pool_timeout=10.0,
     )
     application = (
