@@ -55,6 +55,7 @@ _SKILL_NAMES = [
     "cron-add",
     "cron-list",
     "cron-remove",
+    "weather",
 ]
 
 
