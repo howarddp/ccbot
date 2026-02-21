@@ -56,6 +56,9 @@ _SKILL_NAMES = [
     "cron-list",
     "cron-remove",
     "weather",
+    "google-places",
+    "google-directions",
+    "google-geocoding",
 ]
 
 
