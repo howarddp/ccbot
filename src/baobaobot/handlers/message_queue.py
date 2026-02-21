@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from telegram import Bot
-from telegram.error import RetryAfter
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 from ..markdown_v2 import convert_markdown
 from ..terminal_parser import parse_status_line
@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Merge limit for content messages
 MERGE_MAX_LENGTH = 3800  # Leave room for markdown conversion overhead
+
+# Maximum retries for transient network errors in queue worker
+_WORKER_MAX_RETRIES = 3
+_WORKER_RETRY_DELAY = 5  # seconds
 
 
 @dataclass
@@ -54,6 +58,7 @@ class MessageTask:
     tool_use_id: str | None = None
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
+    retry_count: int = 0  # Number of times this task has been retried
 
 
 def get_message_queue(
@@ -224,6 +229,34 @@ async def _message_queue_worker(
                         logger.warning(
                             f"Flood control for user {user_id}, {remaining}s remaining"
                         )
+            except (TimedOut, NetworkError) as e:
+                if task.retry_count < _WORKER_MAX_RETRIES:
+                    task.retry_count += 1
+                    logger.warning(
+                        "Network error for user %d (retry %d/%d): %s, "
+                        "re-queuing in %ds",
+                        user_id,
+                        task.retry_count,
+                        _WORKER_MAX_RETRIES,
+                        e,
+                        _WORKER_RETRY_DELAY,
+                    )
+                    await asyncio.sleep(_WORKER_RETRY_DELAY)
+                    # Re-insert at front of queue by draining and re-filling
+                    async with lock:
+                        remaining_items = _inspect_queue(queue)
+                        queue.put_nowait(task)
+                        queue.task_done()  # compensate for put_nowait counter
+                        for item in remaining_items:
+                            queue.put_nowait(item)
+                            queue.task_done()  # compensate
+                else:
+                    logger.error(
+                        "Network error for user %d after %d retries, dropping task: %s",
+                        user_id,
+                        _WORKER_MAX_RETRIES,
+                        e,
+                    )
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:

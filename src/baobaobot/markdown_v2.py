@@ -17,6 +17,10 @@ from telegramify_markdown.render import TelegramMarkdownRenderer
 
 from .transcript_parser import TranscriptParser
 
+# telegramify_markdown incorrectly escapes '=' inside tg:// URLs.
+# Fix: un-escape \= within (tg://...) link targets after conversion.
+_TG_LINK_FIX_RE = re.compile(r"\(tg://[^)]*\\=[^)]*\)")
+
 _EXPQUOTE_RE = re.compile(
     re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
     + r"([\s\S]*?)"
@@ -85,7 +89,10 @@ def _markdownify(text: str) -> str:
         content = escape_latex(text)
         document = mistletoe.Document(content)
         _update_block(document)
-        return renderer.render(document)
+        result = renderer.render(document)
+    # Fix over-escaped tg:// URLs (library escapes '=' inside link targets)
+    result = _TG_LINK_FIX_RE.sub(lambda m: m.group(0).replace("\\=", "="), result)
+    return result
 
 
 def convert_markdown(text: str) -> str:

@@ -11,16 +11,22 @@ Functions:
   - safe_send: Send message with MarkdownV2, fallback to plain text
 """
 
+import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from telegram import Bot, LinkPreviewOptions, Message
-from telegram.error import RetryAfter
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 from ..markdown_v2 import convert_markdown
 
 logger = logging.getLogger(__name__)
+
+# Retry settings for transient network errors
+_SEND_MAX_RETRIES = 3
+_SEND_RETRY_DELAYS = [2, 4, 8]
 
 # Disable link previews in all messages to reduce visual noise
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -44,6 +50,33 @@ async def rate_limit_send(user_id: int) -> None:
     _last_send_time[user_id] = time.time()
 
 
+async def _send_with_retry(
+    send_fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any
+) -> Any:
+    """Retry wrapper for Telegram send/edit calls on transient network errors.
+
+    Retries up to _SEND_MAX_RETRIES times with exponential backoff on
+    TimedOut and NetworkError. Re-raises RetryAfter immediately.
+    """
+    for attempt in range(_SEND_MAX_RETRIES):
+        try:
+            return await send_fn(*args, **kwargs)
+        except RetryAfter:
+            raise
+        except (TimedOut, NetworkError) as e:
+            if attempt == _SEND_MAX_RETRIES - 1:
+                raise
+            delay = _SEND_RETRY_DELAYS[attempt]
+            logger.warning(
+                "Send failed (attempt %d/%d): %s, retry in %ds",
+                attempt + 1,
+                _SEND_MAX_RETRIES,
+                e,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+
 async def _send_with_fallback(
     bot: Bot,
     chat_id: int,
@@ -57,7 +90,8 @@ async def _send_with_fallback(
     """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     try:
-        return await bot.send_message(
+        return await _send_with_retry(
+            bot.send_message,
             chat_id=chat_id,
             text=convert_markdown(text),
             parse_mode="MarkdownV2",
@@ -67,7 +101,9 @@ async def _send_with_fallback(
         raise
     except Exception:
         try:
-            return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            return await _send_with_retry(
+                bot.send_message, chat_id=chat_id, text=text, **kwargs
+            )
         except RetryAfter:
             raise
         except Exception as e:
@@ -96,7 +132,8 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
     """Reply with MarkdownV2, falling back to plain text on failure."""
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     try:
-        return await message.reply_text(
+        return await _send_with_retry(
+            message.reply_text,
             convert_markdown(text),
             parse_mode="MarkdownV2",
             **kwargs,
@@ -104,14 +141,15 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
     except RetryAfter:
         raise
     except Exception:
-        return await message.reply_text(text, **kwargs)
+        return await _send_with_retry(message.reply_text, text, **kwargs)
 
 
 async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
     """Edit message with MarkdownV2, falling back to plain text on failure."""
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     try:
-        await target.edit_message_text(
+        await _send_with_retry(
+            target.edit_message_text,
             convert_markdown(text),
             parse_mode="MarkdownV2",
             **kwargs,
@@ -120,7 +158,7 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         raise
     except Exception:
         try:
-            await target.edit_message_text(text, **kwargs)
+            await _send_with_retry(target.edit_message_text, text, **kwargs)
         except RetryAfter:
             raise
         except Exception as e:
@@ -139,7 +177,8 @@ async def safe_send(
     if message_thread_id is not None:
         kwargs.setdefault("message_thread_id", message_thread_id)
     try:
-        await bot.send_message(
+        await _send_with_retry(
+            bot.send_message,
             chat_id=chat_id,
             text=convert_markdown(text),
             parse_mode="MarkdownV2",
@@ -149,7 +188,9 @@ async def safe_send(
         raise
     except Exception:
         try:
-            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            await _send_with_retry(
+                bot.send_message, chat_id=chat_id, text=text, **kwargs
+            )
         except RetryAfter:
             raise
         except Exception as e:

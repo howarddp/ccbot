@@ -55,6 +55,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from .agent_context import AgentContext
 from .router import RoutingKey
@@ -1869,13 +1870,9 @@ async def post_init(application: Application) -> None:
             logger.info(
                 "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
             )
-        refreshed = refresh_all_skills(
-            agent_ctx.config.shared_dir, workspace_dirs
-        )
+        refreshed = refresh_all_skills(agent_ctx.config.shared_dir, workspace_dirs)
         if refreshed:
-            logger.info(
-                "Refreshed skills for %d workspace(s) on startup", refreshed
-            )
+            logger.info("Refreshed skills for %d workspace(s) on startup", refreshed)
 
     # Start cron service
     if agent_ctx.cron_service:
@@ -1939,9 +1936,17 @@ async def post_shutdown(application: Application) -> None:
 
 
 def create_bot(agent_ctx: AgentContext) -> Application:
+    request = HTTPXRequest(
+        connection_pool_size=16,
+        connect_timeout=10.0,
+        read_timeout=15.0,
+        write_timeout=15.0,
+        pool_timeout=10.0,
+    )
     application = (
         Application.builder()
         .token(agent_ctx.config.bot_token)
+        .request(request)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
