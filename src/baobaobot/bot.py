@@ -136,6 +136,14 @@ logger = logging.getLogger(__name__)
 _MEMORY_TRIGGERS = ("記住", "remember", "記憶")
 
 
+async def _send_typing(chat: object) -> None:
+    """Send typing indicator (best-effort, never raises)."""
+    try:
+        await chat.send_action(ChatAction.TYPING)  # type: ignore[union-attr]
+    except Exception:
+        pass
+
+
 def _ctx(context: ContextTypes.DEFAULT_TYPE) -> AgentContext:
     """Retrieve the AgentContext stored in bot_data."""
     return context.bot_data["agent_ctx"]
@@ -494,7 +502,7 @@ async def forward_command_handler(
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
-    await update.message.chat.send_action(ChatAction.TYPING)
+    await _send_typing(update.message.chat)
     success, message = await ctx.session_manager.send_to_window(wid, cc_slash)
     if success:
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
@@ -641,7 +649,7 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             raw_text = "\n".join(lines)
             text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
-            await msg.chat.send_action(ChatAction.TYPING)
+            await _send_typing(msg.chat)
             success, message = await ctx.session_manager.send_to_window(
                 wid, text_to_send
             )
@@ -671,7 +679,7 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         raw_text = "\n".join(lines)
         text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
-        await msg.chat.send_action(ChatAction.TYPING)
+        await _send_typing(msg.chat)
         success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
         if success:
             await safe_reply(
@@ -724,7 +732,7 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     raw_text = "\n".join(lines)
     text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
-    await msg.chat.send_action(ChatAction.TYPING)
+    await _send_typing(msg.chat)
     success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
     if success:
         await safe_reply(update.message, f"📎 File sent: {filename}")
@@ -959,7 +967,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 text_to_send = _ensure_user_and_prefix(
                     ctx.config.users_dir, user, raw_text
                 )
-                await update.message.chat.send_action(ChatAction.TYPING)
+                await _send_typing(update.message.chat)
                 success, message = await ctx.session_manager.send_to_window(
                     wid, text_to_send
                 )
@@ -1004,7 +1012,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    await update.message.chat.send_action(ChatAction.TYPING)
+    await _send_typing(update.message.chat)
 
     # Compute queue key: user_id for forum, chat_id for group
     queue_id = rk.user_id if rk.thread_id is not None else rk.chat_id

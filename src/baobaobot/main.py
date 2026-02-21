@@ -497,6 +497,41 @@ def main() -> None:
 
         logger.info("Starting %d Telegram bots...", len(agent_contexts))
 
+        _INIT_MAX_RETRIES = 10
+        _INIT_RETRY_DELAY = 5  # seconds
+
+        async def _init_with_retry(app, post_init_fn) -> None:  # type: ignore[no-untyped-def]
+            """Initialize, post_init, start, and begin polling with retry on network errors."""
+            from telegram.error import TimedOut, NetworkError
+
+            for attempt in range(1, _INIT_MAX_RETRIES + 1):
+                try:
+                    await app.initialize()
+                    await post_init_fn(app)
+                    await app.start()
+                    updater = app.updater
+                    assert updater is not None
+                    await updater.start_polling(
+                        allowed_updates=["message", "callback_query"]
+                    )
+                    return
+                except (TimedOut, NetworkError, OSError) as e:
+                    logger.warning(
+                        "Bot init attempt %d/%d failed: %s. Retrying in %ds...",
+                        attempt,
+                        _INIT_MAX_RETRIES,
+                        e,
+                        _INIT_RETRY_DELAY,
+                    )
+                    # Shut down partially initialized app before retrying
+                    try:
+                        await app.shutdown()
+                    except Exception:
+                        pass
+                    if attempt == _INIT_MAX_RETRIES:
+                        raise
+                    await asyncio.sleep(_INIT_RETRY_DELAY)
+
         async def _run_multi() -> None:
             apps = []
             for ctx in agent_contexts:
@@ -509,14 +544,7 @@ def main() -> None:
             from .bot import post_init
 
             for app in apps:
-                await app.initialize()
-                await post_init(app)
-                await app.start()
-                updater = app.updater
-                assert updater is not None
-                await updater.start_polling(
-                    allowed_updates=["message", "callback_query"]
-                )
+                await _init_with_retry(app, post_init)
 
             logger.info("All %d bots started, waiting...", len(apps))
 
