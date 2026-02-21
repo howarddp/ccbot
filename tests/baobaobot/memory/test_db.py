@@ -389,6 +389,30 @@ class TestSearch:
         results = db.search("content", tag="nonexistent")
         assert results == []
 
+    def test_search_days_includes_summaries(
+        self, db: MemoryDB, workspace: Path
+    ) -> None:
+        """--days search should return results from both daily and summary files."""
+        from datetime import date as dt_date, timedelta
+
+        today = dt_date.today()
+        recent = (today - timedelta(days=2)).isoformat()
+
+        # Create a recent daily file
+        write_daily(workspace, recent, "- daily unique keyword\n")
+
+        # Create a recent summary file
+        summaries_dir = workspace / "memory" / "summaries"
+        summaries_dir.mkdir(parents=True, exist_ok=True)
+        summary_file = summaries_dir / f"{recent}_1400.md"
+        summary_file.write_text("- summary unique keyword\n")
+
+        results = db.search("unique keyword", days=7)
+        sources = {r["source"] for r in results}
+        assert "daily" in sources
+        assert "summary" in sources
+        assert len(results) >= 2
+
 
 class TestListDates:
     def test_empty(self, db: MemoryDB) -> None:

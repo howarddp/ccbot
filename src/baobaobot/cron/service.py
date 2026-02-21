@@ -77,21 +77,26 @@ If you recorded a summary, reply WITHOUT [NO_NOTIFY] so the user is notified.
 
 # Consolidation prompt sent to Claude Code
 _CONSOLIDATION_PROMPT = """\
-[NO_NOTIFY] [System] Memory consolidation: Review daily memories older than \
-{age_days} days.
+[NO_NOTIFY] [System] Memory consolidation: Review daily memories and summaries \
+older than {age_days} days.
 
 Steps:
-1. Run `memory-list --days 90` to see all daily memories
+1. Run `memory-list --days 90` to see all daily memories, and list files in \
+`memory/summaries/` to see all summary files
 2. For each daily memory older than {age_days} days:
    - Read the file content
    - Extract important decisions, preferences, learnings, project context, or TODOs
    - Skip trivial entries (casual chat, routine commands, already-captured info)
-3. Merge extracted information into the appropriate `memory/experience/` topic files:
+3. For each summary file older than {age_days} days (filename starts with YYYY-MM-DD):
+   - Read the file content
+   - Extract important decisions, preferences, learnings, project context, or TODOs
+   - Skip trivial entries (already-captured info)
+4. Merge extracted information into the appropriate `memory/experience/` topic files:
    - Update existing topic files if the info fits an existing topic
    - Create new topic files (kebab-case naming) for new topics
    - Remove duplicates with existing experience content
-4. Do NOT delete any daily memory files — they are kept as permanent records
-5. Keep recent daily memories (< {age_days} days old) untouched (no consolidation needed)
+5. Do NOT delete any daily memory files or summary files — they are kept as permanent records
+6. Keep recent files (< {age_days} days old) untouched (no consolidation needed)
 
 Guidelines:
 - Only consolidate content worth keeping long-term
@@ -561,26 +566,38 @@ class CronService:
     # --- Consolidation checks ---
 
     def _should_run_consolidation(self, workspace_name: str) -> bool:
-        """Check if consolidation should run: old daily memories exist."""
+        """Check if consolidation should run: old daily memories or summaries exist."""
         ws_dir = self._workspace_dirs.get(workspace_name)
         if not ws_dir:
             return False
-        daily_dir = ws_dir / "memory" / "daily"
-        if not daily_dir.is_dir():
-            return False
 
         cutoff = date.today() - timedelta(days=_CONSOLIDATION_AGE_DAYS)
-        for month_dir in daily_dir.iterdir():
-            if not month_dir.is_dir():
-                continue
-            for f in month_dir.glob("*.md"):
+
+        # Check daily memories
+        daily_dir = ws_dir / "memory" / "daily"
+        if daily_dir.is_dir():
+            for month_dir in daily_dir.iterdir():
+                if not month_dir.is_dir():
+                    continue
+                for f in month_dir.glob("*.md"):
+                    try:
+                        file_date = date.fromisoformat(f.stem)
+                        if file_date < cutoff:
+                            return True
+                    except ValueError:
+                        continue
+
+        # Check summary files (YYYY-MM-DD_HH00.md)
+        summaries_dir = ws_dir / "memory" / "summaries"
+        if summaries_dir.is_dir():
+            for f in summaries_dir.glob("*.md"):
                 try:
-                    # Filename is YYYY-MM-DD.md — stem is the full date
-                    file_date = date.fromisoformat(f.stem)
+                    file_date = date.fromisoformat(f.stem[:10])
                     if file_date < cutoff:
                         return True
                 except ValueError:
                     continue
+
         return False
 
     # --- Window resolution ---

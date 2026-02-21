@@ -433,7 +433,7 @@ def _search_fts(
 
     if days is not None:
         cutoff = (date.today() - timedelta(days=days)).isoformat()
-        conditions.append("m.source = 'daily'")
+        conditions.append("m.source IN ('daily', 'summary')")
         conditions.append("m.date >= ?")
         params.append(cutoff)
 
@@ -461,7 +461,7 @@ def _search_like(
 
     if days is not None:
         cutoff = (date.today() - timedelta(days=days)).isoformat()
-        conditions.append("m.source = 'daily'")
+        conditions.append("m.source IN ('daily', 'summary')")
         conditions.append("m.date >= ?")
         params.append(cutoff)
 
