@@ -1,11 +1,21 @@
 ---
 name: weather
-description: "Get current weather and forecasts via wttr.in. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data or severe weather alerts. No API key needed."
+description: "Get current weather, forecasts, and alerts via Google Weather API. Use when: user asks about weather, temperature, forecasts, or weather alerts for any location. Requires GOOGLE_MAPS_API_KEY. Use google-geocoding to convert place names to coordinates first."
 ---
 
 # Weather Skill
 
-Get current weather conditions and forecasts.
+Get current weather conditions, forecasts, historical data, and weather alerts via Google Weather API.
+
+## Setup
+
+Requires `GOOGLE_MAPS_API_KEY` environment variable (shared with google-places, google-directions, google-geocoding).
+
+```bash
+export GOOGLE_MAPS_API_KEY="YOUR_API_KEY"
+```
+
+Enable "Weather API" in your [Google Cloud Console](https://console.cloud.google.com/apis/library/weather.googleapis.com).
 
 ## When to Use
 
@@ -14,82 +24,86 @@ Get current weather conditions and forecasts.
 - "Temperature in [city]"
 - "Weather forecast for the week"
 - Travel planning weather checks
+- "Are there any weather alerts?"
 
-## Commands
-
-### Current Weather
+## Load API Key
 
 ```bash
-# One-line summary
-curl -s "https://wttr.in/Taipei?format=3"
-
-# Detailed current conditions
-curl -s "https://wttr.in/Taipei?0"
-
-# Specific city
-curl -s "https://wttr.in/New+York?format=3"
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
 ```
 
-### Forecasts
+## Current Conditions
 
 ```bash
-# 3-day forecast
-curl -s "https://wttr.in/Taipei"
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
 
-# Week forecast
-curl -s "https://wttr.in/Taipei?format=v2"
-
-# Specific day (0=today, 1=tomorrow, 2=day after)
-curl -s "https://wttr.in/Taipei?1"
+# Taipei (25.0330, 121.5654)
+curl -s "https://weather.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654" \
+  | jq -r '"🌡️ \(.temperature.degrees)°C (feels like \(.feelsLikeTemperature.degrees)°C)\n💧 Humidity: \(.relativeHumidity)%\n💨 Wind: \(.wind.speed.value) km/h\n☁️ \(.weatherCondition.description.text // .weatherCondition.type)"'
 ```
 
-### Format Options
+## Geocode + Weather (place name → weather)
+
+Use google-geocoding to convert a place name to coordinates, then query weather:
 
 ```bash
-# One-liner with details
-curl -s "https://wttr.in/Taipei?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
 
-# JSON output
-curl -s "https://wttr.in/Taipei?format=j1"
+# Step 1: Geocode the place name
+COORDS=$(curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北"))')&key=$GOOGLE_MAPS_API_KEY" \
+  | jq -r '.results[0].geometry.location | "\(.lat) \(.lng)"')
+LAT=$(echo "$COORDS" | cut -d' ' -f1)
+LNG=$(echo "$COORDS" | cut -d' ' -f2)
 
-# PNG image
-curl -s "https://wttr.in/Taipei.png" -o weather.png
+# Step 2: Get current weather
+curl -s "https://weather.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=$LAT&location.longitude=$LNG" \
+  | jq -r '"🌡️ \(.temperature.degrees)°C (feels like \(.feelsLikeTemperature.degrees)°C)\n💧 Humidity: \(.relativeHumidity)%\n💨 Wind: \(.wind.speed.value) km/h"'
 ```
 
-### Format Codes
-
-- `%c` — Weather condition emoji
-- `%t` — Temperature
-- `%f` — "Feels like"
-- `%w` — Wind
-- `%h` — Humidity
-- `%p` — Precipitation
-- `%l` — Location
-
-## Quick Responses
-
-**"What's the weather?"**
+## Daily Forecast (up to 10 days)
 
 ```bash
-curl -s "https://wttr.in/Taipei?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+
+# 3-day forecast for Taipei
+curl -s "https://weather.googleapis.com/v1/forecast/days:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654&days=3" \
+  | jq -r '.forecastDays[] | "📅 \(.displayDate.year)-\(.displayDate.month)-\(.displayDate.day): \(.daytimeForecast.weatherCondition.description.text // .daytimeForecast.weatherCondition.type) | ⬆️\(.maxTemperature.degrees)°C ⬇️\(.minTemperature.degrees)°C | 🌧️ \(.daytimeForecast.precipitation.probability.percent // 0)%"'
 ```
 
-**"Will it rain?"**
+## Hourly Forecast (up to 240 hours)
 
 ```bash
-curl -s "https://wttr.in/Taipei?format=%l:+%c+%p"
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+
+# Next 12 hours
+curl -s "https://weather.googleapis.com/v1/forecast/hours:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654&hours=12" \
+  | jq -r '.forecastHours[] | "🕐 \(.interval.startTime): \(.temperature.degrees)°C | 🌧️ \(.precipitation.probability.percent // 0)%"'
 ```
 
-**"Weekend forecast"**
+## Historical Weather (past 24 hours)
 
 ```bash
-curl -s "https://wttr.in/Taipei?format=v2"
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+
+curl -s "https://weather.googleapis.com/v1/history/hours:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654&hours=24" \
+  | jq -r '.historyHours[] | "🕐 \(.interval.startTime): \(.temperature.degrees)°C | 💧 \(.relativeHumidity)%"'
+```
+
+## Weather Alerts
+
+```bash
+GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+
+curl -s "https://weather.googleapis.com/v1/publicAlerts:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654" \
+  | jq -r '.alerts[]? | "⚠️ \(.eventType)\n📋 \(.description.text)\n⏰ \(.interval.startTime) → \(.interval.endTime)\n"'
 ```
 
 ## Notes
 
-- No API key needed (uses wttr.in)
-- Rate limited; don't spam requests
-- Works for most global cities
-- Supports airport codes: `curl -s "https://wttr.in/TPE"`
-- Always use `https://` prefix
+- Requires `GOOGLE_MAPS_API_KEY` — same key as google-places, google-directions, google-geocoding
+- Enable "Weather API" in Google Cloud Console
+- API uses **latitude/longitude** — use google-geocoding to convert place names
+- Data refreshed every 15–30 minutes
+- Supports metric (default) or imperial (`&unitsSystem=IMPERIAL`)
+- Coverage: all countries except Japan, Korea, and restricted territories
+- Free tier: $200/month credit
