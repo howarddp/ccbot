@@ -51,6 +51,11 @@ CB_FILE_READ = "fa:read:"  # fa:read:<file_key>
 CB_FILE_DESC = "fa:desc:"  # fa:desc:<file_key>
 CB_FILE_CANCEL = "fa:cancel:"  # fa:cancel:<file_key>
 
+# Voice transcript confirmation
+CB_VOICE_SEND = "vt:send:"  # vt:send:<voice_key>
+CB_VOICE_EDIT = "vt:edit:"  # vt:edit:<voice_key>
+CB_VOICE_CANCEL = "vt:cancel:"  # vt:cancel:<voice_key>
+
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
 

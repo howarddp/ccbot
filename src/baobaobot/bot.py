@@ -78,6 +78,9 @@ from .handlers.callback_data import (
     CB_RESTART_SESSION,
     CB_SCREENSHOT_REFRESH,
     CB_VERBOSITY,
+    CB_VOICE_CANCEL,
+    CB_VOICE_EDIT,
+    CB_VOICE_SEND,
 )
 from .handlers.history import send_history
 from .handlers.interactive_ui import (
@@ -644,23 +647,48 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         if transcript:
             caption = msg.caption or ""
-            lines = [f"[Voice Message] {dest}", f"Transcript: {transcript}"]
-            if caption:
-                lines.append(caption)
-            raw_text = "\n".join(lines)
-            text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
-
-            await _send_typing(msg.chat)
-            success, message = await ctx.session_manager.send_to_window(
-                wid, text_to_send
+            voice_key = (
+                f"{user.id}_{rk.session_key}"
+                f"_{int(datetime.now(tz=timezone.utc).timestamp())}"
             )
-            if success:
-                await safe_reply(update.message, f"🎤 Transcript: {transcript}")
-            else:
-                await safe_reply(
-                    update.message,
-                    f"❌ File saved but failed to send to Claude: {message}",
-                )
+            pending_voice = context.bot_data.setdefault("_pending_voice", {})
+            pending_voice[voice_key] = {
+                "path": str(dest),
+                "transcript": transcript,
+                "caption": caption,
+                "user_id": user.id,
+                "session_key": rk.session_key,
+                "thread_id": thread_id,
+                "window_id": wid,
+            }
+
+            display = transcript
+            if len(display) > 500:
+                display = display[:500] + "..."
+
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Send",
+                            callback_data=f"{CB_VOICE_SEND}{voice_key}",
+                        ),
+                        InlineKeyboardButton(
+                            "✏️ Edit",
+                            callback_data=f"{CB_VOICE_EDIT}{voice_key}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Cancel",
+                            callback_data=f"{CB_VOICE_CANCEL}{voice_key}",
+                        ),
+                    ]
+                ]
+            )
+            await safe_reply(
+                update.message,
+                f"🎤 *Transcript:*\n{display}",
+                reply_markup=keyboard,
+            )
             return
 
     # Check caption for memory trigger words — delegate to Claude Code for analysis
@@ -981,6 +1009,39 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     )
                 return
 
+    # Check if user has a pending voice transcript waiting for correction
+    if session_key is not None:
+        pending_voice = context.bot_data.get("_pending_voice", {})
+        for vk, vinfo in list(pending_voice.items()):
+            if (
+                vinfo.get("user_id") == user.id
+                and vinfo.get("session_key") == session_key
+                and vinfo.get("waiting_correction")
+            ):
+                pending_voice.pop(vk)
+                dest = vinfo["path"]
+                wid = vinfo["window_id"]
+                caption = vinfo.get("caption", "")
+                lines = [f"[Voice Message] {dest}", f"Transcript: {text}"]
+                if caption:
+                    lines.append(caption)
+                raw_text = "\n".join(lines)
+                text_to_send = _ensure_user_and_prefix(
+                    ctx.config.users_dir, user, raw_text
+                )
+                await _send_typing(update.message.chat)
+                success, message = await ctx.session_manager.send_to_window(
+                    wid, text_to_send
+                )
+                if success:
+                    await safe_reply(update.message, "🎤 Sent corrected transcript")
+                else:
+                    await safe_reply(
+                        update.message,
+                        f"❌ Failed to send to Claude: {message}",
+                    )
+                return
+
     # Must have a valid routing key
     if rk is None:
         await safe_reply(
@@ -1240,6 +1301,64 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         pending.pop(file_key, None)
         try:
             await query.edit_message_text("❌ Cancelled.")
+        except Exception:
+            pass
+        await query.answer()
+
+    # Voice transcript: Send confirmed
+    elif data.startswith(CB_VOICE_SEND):
+        voice_key = data[len(CB_VOICE_SEND) :]
+        pending_voice = context.bot_data.get("_pending_voice", {})
+        info = pending_voice.pop(voice_key, None)
+        if not info:
+            await query.answer("Voice transcript expired", show_alert=True)
+            return
+        wid = info["window_id"]
+        dest = info["path"]
+        transcript = info["transcript"]
+        caption = info.get("caption", "")
+        lines = [f"[Voice Message] {dest}", f"Transcript: {transcript}"]
+        if caption:
+            lines.append(caption)
+        raw_text = "\n".join(lines)
+        text_to_send = _ensure_user_and_prefix(ctx.config.users_dir, user, raw_text)
+        success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
+        if success:
+            short = transcript[:100] + ("..." if len(transcript) > 100 else "")
+            try:
+                await query.edit_message_text(f"🎤 Sent: {short}")
+            except Exception:
+                pass
+        else:
+            try:
+                await query.edit_message_text(f"❌ Failed to send to Claude: {message}")
+            except Exception:
+                pass
+        await query.answer()
+
+    # Voice transcript: Edit (wait for corrected text)
+    elif data.startswith(CB_VOICE_EDIT):
+        voice_key = data[len(CB_VOICE_EDIT) :]
+        pending_voice = context.bot_data.get("_pending_voice", {})
+        info = pending_voice.get(voice_key)
+        if not info:
+            await query.answer("Voice transcript expired", show_alert=True)
+            return
+        info["waiting_correction"] = True
+        transcript = info.get("transcript", "")
+        try:
+            await query.edit_message_text(transcript)
+        except Exception:
+            pass
+        await query.answer()
+
+    # Voice transcript: Cancel
+    elif data.startswith(CB_VOICE_CANCEL):
+        voice_key = data[len(CB_VOICE_CANCEL) :]
+        pending_voice = context.bot_data.get("_pending_voice", {})
+        pending_voice.pop(voice_key, None)
+        try:
+            await query.edit_message_text("❌ Voice message discarded.")
         except Exception:
             pass
         await query.answer()
