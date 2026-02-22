@@ -515,7 +515,12 @@ class TmuxManager:
                 if start_claude:
                     pane = window.active_pane
                     if pane:
-                        pane.send_keys(self.claude_command, enter=True)
+                        # Unset CLAUDECODE to avoid "nested session" error
+                        # when bot runs inside the same tmux session
+                        pane.send_keys(
+                            f"unset CLAUDECODE && {self.claude_command}",
+                            enter=True,
+                        )
 
                 logger.info(
                     "Created window '%s' (id=%s) at %s",

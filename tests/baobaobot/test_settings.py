@@ -147,7 +147,7 @@ bot_token_env = "MY_TOKEN"
         assert cfg.bot_token == "123:abc"
         assert cfg.allowed_users == frozenset({111, 222})
         assert cfg.claude_command == "claude --model opus"
-        assert cfg.tmux_session_name == "baobao"  # defaults to name
+        assert cfg.tmux_session_name == "baobaobot"  # always single session
         assert cfg.agent_dir == tmp_path / "agents" / "baobao"
 
     def test_per_agent_overrides(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -181,13 +181,13 @@ tmux_session = "beta-tmux"
         assert alpha.name == "alpha"
         assert alpha.cron_default_tz == "Asia/Taipei"  # overridden
         assert alpha.allowed_users == frozenset({111})  # global
-        assert alpha.tmux_session_name == "alpha"  # default to name
+        assert alpha.tmux_session_name == "baobaobot"  # always single session
 
         beta = agents[1]
         assert beta.name == "beta"
         assert beta.cron_default_tz == "UTC"  # global fallback
         assert beta.allowed_users == frozenset({222})  # overridden
-        assert beta.tmux_session_name == "beta-tmux"  # custom
+        assert beta.tmux_session_name == "baobaobot"  # always single session
 
     def test_missing_toml_raises(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError, match="settings.toml"):

@@ -130,6 +130,7 @@ class CronService:
         users_dir: Path,
         workspace_dir_for: Callable[[str], Path],
         iter_workspace_dirs: Callable[[], list[Path]],
+        agent_name: str = "",
     ) -> None:
         self._session_manager = session_manager
         self._tmux_manager = tmux_manager
@@ -138,6 +139,7 @@ class CronService:
         self._users_dir = users_dir
         self._workspace_dir_for = workspace_dir_for
         self._iter_workspace_dirs = iter_workspace_dirs
+        self._agent_name = agent_name
 
         self._stores: dict[str, CronStoreFile] = {}  # workspace_name → store
         self._workspace_dirs: dict[str, Path] = {}  # workspace_name → dir
@@ -628,9 +630,14 @@ class CronService:
         if not ws_dir or not ws_dir.is_dir():
             return None
 
-        # Create tmux window
+        # Create tmux window with agent prefix
+        tmux_window_name = (
+            f"{self._agent_name}/{workspace_name}"
+            if self._agent_name
+            else workspace_name
+        )
         success, message, wname, wid = await self._tmux_manager.create_window(
-            str(ws_dir), window_name=workspace_name
+            str(ws_dir), window_name=tmux_window_name
         )
         if not success:
             logger.error(
@@ -641,9 +648,9 @@ class CronService:
         # Wait for hook to register session
         await self._session_manager.wait_for_session_map_entry(wid)
 
-        # Rebind thread
+        # Rebind thread — use topic-only display name
         self._session_manager.bind_thread(
-            meta.user_id, meta.thread_id, wid, window_name=wname
+            meta.user_id, meta.thread_id, wid, window_name=workspace_name
         )
         if meta.chat_id:
             self._session_manager.set_group_chat_id(

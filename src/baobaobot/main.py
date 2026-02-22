@@ -215,7 +215,6 @@ monitor_poll_interval = 2.0    # seconds between session polling cycles
 name = "{agent_name}"
 bot_token_env = "{token_env_var}"
 mode = "{mode}"
-# tmux_session = "{agent_name}"  # defaults to agent name
 """
     toml_path.write_text(toml_content)
     print(f"Settings written to {toml_path}")
@@ -480,19 +479,7 @@ def main() -> None:
     inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1"
 
     if not foreground and not inside_tmux:
-        # Read agent's tmux session name from settings so bot process runs
-        # in the same tmux session as the agent's Claude Code windows.
-        import tomllib
-
-        with open(toml_path, "rb") as f:
-            raw = tomllib.load(f)
-        agents = raw.get("agents", [])
-        if agents:
-            first = agents[0]
-            tmux_name = first.get("tmux_session", first.get("name", "baobaobot"))
-        else:
-            tmux_name = "baobaobot"
-        _launch_in_tmux(config_dir, session_name=tmux_name)
+        _launch_in_tmux(config_dir, session_name="baobaobot")
         return
 
     # Foreground or inside-tmux: kill any existing instance, write our PID

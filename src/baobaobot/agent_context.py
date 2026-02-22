@@ -98,6 +98,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
         tmux_session_name=config.tmux_session_name,
         claude_projects_path=config.claude_projects_path,
         tmux_manager=tmux_mgr,
+        agent_name=config.name,
     )
 
     cron_svc = CronService(
@@ -108,6 +109,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
         users_dir=config.users_dir,
         workspace_dir_for=config.workspace_dir_for,
         iter_workspace_dirs=config.iter_workspace_dirs,
+        agent_name=config.name,
     )
 
     return AgentContext(

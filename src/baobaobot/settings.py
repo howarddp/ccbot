@@ -208,10 +208,8 @@ def _build_agent_config(
     if not allowed_users:
         raise ValueError(f"Agent '{name}': no allowed_users configured.")
 
-    # Tmux session name defaults to agent name
-    tmux_session_name = agent_raw.get(
-        "tmux_session", global_section.get("tmux_session", name)
-    )
+    # Single tmux session for all agents
+    tmux_session_name = "baobaobot"
 
     # Agent directory
     agent_dir = config_dir / "agents" / name

@@ -897,9 +897,10 @@ async def _auto_create_session(
     )
     assembler.write()
 
-    # Create tmux window
+    # Create tmux window with agent prefix: "agent_name/topic_name"
+    tmux_window_name = f"{ctx.config.name}/{ws_name}"
     success, message, created_wname, created_wid = await ctx.tmux_manager.create_window(
-        str(workspace_path), window_name=ws_name
+        str(workspace_path), window_name=tmux_window_name
     )
 
     if not success:
@@ -918,8 +919,8 @@ async def _auto_create_session(
     # Wait for Claude Code's SessionStart hook to register in session_map
     await ctx.session_manager.wait_for_session_map_entry(created_wid)
 
-    # Bind via router
-    ctx.router.bind_window(rk, created_wid, created_wname, ctx)
+    # Bind via router — use topic-only name for display (not prefixed)
+    ctx.router.bind_window(rk, created_wid, ws_name, ctx)
     ctx.router.store_chat_context(rk, ctx)
 
     # Forward the pending message with user prefix
@@ -2006,6 +2007,7 @@ async def post_init(application: Application) -> None:
         projects_path=agent_ctx.config.claude_projects_path,
         poll_interval=agent_ctx.config.monitor_poll_interval,
         state_file=agent_ctx.config.monitor_state_file,
+        agent_name=agent_ctx.config.name,
     )
 
     async def message_callback(msg: NewMessage) -> None:

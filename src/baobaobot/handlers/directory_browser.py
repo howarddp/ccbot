@@ -75,14 +75,18 @@ def build_window_picker(
         "Pick one to attach it here, or start a new session.\n",
     ]
     for _wid, name, cwd in windows:
+        # Strip "agent/" prefix from window name for display
+        display_name = name.split("/", 1)[1] if "/" in name else name
         display_cwd = cwd.replace(str(Path.home()), "~")
-        lines.append(f"• `{name}` — {display_cwd}")
+        lines.append(f"• `{display_name}` — {display_cwd}")
 
     buttons: list[list[InlineKeyboardButton]] = []
     for i in range(0, len(windows), 2):
         row = []
         for j in range(min(2, len(windows) - i)):
-            name = windows[i + j][1]
+            raw_name = windows[i + j][1]
+            # Strip "agent/" prefix for button display
+            name = raw_name.split("/", 1)[1] if "/" in raw_name else raw_name
             display = name[:12] + "…" if len(name) > 13 else name
             row.append(
                 InlineKeyboardButton(

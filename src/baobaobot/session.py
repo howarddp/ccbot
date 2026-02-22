@@ -119,12 +119,14 @@ class SessionManager:
         tmux_session_name: str,
         claude_projects_path: Path,
         tmux_manager: TmuxManager,
+        agent_name: str = "",
     ) -> None:
         self._state_file = state_file
         self._session_map_file = session_map_file
         self._tmux_session_name = tmux_session_name
         self._claude_projects_path = claude_projects_path
         self._tmux_manager = tmux_manager
+        self._agent_name = agent_name
 
         self.window_states: dict[str, WindowState] = {}
         self.user_window_offsets: dict[int, dict[str, int]] = {}
@@ -279,11 +281,21 @@ class SessionManager:
         Builds {window_name: window_id} from live windows, then remaps or drops entries.
         """
         windows = await self._tmux_manager.list_windows()
-        live_by_name: dict[str, str] = {}  # window_name -> window_id
+        live_by_name: dict[str, str] = {}  # display_name -> window_id
         live_ids: set[str] = set()
+        agent_prefix = f"{self._agent_name}/" if self._agent_name else ""
         for w in windows:
-            live_by_name[w.window_name] = w.window_id
+            # Only consider windows belonging to this agent
+            if agent_prefix and not w.window_name.startswith(agent_prefix):
+                continue
             live_ids.add(w.window_id)
+            # Strip agent prefix for display name matching
+            display = (
+                w.window_name.removeprefix(agent_prefix)
+                if agent_prefix
+                else w.window_name
+            )
+            live_by_name[display] = w.window_id
 
         changed = False
 

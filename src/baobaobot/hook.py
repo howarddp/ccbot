@@ -228,16 +228,19 @@ def hook_main() -> None:
     )
 
     # Read-modify-write with file locking to prevent concurrent hook races.
-    # Route to per-agent session_map.json when agents/ directory is in use.
+    # Route to per-agent session_map.json by parsing agent name from window name.
+    # Window name format: "agent_name/topic_name"; skip windows without "/".
     from .utils import baobaobot_dir
 
     config_root = baobaobot_dir()
-    agent_dir = config_root / "agents" / tmux_session_name
-    if agent_dir.is_dir():
+    if "/" in window_name:
+        agent_name = window_name.split("/", 1)[0]
+        agent_dir = config_root / "agents" / agent_name
         map_file = agent_dir / "session_map.json"
     else:
-        # Legacy flat layout
-        map_file = config_root / "session_map.json"
+        # Skip non-agent windows (e.g. __main__)
+        logger.debug("Window '%s' has no agent prefix, skipping", window_name)
+        return
     map_file.parent.mkdir(parents=True, exist_ok=True)
 
     lock_path = map_file.with_suffix(".lock")

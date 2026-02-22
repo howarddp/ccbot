@@ -105,6 +105,7 @@ class SessionMonitor:
         projects_path: Path,
         poll_interval: float,
         state_file: Path,
+        agent_name: str = "",
     ):
         self._tmux_manager = tmux_manager
         self._session_manager = session_manager
@@ -112,6 +113,7 @@ class SessionMonitor:
         self._tmux_session_name = tmux_session_name
         self.projects_path = projects_path
         self.poll_interval = poll_interval
+        self._agent_name = agent_name
 
         self.state = MonitorState(state_file=state_file)
         self.state.load()
@@ -135,10 +137,14 @@ class SessionMonitor:
         self._message_callback = callback
 
     async def _get_active_cwds(self) -> set[str]:
-        """Get normalized cwds of all active tmux windows."""
+        """Get normalized cwds of all active tmux windows for this agent."""
         cwds = set()
+        agent_prefix = f"{self._agent_name}/" if self._agent_name else ""
         windows = await self._tmux_manager.list_windows()
         for w in windows:
+            # Only consider windows belonging to this agent
+            if agent_prefix and not w.window_name.startswith(agent_prefix):
+                continue
             try:
                 cwds.add(str(Path(w.cwd).resolve()))
             except (OSError, ValueError):
