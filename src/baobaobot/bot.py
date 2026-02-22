@@ -222,6 +222,11 @@ def _resolve_workspace_dir(
 ) -> Path | None:
     """Resolve the per-topic workspace directory for the current routing key.
 
+    Prefers the actual cwd from session_map (via WindowState) over computing
+    from the display name, since display names can diverge from the original
+    directory name (e.g. agent-prefixed window names like "baobaobot/fun"
+    vs workspace directory "workspace_fun").
+
     Returns None if no bound window exists.
     """
     ctx = _ctx(context)
@@ -231,6 +236,13 @@ def _resolve_workspace_dir(
     wid = ctx.router.get_window(rk, ctx)
     if not wid:
         return None
+    # Prefer actual cwd from session_map (authoritative)
+    state = ctx.session_manager.get_window_state(wid)
+    if state.cwd:
+        cwd_path = Path(state.cwd)
+        if cwd_path.is_dir():
+            return cwd_path
+    # Fallback: compute from display name
     display_name = ctx.session_manager.get_display_name(wid)
     return ctx.config.workspace_dir_for(display_name)
 
