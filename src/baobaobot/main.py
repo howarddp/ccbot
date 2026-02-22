@@ -11,12 +11,67 @@ By default, the bot auto-launches inside a tmux session so it survives terminal
 closure. Use `--foreground` / `-f` to run in the current terminal instead.
 """
 
+import atexit
 import logging
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+PIDFILE_NAME = "baobaobot.pid"
+
+
+def _read_pid(config_dir: Path) -> int | None:
+    """Read pidfile and return PID or None."""
+    pid_path = config_dir / PIDFILE_NAME
+    try:
+        return int(pid_path.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a PID is still alive."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _write_pid(config_dir: Path) -> None:
+    """Write current PID to pidfile."""
+    (config_dir / PIDFILE_NAME).write_text(str(os.getpid()) + "\n")
+
+
+def _remove_pid(config_dir: Path) -> None:
+    """Remove pidfile."""
+    try:
+        (config_dir / PIDFILE_NAME).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _kill_existing(config_dir: Path) -> None:
+    """If a previous bot instance is running, SIGTERM it (SIGKILL after 5s)."""
+    pid = _read_pid(config_dir)
+    if pid is None or not _is_pid_alive(pid):
+        return
+    if pid == os.getpid():
+        return
+    print(f"Stopping existing baobaobot (PID {pid})...")
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(50):  # 5 seconds, check every 0.1s
+        time.sleep(0.1)
+        if not _is_pid_alive(pid):
+            print("Stopped.")
+            return
+    print(f"Force killing PID {pid}...")
+    os.kill(pid, signal.SIGKILL)
+    time.sleep(0.5)
 
 
 def _tz_to_locale() -> str:
@@ -300,7 +355,7 @@ mode = "{mode}"
     print("\nDone! Restart baobaobot to activate the new agent.")
 
 
-def _launch_in_tmux(session_name: str = "baobaobot") -> None:
+def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:
     """Create a tmux session and re-launch baobaobot inside it."""
     window_name = "__main__"
     target = f"{session_name}:{window_name}"
@@ -309,6 +364,9 @@ def _launch_in_tmux(session_name: str = "baobaobot") -> None:
         print("Error: tmux is not installed.")
         print("Install tmux, or run with --foreground to skip tmux.")
         sys.exit(1)
+
+    # Kill any existing bot instance (foreground or tmux) via pidfile
+    _kill_existing(config_dir)
 
     # Check if session already exists
     session_exists = (
@@ -320,7 +378,8 @@ def _launch_in_tmux(session_name: str = "baobaobot") -> None:
     )
 
     if session_exists:
-        # Check if __main__ window already has baobaobot running
+        # Fallback: if pane still has a running process (e.g. old instance
+        # started before pidfile was introduced), send C-c to stop it.
         result = subprocess.run(
             [
                 "tmux",
@@ -336,34 +395,35 @@ def _launch_in_tmux(session_name: str = "baobaobot") -> None:
         if result.returncode == 0:
             pane_cmd = result.stdout.strip()
             if pane_cmd not in ("bash", "zsh", "sh", "fish", ""):
-                print(f"Restarting baobaobot in tmux session '{session_name}'...")
-                # Send C-c to stop the running process, wait for shell prompt
+                print(f"Stopping process in tmux pane '{target}'...")
                 subprocess.run(
                     ["tmux", "send-keys", "-t", target, "C-c", ""],
                     capture_output=True,
                 )
-                time.sleep(2)
-                # Verify process stopped; send another C-c if needed
-                check = subprocess.run(
-                    [
-                        "tmux",
-                        "list-panes",
-                        "-t",
-                        target,
-                        "-F",
-                        "#{pane_current_command}",
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                if check.returncode == 0:
-                    cmd_after = check.stdout.strip()
-                    if cmd_after not in ("bash", "zsh", "sh", "fish", ""):
-                        subprocess.run(
-                            ["tmux", "send-keys", "-t", target, "C-c", ""],
-                            capture_output=True,
-                        )
-                        time.sleep(1)
+                # Wait for process to exit
+                for _ in range(50):  # 5 seconds
+                    time.sleep(0.1)
+                    check = subprocess.run(
+                        [
+                            "tmux",
+                            "list-panes",
+                            "-t",
+                            target,
+                            "-F",
+                            "#{pane_current_command}",
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if check.returncode == 0 and check.stdout.strip() in (
+                        "bash",
+                        "zsh",
+                        "sh",
+                        "fish",
+                        "",
+                    ):
+                        break
+                time.sleep(0.5)
     else:
         # Create new session with __main__ window
         subprocess.run(
@@ -432,8 +492,13 @@ def main() -> None:
             tmux_name = first.get("tmux_session", first.get("name", "baobaobot"))
         else:
             tmux_name = "baobaobot"
-        _launch_in_tmux(session_name=tmux_name)
+        _launch_in_tmux(config_dir, session_name=tmux_name)
         return
+
+    # Foreground or inside-tmux: kill any existing instance, write our PID
+    _kill_existing(config_dir)
+    _write_pid(config_dir)
+    atexit.register(_remove_pid, config_dir)
 
     # Strip --foreground / -f from argv so they don't confuse anything downstream
     sys.argv = [a for a in sys.argv if a not in ("--foreground", "-f")]
