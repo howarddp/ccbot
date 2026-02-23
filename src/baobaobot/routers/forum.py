@@ -56,7 +56,24 @@ class ForumRouter(Router):
         )
 
     def get_window(self, rk: RoutingKey, ctx: AgentContext) -> str | None:
-        return ctx.session_manager.get_window_for_thread(rk.user_id, rk.session_key)
+        # Check this user's binding first
+        wid = ctx.session_manager.get_window_for_thread(rk.user_id, rk.session_key)
+        if wid:
+            return wid
+        # Fallback: another user may already have a window for this topic — share it
+        for other_uid, other_tid, other_wid in ctx.session_manager.iter_thread_bindings():
+            if other_tid == rk.session_key and other_uid != rk.user_id:
+                # Auto-bind this user to the same window
+                display = ctx.session_manager.get_display_name(other_wid)
+                ctx.session_manager.bind_thread(
+                    rk.user_id, rk.session_key, other_wid, window_name=display
+                )
+                logger.info(
+                    "Auto-bound user %d to existing window %s for thread %d",
+                    rk.user_id, other_wid, rk.session_key,
+                )
+                return other_wid
+        return None
 
     def bind_window(
         self,
