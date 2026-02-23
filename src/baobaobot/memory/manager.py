@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .daily import delete_daily, get_daily
 from .db import MemoryDB
+from .git import commit_memory
 from .search import MemorySearchResult
 from .utils import strip_frontmatter
 
@@ -143,6 +144,8 @@ class MemoryManager:
                     continue
 
         logger.info("Deleted %d daily memory files", count)
+        if count:
+            commit_memory(self.memory_dir, "forget: delete all daily")
         return count
 
     def search(self, query: str) -> list[MemorySearchResult]:

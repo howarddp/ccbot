@@ -19,11 +19,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import sqlite3
+import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Regex to strip YAML frontmatter (--- ... ---) from the beginning of a file
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
@@ -604,12 +608,8 @@ def append_to_experience_file(workspace: Path, topic: str, line: str) -> str:
 
     if not path.exists():
         heading = _experience_heading(topic)
-        frontmatter = EXPERIENCE_FRONTMATTER_TEMPLATE.format(
-            topic=topic, date=today
-        )
-        path.write_text(
-            f"{frontmatter}# {heading}\n\n{line}\n", encoding="utf-8"
-        )
+        frontmatter = EXPERIENCE_FRONTMATTER_TEMPLATE.format(topic=topic, date=today)
+        path.write_text(f"{frontmatter}# {heading}\n\n{line}\n", encoding="utf-8")
     else:
         content = path.read_text(encoding="utf-8")
         content = _UPDATED_RE.sub(rf"\g<1>{today}", content, count=1)
@@ -630,3 +630,99 @@ def format_file_label(row: sqlite3.Row) -> str:
         # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/YYYY-MM-DD.md'
         d = row["date"]
         return f"memory/daily/{d[:7]}/{d}.md"
+
+
+# ---------------------------------------------------------------------------
+# Git integration (duplicated from baobaobot.memory.git for standalone use)
+# NOTE: Keep in sync with baobaobot.memory.git
+# ---------------------------------------------------------------------------
+
+_GITIGNORE_CONTENT = """\
+memory.db
+memory.db-journal
+memory.db-wal
+memory.db-shm
+__pycache__/
+"""
+
+
+def ensure_git_repo(memory_dir: Path) -> bool:
+    """Initialize a git repo in memory_dir if one doesn't exist."""
+    if not memory_dir.is_dir():
+        return False
+
+    git_dir = memory_dir / ".git"
+    if git_dir.exists():
+        return True
+
+    try:
+        subprocess.run(["git", "init"], cwd=memory_dir, capture_output=True, timeout=10)
+        subprocess.run(
+            ["git", "config", "user.name", "baobaobot"],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "noreply@baobaobot"],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        gitignore = memory_dir / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text(_GITIGNORE_CONTENT, encoding="utf-8")
+        subprocess.run(
+            ["git", "add", ".gitignore"],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init: memory git tracking"],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        logger.info("Initialized git repo in %s", memory_dir)
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logger.warning("Failed to initialize git repo in %s", memory_dir)
+        return False
+
+
+def commit_memory(memory_dir: Path, message: str) -> bool:
+    """Stage all changes and commit in the memory directory."""
+    if not memory_dir.is_dir():
+        return False
+
+    if not ensure_git_repo(memory_dir):
+        return False
+
+    try:
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return False
+
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=memory_dir,
+            capture_output=True,
+            timeout=10,
+        )
+        logger.debug("Memory commit: %s", message)
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logger.warning("Failed to commit memory: %s", message)
+        return False

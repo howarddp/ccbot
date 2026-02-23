@@ -32,6 +32,7 @@ from typing import Optional
 from _memory_common import (
     append_to_experience_file,
     attachment_ref,
+    commit_memory,
     copy_to_attachments,
     ensure_daily_file,
 )
@@ -61,6 +62,7 @@ def save_text_daily(workspace: Path, text: str, user_name: Optional[str] = None)
     with path.open("a", encoding="utf-8") as f:
         f.write(f"- {tag}{text}\n")
 
+    commit_memory(workspace / "memory", f"daily: append {today_str}")
     year_month = today_str[:7]
     return f"memory/daily/{year_month}/{today_str}.md"
 
@@ -73,7 +75,9 @@ def save_text_experience(
     Returns the relative path of the experience file.
     """
     tag = f"[{user_name}] " if user_name else ""
-    return append_to_experience_file(workspace, topic, f"- {tag}{text}")
+    rel = append_to_experience_file(workspace, topic, f"- {tag}{text}")
+    commit_memory(workspace / "memory", f"experience: update {topic}")
+    return rel
 
 
 def save_attachment(
@@ -94,11 +98,15 @@ def save_attachment(
 
     if topic:
         append_to_experience_file(workspace, topic, line)
+        commit_memory(
+            workspace / "memory", f"attachment: save {source.name} to {topic}"
+        )
     else:
         today_str = date.today().isoformat()
         path = ensure_daily_file(workspace, today_str)
         with path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
+        commit_memory(workspace / "memory", f"attachment: save {source.name}")
 
     return rel_path
 

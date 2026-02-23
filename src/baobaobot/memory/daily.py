@@ -17,6 +17,8 @@ import shutil
 from datetime import date, datetime
 from pathlib import Path
 
+from .git import commit_memory
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +110,7 @@ def write_daily(workspace_dir: Path, date_str: str, content: str) -> None:
         body = _DAILY_FRONTMATTER_TEMPLATE.format(date=date_str) + body
     path.write_text(body, encoding="utf-8")
     logger.info("Wrote daily memory: %s", date_str)
+    commit_memory(workspace_dir / "memory", f"daily: write {date_str}")
 
 
 def delete_daily(workspace_dir: Path, date_str: str) -> bool:
@@ -120,6 +123,7 @@ def delete_daily(workspace_dir: Path, date_str: str) -> bool:
     try:
         path.unlink()
         logger.info("Deleted daily memory: %s", date_str)
+        commit_memory(workspace_dir / "memory", f"daily: delete {date_str}")
         return True
     except OSError:
         return False
@@ -146,10 +150,10 @@ def _attachments_dir(workspace_dir: Path) -> Path:
     return workspace_dir / "memory" / "attachments"
 
 
-def append_to_daily(workspace_dir: Path, line: str) -> None:
-    """Append a single line to today's daily memory file.
+def _do_append_to_daily(workspace_dir: Path, line: str) -> str:
+    """Append a single line to today's daily file (no git commit).
 
-    Creates the file with YAML frontmatter if it doesn't exist.
+    Returns today's date string.
     """
     today_str = date.today().isoformat()
     path = _daily_path(workspace_dir, today_str)
@@ -158,6 +162,16 @@ def append_to_daily(workspace_dir: Path, line: str) -> None:
         _create_daily_with_frontmatter(path, today_str)
     with path.open("a", encoding="utf-8") as f:
         f.write(line.rstrip("\n") + "\n")
+    return today_str
+
+
+def append_to_daily(workspace_dir: Path, line: str) -> None:
+    """Append a single line to today's daily memory file.
+
+    Creates the file with YAML frontmatter if it doesn't exist.
+    """
+    today_str = _do_append_to_daily(workspace_dir, line)
+    commit_memory(workspace_dir / "memory", f"daily: append {today_str}")
 
 
 def _copy_to_attachments(
@@ -234,9 +248,10 @@ def save_attachment(
 
     ref = _attachment_ref(source_path, description, rel_path)
     tag = f"[{user_name}] " if user_name else ""
-    append_to_daily(workspace_dir, f"- {tag}{ref}")
+    _do_append_to_daily(workspace_dir, f"- {tag}{ref}")
 
     logger.info("Saved attachment: %s -> %s", source_path.name, rel_path)
+    commit_memory(workspace_dir / "memory", f"attachment: save {source_path.name}")
     return rel_path
 
 
@@ -283,12 +298,8 @@ def _append_to_experience_file(
 
     if not path.exists():
         heading = _experience_heading(topic)
-        frontmatter = _EXPERIENCE_FRONTMATTER_TEMPLATE.format(
-            topic=topic, date=today
-        )
-        path.write_text(
-            f"{frontmatter}# {heading}\n\n{line}\n", encoding="utf-8"
-        )
+        frontmatter = _EXPERIENCE_FRONTMATTER_TEMPLATE.format(topic=topic, date=today)
+        path.write_text(f"{frontmatter}# {heading}\n\n{line}\n", encoding="utf-8")
     else:
         content = path.read_text(encoding="utf-8")
         content = _UPDATED_RE.sub(rf"\g<1>{today}", content, count=1)
@@ -321,6 +332,7 @@ def append_to_experience(
     tag = f"[{user_name}] " if user_name else ""
     rel = _append_to_experience_file(workspace_dir, topic, f"- {tag}{content}")
     logger.info("Appended to experience: %s", topic)
+    commit_memory(workspace_dir / "memory", f"experience: update {topic}")
     return rel
 
 
@@ -353,6 +365,9 @@ def save_attachment_to_experience(
     _append_to_experience_file(workspace_dir, topic, f"- {tag}{ref}")
 
     logger.info("Saved attachment to experience: %s -> %s", source_path.name, topic)
+    commit_memory(
+        workspace_dir / "memory", f"attachment: save {source_path.name} to {topic}"
+    )
     return rel_path
 
 
