@@ -42,7 +42,10 @@ def _resolve_workspace_for_thread(
         return None, ""
 
     display_name = agent_ctx.session_manager.get_display_name(wid)
-    return agent_ctx.config.workspace_dir_for(display_name), display_name
+    # Strip agent prefix (e.g. "tecoailab/O2O" → "O2O") for workspace resolution
+    agent_prefix = f"{agent_ctx.config.name}/"
+    ws_name = display_name.removeprefix(agent_prefix)
+    return agent_ctx.config.workspace_dir_for(ws_name), ws_name
 
 
 def _get_workspace_meta(update: Update) -> WorkspaceMeta:

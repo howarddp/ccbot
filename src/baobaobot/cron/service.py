@@ -606,12 +606,16 @@ class CronService:
 
     def _resolve_window(self, workspace_name: str) -> str | None:
         """Find the tmux window_id for a workspace via thread_bindings."""
+        # Strip agent prefix from display names for comparison
+        agent_prefix = f"{self._agent_name}/" if self._agent_name else ""
         for (
             _user_id,
             _thread_id,
             window_id,
         ) in self._session_manager.iter_thread_bindings():
             display = self._session_manager.get_display_name(window_id)
+            if agent_prefix:
+                display = display.removeprefix(agent_prefix)
             if display == workspace_name:
                 return window_id
         return None

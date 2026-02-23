@@ -242,9 +242,11 @@ def _resolve_workspace_dir(
         cwd_path = Path(state.cwd)
         if cwd_path.is_dir():
             return cwd_path
-    # Fallback: compute from display name
+    # Fallback: compute from display name (strip agent prefix)
     display_name = ctx.session_manager.get_display_name(wid)
-    return ctx.config.workspace_dir_for(display_name)
+    agent_prefix = f"{ctx.config.name}/"
+    ws_name = display_name.removeprefix(agent_prefix)
+    return ctx.config.workspace_dir_for(ws_name)
 
 
 # --- Command handlers ---
@@ -508,8 +510,11 @@ async def forward_command_handler(
     if cc_slash.strip().lower() == "/clear" and ctx.cron_service:
         logger.info("Triggering pre-clear summary for window %s", display)
         await safe_reply(update.message, f"📋 [{display}] Summarizing before clear...")
+        # Strip agent prefix for cron workspace lookup
+        agent_prefix = f"{ctx.config.name}/"
+        cron_ws_name = display.removeprefix(agent_prefix)
         try:
-            summarized = await ctx.cron_service.trigger_summary(display)
+            summarized = await ctx.cron_service.trigger_summary(cron_ws_name)
             if summarized:
                 await ctx.cron_service.wait_for_idle(wid)
         except Exception as e:
