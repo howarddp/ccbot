@@ -429,8 +429,24 @@ def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:
         print("Error: tmux is not installed.")
         sys.exit(1)
 
-    # Kill any existing bot instance via pidfile
-    _kill_existing(config_dir)
+    # Check if an existing instance is running → send restart notification before kill
+    is_restart = False
+    existing_pid = _read_pid(config_dir)
+    if (
+        existing_pid is not None
+        and _is_pid_alive(existing_pid)
+        and existing_pid != os.getpid()
+    ):
+        is_restart = True
+        from .settings import load_settings
+
+        try:
+            agent_configs = load_settings(config_dir=config_dir)
+            _send_restart_notifications(agent_configs, "⏳ Preparing to restart...")
+        except Exception as e:
+            print(f"Warning: could not send restart notification: {e}")
+
+    _kill_existing(config_dir, pid=existing_pid)
 
     # Check if session already exists
     session_exists = (
@@ -498,8 +514,9 @@ def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:
     # Find the baobaobot command to re-exec
     baobaobot_cmd = shutil.which("baobaobot") or sys.argv[0]
 
-    # Send command into the __main__ window with marker env var
-    full_cmd = f"_BAOBAOBOT_TMUX=1 {baobaobot_cmd}"
+    # Send command into the __main__ window with marker env vars
+    restart_env = " _BAOBAOBOT_RESTART=1" if is_restart else ""
+    full_cmd = f"_BAOBAOBOT_TMUX=1{restart_env} {baobaobot_cmd}"
     subprocess.run(
         ["tmux", "send-keys", "-t", target, full_cmd, "Enter"],
         check=True,
@@ -546,9 +563,20 @@ def main() -> None:
         _launch_in_tmux(config_dir, session_name="baobaobot")
         return
 
-    # Inside tmux: load settings early (needed for restart notifications),
-    # then kill any existing instance, write our PID
+    # Inside tmux: the outer _launch_in_tmux already killed any existing instance
+    # and sent the "preparing to restart" notification. Pick up the restart flag
+    # from the env var it set so post_init can send "restart complete".
     global _is_restart
+    _is_restart = os.environ.pop("_BAOBAOBOT_RESTART", "") == "1"
+
+    _kill_existing(config_dir)  # safety net (normally a no-op)
+    _write_pid(config_dir)
+    atexit.register(_remove_pid, config_dir)
+
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.WARNING,
+    )
 
     from .agent_context import AgentContext, create_agent_context
     from .settings import load_settings
@@ -559,25 +587,6 @@ def main() -> None:
         print(f"Error: {e}\n")
         print("Check your settings.toml configuration.")
         sys.exit(1)
-
-    # Check if an existing instance is running → restart flow
-    existing_pid = _read_pid(config_dir)
-    if (
-        existing_pid is not None
-        and _is_pid_alive(existing_pid)
-        and existing_pid != os.getpid()
-    ):
-        _is_restart = True
-        _send_restart_notifications(agent_configs, "⏳ Preparing to restart...")
-
-    _kill_existing(config_dir, pid=existing_pid)
-    _write_pid(config_dir)
-    atexit.register(_remove_pid, config_dir)
-
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.WARNING,
-    )
 
     logging.getLogger("baobaobot").setLevel(logging.DEBUG)
     logger = logging.getLogger(__name__)
