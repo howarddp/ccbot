@@ -48,34 +48,6 @@ def _enter_bot_patches():
 
 
 class TestMainTmuxAutoLaunch:
-    def test_foreground_flag_skips_tmux(self, monkeypatch):
-        """--foreground bypasses _launch_in_tmux."""
-        monkeypatch.setattr(sys, "argv", ["baobaobot", "--foreground"])
-        monkeypatch.setenv("_BAOBAOBOT_TMUX", "")
-        monkeypatch.delenv("TMUX", raising=False)
-        mocks, exits = _enter_bot_patches()
-        try:
-            with patch("baobaobot.main._launch_in_tmux") as mock_tmux:
-                main()
-                mock_tmux.assert_not_called()
-        finally:
-            for p in exits:
-                p.stop()
-
-    def test_f_flag_skips_tmux(self, monkeypatch):
-        """-f shorthand works like --foreground."""
-        monkeypatch.setattr(sys, "argv", ["baobaobot", "-f"])
-        monkeypatch.setenv("_BAOBAOBOT_TMUX", "")
-        monkeypatch.delenv("TMUX", raising=False)
-        mocks, exits = _enter_bot_patches()
-        try:
-            with patch("baobaobot.main._launch_in_tmux") as mock_tmux:
-                main()
-                mock_tmux.assert_not_called()
-        finally:
-            for p in exits:
-                p.stop()
-
     def test_inside_tmux_env_skips_launch(self, monkeypatch):
         """_BAOBAOBOT_TMUX=1 skips auto-launch."""
         monkeypatch.setattr(sys, "argv", ["baobaobot"])

@@ -7,8 +7,7 @@ Handles three execution modes:
      the Telegram bot polling loop via bot.create_bot(). Auto-triggers first-time setup
      if settings.toml is missing.
 
-By default, the bot auto-launches inside a tmux session so it survives terminal
-closure. Use `--foreground` / `-f` to run in the current terminal instead.
+The bot always auto-launches inside a tmux session so it survives terminal closure.
 """
 
 import atexit
@@ -361,10 +360,9 @@ def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:
 
     if not shutil.which("tmux"):
         print("Error: tmux is not installed.")
-        print("Install tmux, or run with --foreground to skip tmux.")
         sys.exit(1)
 
-    # Kill any existing bot instance (foreground or tmux) via pidfile
+    # Kill any existing bot instance via pidfile
     _kill_existing(config_dir)
 
     # Check if session already exists
@@ -457,7 +455,7 @@ def main() -> None:
         _add_agent()
         return
 
-    # Run first-time setup in foreground BEFORE launching into tmux,
+    # Run first-time setup BEFORE launching into tmux,
     # so the user can see and interact with the setup prompts.
     from .utils import baobaobot_dir
 
@@ -474,21 +472,17 @@ def main() -> None:
             print("Setup did not produce settings.toml. Exiting.")
             sys.exit(1)
 
-    # Check if we should auto-launch inside tmux
-    foreground = "--foreground" in sys.argv or "-f" in sys.argv
+    # Auto-launch inside tmux unless already there
     inside_tmux = os.environ.get("_BAOBAOBOT_TMUX") == "1"
 
-    if not foreground and not inside_tmux:
+    if not inside_tmux:
         _launch_in_tmux(config_dir, session_name="baobaobot")
         return
 
-    # Foreground or inside-tmux: kill any existing instance, write our PID
+    # Inside tmux: kill any existing instance, write our PID
     _kill_existing(config_dir)
     _write_pid(config_dir)
     atexit.register(_remove_pid, config_dir)
-
-    # Strip --foreground / -f from argv so they don't confuse anything downstream
-    sys.argv = [a for a in sys.argv if a not in ("--foreground", "-f")]
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

@@ -209,12 +209,9 @@ baobaobot
 # 從源碼安裝的
 uv run baobaobot
 
-# 在前台運行（不自動建立 tmux，用於除錯）
-baobaobot --foreground
-baobaobot -f
 ```
 
-啟動時，`baobaobot` 會自動建立 tmux session `baobaobot` 並在其中運行，這樣關閉終端後 Bot 仍會持續運行。使用 `--foreground` / `-f` 可在當前終端直接運行。
+啟動時，`baobaobot` 會自動建立 tmux session `baobaobot` 並在其中運行，這樣關閉終端後 Bot 仍會持續運行。
 
 ### 命令
 
@@ -225,7 +222,6 @@ baobaobot -f
 | `baobaobot` | 啟動 Telegram Bot（首次運行自動設置，自動在 tmux 中運行） |
 | `baobaobot add-agent` | 互動式添加新 Agent 到 settings.toml |
 | `baobaobot hook --install` | 安裝 Claude Code SessionStart Hook |
-| `baobaobot --foreground` | 在前台啟動（不建立 tmux） |
 
 **Bot 命令：**
 
