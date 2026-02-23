@@ -198,7 +198,7 @@ def _copy_to_attachments(
             n += 1
     shutil.copy2(source_path, dest)
 
-    rel_path = f"memory/attachments/{date_str}/{dest_name}"
+    rel_path = f"attachments/{date_str}/{dest_name}"
     return rel_path, dest_name
 
 

@@ -203,7 +203,7 @@ def _parse_attachments(content: str) -> list[tuple[str, str, str]]:
         for m in _ATTACHMENT_RE.finditer(line):
             desc = m.group(1)
             fpath = m.group(2)
-            if "memory/attachments/" not in fpath:
+            if "attachments/" not in fpath:
                 continue
             file_type = "image" if m.group(0).startswith("!") else "file"
             attachments.append((desc, fpath, file_type))
@@ -565,7 +565,7 @@ def copy_to_attachments(workspace: Path, source: Path) -> tuple[str, str]:
             n += 1
     shutil.copy2(source, dest)
 
-    rel_path = f"memory/attachments/{date_str}/{dest_name}"
+    rel_path = f"attachments/{date_str}/{dest_name}"
     return rel_path, dest_name
 
 
