@@ -1,20 +1,19 @@
-# BaoBaoClaude
+# BaoBaoBot
 
 通過 Telegram 遠程控制 Claude Code 會話 — 監控、互動、管理運行在 tmux 中的 AI 編程會話，並賦予 Claude 持久的人格與記憶。
 
-https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 
-## 為什麼做 BaoBaoClaude？
+## 為什麼是 BaoBaoBot？
 
 Claude Code 運行在終端裡。當你離開電腦 — 通勤路上、躺在沙發上、或者只是不在工位 — 會話仍在繼續，但你失去了查看和控制的能力。
 
-BaoBaoClaude 讓你**通過 Telegram 無縫接管同一個會話**。核心設計思路是：它操作的是 **tmux**，而不是 Claude Code SDK。你的 Claude Code 進程始終在 tmux 視窗裡運行，BaoBaoClaude 只是讀取它的輸出並向它發送按鍵。這意味著：
+BaoBaoBot 讓你**通過 Telegram 無縫接管同一個會話**。核心設計思路是：它操作的是 **tmux**，而不是 Claude Code SDK。你的 Claude Code 進程始終在 tmux 視窗裡運行，BaoBaoBot 只是讀取它的輸出並向它發送按鍵。這意味著：
 
 - **從電腦無縫切換到手機** — Claude 正在執行重構？走開就是了，繼續在 Telegram 上監控和回覆。
 - **隨時切換回電腦** — tmux 會話從未中斷，直接 `tmux attach` 就能回到終端，完整的滾動歷史和上下文都在。
 - **並行運行多個會話** — 每個 Telegram 話題對應一個獨立的 tmux 視窗，一個聊天組裡就能管理多個專案。
 
-市面上其他 Claude Code Telegram Bot 通常封裝 Claude Code SDK 來創建獨立的 API 會話，這些會話是隔離的 — 你無法在終端裡恢復它們。BaoBaoClaude 採取了不同的方式：它只是 tmux 之上的一個薄控制層，終端始終是數據源，你永遠不會失去切換回去的能力。
+市面上其他 Claude Code Telegram Bot 通常封裝 Claude Code SDK 來創建獨立的 API 會話，這些會話是隔離的 — 你無法在終端裡恢復它們。BaoBaoBot 採取了不同的方式：它只是 tmux 之上的一個薄控制層，終端始終是數據源，你永遠不會失去切換回去的能力。
 
 ## 功能特性
 
@@ -25,20 +24,72 @@ BaoBaoClaude 讓你**通過 Telegram 無縫接管同一個會話**。核心設�
 - **互動式 UI** — 通過內聯鍵盤操作 AskUserQuestion、ExitPlanMode 和權限提示
 - **發送訊息** — 通過 tmux 按鍵將文字轉發給 Claude Code
 - **斜槓命令轉發** — 任何 `/command` 直接發送給 Claude Code（如 `/clear`、`/compact`、`/cost`）
-- **創建新會話** — 通過目錄瀏覽器從 Telegram 啟動 Claude Code 會話
+- **創建新會話** — 在話題中發送第一條訊息即自動創建工作空間和 Claude 會話
 - **關閉會話** — 關閉話題自動終止關聯的 tmux 視窗
 - **訊息歷史** — 分頁瀏覽對話歷史（預設顯示最新）
 - **Hook 會話追蹤** — 通過 `SessionStart` hook 自動關聯 tmux 視窗與 Claude 會話
 - **持久化狀態** — 話題綁定和讀取偏移量在重啟後保持
+- **訊息消音** — Claude 輸出以 `[NO_NOTIFY]` 開頭的內容不會發送到 Telegram
 
 ### 人格與記憶系統
 
-- **靈魂定義（SOUL.md）** — 定義 Claude 的性格特質與溝通風格
-- **身份識別（IDENTITY.md）** — 設定名稱、Emoji、角色描述
-- **用戶檔案（USER.md）** — 記錄用戶偏好與個人資訊
-- **長期記憶（MEMORY.md）** — 經過整理的持久知識
-- **每日記憶（memory/*.md）** — 自動累積的日常記憶，SQLite 索引支援快速搜尋
+- **靈魂定義（AGENTSOUL.md）** — 定義 Claude 的名稱、角色、Emoji、性格特質與溝通風格
+- **用戶檔案** — 每位用戶獨立檔案（`shared/users/<user_id>.md`），記錄偏好與個人資訊
+- **每日記憶** — `memory/daily/YYYY-MM/YYYY-MM-DD.md`，自動累積的日常記憶
+- **長期記憶** — `memory/experience/<topic>.md`，經過整理的主題記憶
+- **記憶摘要** — `memory/summaries/`，自動生成的小時摘要
+- **SQLite 全文搜尋** — FTS5 索引提供快速記憶搜尋
+- **記憶合併** — 每週自動將舊的每日記憶和摘要合併到長期記憶
 - **工作空間管理** — 自動組裝 CLAUDE.md，連結專案目錄
+
+### 排程系統（Cron）
+
+- **定時任務** — 支援 cron 表達式、`every:30m` 間隔語法、`at:ISO-datetime` 一次性任務
+- **系統任務** — 自動建立每小時摘要和每週記憶合併任務
+- **`/clear` 自動摘要** — 清除會話前自動觸發摘要保存
+- **指數退避** — 連續失敗時自動延長重試間隔
+
+### 語音訊息
+
+- **語音轉文字** — 可選安裝 `faster-whisper`，收到語音訊息自動轉錄
+- **預覽確認** — 轉錄後顯示預覽，可發送、編輯或取消
+
+### 檔案處理
+
+- **接收檔案** — 下載到工作空間 `tmp/` 目錄，可讓 Claude 讀取分析
+- **發送檔案** — Claude 輸出 `[SEND_FILE:/path]` 可將檔案上傳到 Telegram（50MB 限制）
+
+### Bash 捕獲
+
+- **`!command` 語法** — 以 `!` 開頭的訊息在背景執行 Shell 命令，自動捕獲輸出
+
+### 訊息詳細度控制
+
+- **三級控制** — quiet（僅最終回覆）、normal（回覆 + 工具摘要）、verbose（全部內容）
+- **按話題設定** — 每個話題可獨立設定詳細度
+
+### 多 Agent 支援
+
+- **單 tmux 共享** — 多個 Agent 共用一個 `baobaobot` tmux session
+- **獨立配置** — 每個 Agent 有自己的 Bot Token、工作空間和狀態
+- **視窗前綴** — 多 Agent 時視窗名稱自動加上 `agent_name/` 前綴
+
+### Skills 系統
+
+Claude Code 可透過工作空間中的 Skills 使用以下功能：
+
+| Skill | 說明 |
+|---|---|
+| `memory-search` | 搜尋記憶（SQLite FTS5） |
+| `memory-list` | 列出近期每日記憶 |
+| `memory-save` | 主動保存記憶 |
+| `cron-add` | 新增排程任務 |
+| `cron-list` | 列出排程任務 |
+| `cron-remove` | 移除排程任務 |
+| `weather` | 查詢天氣 |
+| `google-places` | Google 地點搜尋 |
+| `google-directions` | Google 路線規劃 |
+| `google-geocoding` | Google 地理編碼 |
 
 ## 前置要求
 
@@ -51,18 +102,24 @@ BaoBaoClaude 讓你**通過 Telegram 無縫接管同一個會話**。核心設�
 
 ```bash
 # 使用 uv（推薦）
-uv tool install git+https://github.com/howarddp/BaoBaoClaude.git
+uv tool install git+https://github.com/howarddp/BaoBaoBot.git
 
 # 或使用 pipx
-pipx install git+https://github.com/howarddp/BaoBaoClaude.git
+pipx install git+https://github.com/howarddp/BaoBaoBot.git
 ```
 
 ### 方式二：從源碼安裝
 
 ```bash
-git clone https://github.com/howarddp/BaoBaoClaude.git
-cd BaoBaoClaude
+git clone https://github.com/howarddp/BaoBaoBot.git
+cd BaoBaoBot
 uv sync
+```
+
+### 可選：語音轉錄
+
+```bash
+uv pip install faster-whisper>=1.0.0
 ```
 
 ## 配置
@@ -76,7 +133,7 @@ uv sync
 
 **2. 配置環境變數：**
 
-首次運行 `baobaobot` 時會自動引導你完成設置（輸入 Bot Token、用戶 ID、Claude 命令），並自動建立 `.env`、初始化工作空間、安裝 Hook。
+首次運行 `baobaobot` 時會自動引導你完成設置（輸入 Bot Token、用戶 ID、Claude 命令等），並自動建立 `.env`、初始化工作空間、安裝 Hook。
 
 設置完成後，配置保存在 `~/.baobaobot/settings.toml`（設定）和 `~/.baobaobot/.env`（密鑰）。所有可調設定及預設值都會列在 `settings.toml` 中，可直接編輯。
 
@@ -84,6 +141,25 @@ uv sync
 
 ```bash
 baobaobot add-agent
+```
+
+**配置範例（settings.toml）：**
+
+```toml
+[global]
+allowed_users = [123456789]
+claude_command = "claude"
+locale = "zh-TW"
+recent_memory_days = 7
+monitor_poll_interval = 2.0
+# whisper_model = "small"
+# cron_default_tz = "Asia/Taipei"
+
+[[agents]]
+name = "baobao"
+bot_token_env = "BAOBAO_BOT_TOKEN"
+mode = "forum"   # 或 "group"
+# allowed_users = [...]  # 覆蓋 global 設定
 ```
 
 **環境變數：**
@@ -155,23 +231,24 @@ baobaobot -f
 
 | 命令 | 說明 |
 |---|---|
-| `/start` | 顯示歡迎訊息 |
-| `/history` | 當前話題的訊息歷史 |
-| `/screenshot` | 截取終端畫面 |
+| `/history` | 當前話題的訊息歷史（分頁瀏覽） |
+| `/screenshot` | 截取終端畫面（附帶控制按鍵） |
 | `/esc` | 發送 Escape 鍵中斷 Claude |
-| `/soul` | 查看/編輯靈魂定義 |
-| `/identity` | 查看/編輯身份識別 |
+| `/forcekill` | 強制終止並重啟 Claude 進程 |
+| `/agentsoul` | 查看/編輯靈魂定義（AGENTSOUL.md） |
 | `/profile` | 查看/編輯用戶檔案 |
-| `/memory` | 查看記憶 |
+| `/memory` | 查看/搜尋記憶 |
 | `/forget` | 刪除記憶 |
-| `/workspace` | 工作空間管理 |
+| `/workspace` | 顯示當前工作空間路徑 |
 | `/rebuild` | 重新組裝 CLAUDE.md |
+| `/cron` | 管理排程任務（add/remove/enable/disable/run/status） |
+| `/verbosity` | 設定訊息詳細度（quiet/normal/verbose） |
 
 **Claude Code 命令（通過 tmux 轉發）：**
 
 | 命令 | 說明 |
 |---|---|
-| `/clear` | 清除對話歷史 |
+| `/clear` | 清除對話歷史（自動觸發摘要） |
 | `/compact` | 壓縮對話上下文 |
 | `/cost` | 顯示 Token/費用統計 |
 | `/help` | 顯示 Claude Code 幫助 |
@@ -180,14 +257,14 @@ baobaobot -f
 
 ### 話題工作流
 
-**1 話題 = 1 視窗 = 1 會話。** Bot 在 Telegram 論壇（話題）模式下運行。
+**1 話題 = 1 視窗 = 1 會話。** Bot 支援 Telegram 論壇（話題）模式和普通群組模式。
 
 **創建新會話：**
 
 1. 在 Telegram 群組中創建新話題（話題名稱會自動成為 tmux 視窗名稱）
 2. 在話題中發送任意訊息
-3. 彈出目錄瀏覽器 — 在工作空間目錄（`~/.baobaobot/workspace/`）下選擇專案目錄
-4. 自動創建 tmux 視窗，啟動 `claude`，並轉發待處理的訊息
+3. 自動創建工作空間目錄、組裝 CLAUDE.md、啟動 tmux 視窗中的 `claude`
+4. 待處理的訊息自動轉發
 
 **發送訊息：**
 
@@ -231,7 +308,7 @@ baobaobot -f
 
 1. 在 Telegram 群組中創建新話題
 2. 發送任意訊息
-3. 從瀏覽器中選擇專案目錄
+3. 自動創建工作空間並啟動 Claude
 
 ### 方式二：手動創建
 
@@ -242,7 +319,7 @@ tmux new-window -n myproject -c ~/Code/myproject
 claude
 ```
 
-視窗必須在 `baobaobot` tmux 會話中（可通過 `TMUX_SESSION_NAME` 配置）。Claude 啟動時 Hook 會自動將其註冊到 `session_map.json`。
+視窗必須在 `baobaobot` tmux 會話中。Claude 啟動時 Hook 會自動將其註冊到 `session_map.json`。
 
 ## 架構概覽
 
@@ -259,89 +336,120 @@ claude
 - **話題為中心** — 每個 Telegram 話題綁定一個 tmux 視窗，話題就是會話列表
 - **視窗 ID 為中心** — 所有內部狀態以 tmux 視窗 ID（如 `@0`、`@12`）為鍵，而非視窗名稱
 - **基於 Hook 的會話追蹤** — Claude Code 的 `SessionStart` Hook 寫入 `session_map.json`；監控器每次輪詢讀取它以自動偵測會話變化
-- **無 LLM 調用** — 所有智慧在 Claude Code 中，BaoBaoClaude 只負責檔案管理與 Telegram UI
-- **雙層記憶** — MEMORY.md（長期、策展）+ memory/*.md（每日、自動），SQLite 索引提供快速搜尋
-- **自動組裝 CLAUDE.md** — 從 SOUL/IDENTITY/USER/AGENTS/MEMORY 檔案自動組合
+- **無 LLM 調用** — 所有智慧在 Claude Code 中，BaoBaoBot 只負責檔案管理與 Telegram UI
+- **雙層記憶** — experience/（長期、策展）+ daily/（每日、自動）+ summaries/（小時摘要），SQLite FTS5 索引提供快速搜尋
+- **記憶合併** — 每週自動將舊的每日記憶和摘要合併到長期記憶
+- **自動組裝 CLAUDE.md** — 從 AGENTS.md + AGENTSOUL.md + 記憶上下文自動組合
 
 ## 數據存儲
 
 | 路徑 | 說明 |
 |---|---|
-| `$BAOBAOBOT_DIR/state.json` | 話題綁定、視窗狀態、顯示名稱、每用戶讀取偏移量 |
-| `$BAOBAOBOT_DIR/session_map.json` | Hook 生成的 `{tmux_session:window_id: {session_id, cwd, window_name}}` 映射 |
-| `$BAOBAOBOT_DIR/monitor_state.json` | 每會話的監控位元組偏移量（防止重複通知） |
+| `$BAOBAOBOT_DIR/settings.toml` | Agent 配置（名稱、Token、模式、全域設定） |
+| `$BAOBAOBOT_DIR/.env` | Bot Token 等密鑰 |
+| `$BAOBAOBOT_DIR/shared/AGENTSOUL.md` | Agent 靈魂定義 |
+| `$BAOBAOBOT_DIR/shared/AGENTS.md` | 工作指令（系統同步） |
+| `$BAOBAOBOT_DIR/shared/users/<id>.md` | 用戶檔案 |
+| `$BAOBAOBOT_DIR/agents/<name>/state.json` | 話題綁定、視窗狀態、顯示名稱 |
+| `$BAOBAOBOT_DIR/agents/<name>/session_map.json` | Hook 生成的視窗→會話映射 |
+| `$BAOBAOBOT_DIR/agents/<name>/monitor_state.json` | 每會話的監控位元組偏移量 |
 | `~/.claude/projects/` | Claude Code 會話數據（唯讀） |
 
 ## 工作空間目錄
 
 ```
-~/.baobaobot/                   # 根目錄 (BAOBAOBOT_DIR)
-├── .env                     # Bot 配置
-├── state.json               # Bot 狀態（話題綁定、視窗狀態）
-├── session_map.json         # Hook 生成的視窗→會話映射
-├── monitor_state.json       # 每個 JSONL 檔案的輪詢進度
-├── bin/                     # 記憶工具（跨工作空間共享）
-│   ├── memory-search        # SQLite 記憶搜尋
-│   └── memory-list          # 列出近期每日記憶
-└── workspace/               # 預設工作空間 (WORKSPACE_DIR)
-    ├── CLAUDE.md            # 自動組裝（人格 + 記憶）
-    ├── SOUL.md              # 性格定義
-    ├── IDENTITY.md          # 身份識別（名稱、Emoji、角色）
-    ├── USER.md              # 用戶檔案
-    ├── AGENTS.md            # 工作指令 + 記憶工具使用說明
-    ├── MEMORY.md            # 長期記憶
-    ├── memory/              # 每日記憶 (YYYY-MM-DD.md)
-    ├── memory.db            # SQLite 記憶索引
-    └── projects/            # 符號連結的專案目錄
+~/.baobaobot/                        # 根目錄 (BAOBAOBOT_DIR)
+├── .env                             # Bot 密鑰
+├── settings.toml                    # Agent 配置
+├── shared/                          # 跨工作空間共享檔案
+│   ├── AGENTSOUL.md                 # 靈魂定義（名稱、角色、Emoji、性格）
+│   ├── AGENTS.md                    # 工作指令（系統同步）
+│   ├── bin/                         # 記憶/排程工具
+│   │   ├── memory-search            # SQLite 記憶搜尋
+│   │   ├── memory-list              # 列出近期每日記憶
+│   │   ├── memory-save              # 保存記憶
+│   │   ├── cron-add                 # 新增排程任務
+│   │   ├── cron-list                # 列出排程任務
+│   │   └── cron-remove              # 移除排程任務
+│   └── users/                       # 用戶檔案
+│       └── <user_id>.md
+└── agents/<name>/                   # 每個 Agent 的數據
+    ├── state.json                   # 話題綁定、視窗狀態
+    ├── session_map.json             # 視窗→會話映射（hook 寫入）
+    ├── monitor_state.json           # 輪詢進度（位元組偏移量）
+    └── workspace_<topic>/           # 每個話題的工作空間
+        ├── CLAUDE.md                # 自動組裝（勿手動編輯）
+        ├── memory/                  # 記憶目錄
+        │   ├── daily/               # 每日記憶 (YYYY-MM/YYYY-MM-DD.md)
+        │   ├── experience/          # 長期主題記憶
+        │   ├── summaries/           # 自動小時摘要
+        │   └── attachments/         # 附件
+        ├── memory.db                # SQLite FTS5 記憶索引
+        ├── cron/jobs.json           # 排程任務
+        ├── projects/                # 符號連結的專案目錄
+        ├── tmp/                     # 下載的檔案
+        └── .claude/skills/          # Claude Code Skills
 ```
 
 ## 檔案結構
 
 ```
 src/baobaobot/
-├── __init__.py              # 套件入口
 ├── main.py                  # CLI 調度器（hook / add-agent / bot 啟動 + 自動 tmux）
-├── hook.py                  # Hook 子命令，用於會話追蹤（+ --install）
-├── config.py                # 環境變數配置（含工作空間設定）
+├── settings.py              # TOML 多 Agent 配置（AgentConfig + load_settings）
 ├── bot.py                   # Telegram Bot 設置、命令處理、話題路由
+├── agent_context.py         # AgentContext 資料類
+├── router.py                # Router ABC（論壇/群組路由）
+├── routers/
+│   ├── forum.py             # ForumRouter（話題模式）
+│   └── group.py             # GroupRouter（群組模式）
 ├── session.py               # 會話管理、狀態持久化、訊息歷史
 ├── session_monitor.py       # JSONL 檔案監控（輪詢 + 變更偵測）
 ├── monitor_state.py         # 監控狀態持久化（位元組偏移量）
+├── tmux_manager.py          # tmux 視窗管理（列出、創建、發送按鍵、終止）
+├── hook.py                  # Hook 子命令（會話追蹤 + --install）
 ├── transcript_parser.py     # Claude Code JSONL 對話記錄解析
 ├── terminal_parser.py       # 終端面板解析（互動式 UI + 狀態行）
 ├── markdown_v2.py           # Markdown → Telegram MarkdownV2 轉換
 ├── telegram_sender.py       # 訊息拆分 + 同步 HTTP 發送
 ├── screenshot.py            # 終端文字 → PNG 圖片（支援 ANSI 顏色）
+├── transcribe.py            # 語音轉錄（faster-whisper）
+├── locale_utils.py          # 時區 → 語系映射
 ├── utils.py                 # 通用工具（原子 JSON 寫入、JSONL 輔助函式）
-├── tmux_manager.py          # tmux 視窗管理（列出、創建、發送按鍵、終止）
-├── fonts/                   # 截圖渲染用字體
 ├── workspace/               # 工作空間系統
-│   ├── manager.py           # 目錄初始化、專案連結、bin/ 腳本安裝
+│   ├── manager.py           # 目錄初始化、專案連結、bin/skills 部署
 │   ├── assembler.py         # CLAUDE.md 從源檔案組裝
-│   ├── bin/                 # 部署到 ~/.baobaobot/bin/ 的腳本
-│   │   ├── memory-search    # SQLite 記憶搜尋（供 Claude Code 使用）
-│   │   └── memory-list      # 列出近期每日記憶
-│   └── templates/           # 預設模板（SOUL/IDENTITY/USER/AGENTS/MEMORY.md）
+│   ├── bin/                 # 部署到 shared/bin/ 的腳本
+│   ├── skills/              # 部署到 .claude/skills/ 的 SKILL.md
+│   └── templates/           # 預設模板（AGENTSOUL/AGENTS/USER.md）
 ├── persona/                 # 人格系統
-│   ├── soul.py              # SOUL.md 讀寫
-│   ├── identity.py          # IDENTITY.md 解析/更新
-│   └── profile.py           # USER.md 解析/更新
+│   ├── agentsoul.py         # AGENTSOUL.md 讀寫解析
+│   └── profile.py           # 多用戶檔案（shared/users/）
 ├── memory/                  # 記憶系統
-│   ├── db.py                # SQLite 索引（同步 .md → SQLite、搜尋、統計）
+│   ├── db.py                # SQLite FTS5 索引（schema v4）
 │   ├── manager.py           # MemoryManager（列出、搜尋、清理）
 │   ├── daily.py             # 每日記憶檔案操作
-│   └── search.py            # 純文字搜尋（降級方案）
-└── handlers/
-    ├── __init__.py           # Handler 模組匯出
-    ├── callback_data.py      # 回呼數據常量（CB_* 前綴）
-    ├── directory_browser.py  # 目錄瀏覽器內聯鍵盤 UI
-    ├── history.py            # 訊息歷史分頁
-    ├── interactive_ui.py     # 互動式 UI 處理（AskUser、ExitPlan、權限）
-    ├── message_queue.py      # 每用戶訊息佇列 + worker（合併、限流）
-    ├── message_sender.py     # safe_reply / safe_edit / safe_send 輔助函式
-    ├── response_builder.py   # 回應訊息建構（格式化 tool_use、思考等）
-    ├── status_polling.py     # 終端狀態行輪詢
-    ├── persona_handler.py    # /soul、/identity 命令
-    ├── profile_handler.py    # /profile 命令
-    └── memory_handler.py     # /memory、/forget 命令
+│   ├── search.py            # 純文字搜尋（降級方案）
+│   └── utils.py             # 前置資料解析、標籤處理
+├── cron/                    # 排程系統
+│   ├── service.py           # CronService（asyncio 計時器迴圈）
+│   ├── store.py             # JSON 持久化任務儲存
+│   ├── schedule.py          # 計算下次執行時間
+│   ├── parse.py             # 排程字串解析
+│   └── types.py             # CronJob、CronSchedule 資料類
+└── handlers/                # Telegram 處理器
+    ├── callback_data.py     # 回呼數據常量
+    ├── message_queue.py     # 每用戶訊息佇列 + worker
+    ├── message_sender.py    # safe_reply / safe_edit / safe_send
+    ├── history.py           # 訊息歷史分頁
+    ├── interactive_ui.py    # 互動式 UI（AskUser、ExitPlan、權限）
+    ├── status_polling.py    # 終端狀態行輪詢
+    ├── response_builder.py  # 回應訊息建構
+    ├── directory_browser.py # 目錄瀏覽器 UI
+    ├── cleanup.py           # 話題關閉/刪除清理
+    ├── persona_handler.py   # /agentsoul 命令
+    ├── profile_handler.py   # /profile 命令
+    ├── memory_handler.py    # /memory、/forget 命令
+    ├── cron_handler.py      # /cron 命令
+    └── verbosity_handler.py # /verbosity 命令
 ```
