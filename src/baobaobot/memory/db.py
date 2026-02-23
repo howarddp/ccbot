@@ -14,6 +14,7 @@ Key class: MemoryDB.
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -25,6 +26,66 @@ logger = logging.getLogger(__name__)
 # Schema version — bump to force DB recreation on next connect.
 # IMPORTANT: keep in sync with _memory_common.py (standalone bin scripts).
 _SCHEMA_VERSION = 4
+
+# ---------------------------------------------------------------------------
+# Dedup helpers — character-bigram Jaccard similarity
+# IMPORTANT: keep in sync with _memory_common.py
+# ---------------------------------------------------------------------------
+
+_SOURCE_PRIORITY: dict[str, int] = {"experience": 0, "daily": 1, "summary": 2}
+
+_MD_STRIP_RE = re.compile(r"[#*>\[\]()`~_|!-]")
+
+
+def _char_bigrams(text: str) -> set[str]:
+    """Return character bigram set after stripping markdown and whitespace."""
+    cleaned = _MD_STRIP_RE.sub("", text)
+    cleaned = "".join(cleaned.split())  # collapse whitespace
+    if len(cleaned) < 2:
+        return set()
+    return {cleaned[i : i + 2] for i in range(len(cleaned) - 1)}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Jaccard similarity between two sets."""
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _dedup_results(results: list[dict], threshold: float = 0.55) -> list[dict]:
+    """Remove near-duplicate search results, keeping higher-priority sources.
+
+    Priority: experience > daily > summary.
+    Uses character-bigram Jaccard similarity.
+    O(n²) pairwise comparison — fine for typical search result sizes (<200).
+    """
+    if len(results) <= 1:
+        return results
+
+    # Pre-compute bigrams
+    bigrams = [_char_bigrams(r["content"]) for r in results]
+    keep = [True] * len(results)
+
+    for i in range(len(results)):
+        if not keep[i]:
+            continue
+        for j in range(i + 1, len(results)):
+            if not keep[j]:
+                continue
+            if _jaccard(bigrams[i], bigrams[j]) >= threshold:
+                # Drop the lower-priority one
+                pri_i = _SOURCE_PRIORITY.get(results[i]["source"], 9)
+                pri_j = _SOURCE_PRIORITY.get(results[j]["source"], 9)
+                if pri_i <= pri_j:
+                    keep[j] = False
+                else:
+                    keep[i] = False
+                    break  # i is dropped, no need to compare further
+
+    return [r for r, k in zip(results, keep) if k]
 
 
 _SCHEMA = """\
@@ -332,11 +393,11 @@ class MemoryDB:
         use_fts = self._fts_available and query.isascii()
         if use_fts:
             try:
-                return self._search_fts(conn, query, days, tag)
+                return _dedup_results(self._search_fts(conn, query, days, tag))
             except sqlite3.OperationalError:
                 pass
 
-        return self._search_like(conn, query, days, tag)
+        return _dedup_results(self._search_like(conn, query, days, tag))
 
     def _search_fts(
         self,

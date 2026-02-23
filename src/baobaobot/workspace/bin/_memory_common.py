@@ -74,6 +74,67 @@ def _parse_tags(text: str) -> list[str]:
     return sorted(tags)
 
 
+# ---------------------------------------------------------------------------
+# Dedup helpers — character-bigram Jaccard similarity
+# IMPORTANT: keep in sync with baobaobot.memory.db
+# ---------------------------------------------------------------------------
+
+_SOURCE_PRIORITY: dict[str, int] = {"experience": 0, "daily": 1, "summary": 2}
+
+_MD_STRIP_RE = re.compile(r"[#*>\[\]()`~_|!-]")
+
+
+def _char_bigrams(text: str) -> set[str]:
+    """Return character bigram set after stripping markdown and whitespace."""
+    cleaned = _MD_STRIP_RE.sub("", text)
+    cleaned = "".join(cleaned.split())  # collapse whitespace
+    if len(cleaned) < 2:
+        return set()
+    return {cleaned[i : i + 2] for i in range(len(cleaned) - 1)}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Jaccard similarity between two sets."""
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _dedup_results(results: list[dict], threshold: float = 0.55) -> list[dict]:
+    """Remove near-duplicate search results, keeping higher-priority sources.
+
+    Priority: experience > daily > summary.
+    Uses character-bigram Jaccard similarity.
+    O(n²) pairwise comparison — fine for typical search result sizes (<200).
+    """
+    if len(results) <= 1:
+        return results
+
+    # Pre-compute bigrams
+    bigrams = [_char_bigrams(r["content"]) for r in results]
+    keep = [True] * len(results)
+
+    for i in range(len(results)):
+        if not keep[i]:
+            continue
+        for j in range(i + 1, len(results)):
+            if not keep[j]:
+                continue
+            if _jaccard(bigrams[i], bigrams[j]) >= threshold:
+                # Drop the lower-priority one
+                pri_i = _SOURCE_PRIORITY.get(results[i]["source"], 9)
+                pri_j = _SOURCE_PRIORITY.get(results[j]["source"], 9)
+                if pri_i <= pri_j:
+                    keep[j] = False
+                else:
+                    keep[i] = False
+                    break  # i is dropped, no need to compare further
+
+    return [r for r, k in zip(results, keep) if k]
+
+
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS memories (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -388,7 +449,7 @@ def search(
     query: str,
     days: int | None = None,
     tag: str | None = None,
-) -> list[sqlite3.Row]:
+) -> list[dict]:
     """Search memories using FTS5 (with LIKE fallback on error).
 
     Args:
@@ -398,18 +459,20 @@ def search(
         tag: Optional — filter by tag name (without # prefix).
 
     Returns:
-        List of Row objects with keys: source, date, line_num, content.
+        List of dicts with keys: source, date, line_num, content.
     """
     # FTS5's default tokenizer doesn't handle CJK; use LIKE directly
     # for non-ASCII queries.  For ASCII queries, trust FTS results.
     use_fts = _fts_available and query.isascii()
     if use_fts:
         try:
-            return _search_fts(conn, query, days, tag)
+            rows = _search_fts(conn, query, days, tag)
+            return _dedup_results([dict(r) for r in rows])
         except sqlite3.OperationalError:
             pass
 
-    return _search_like(conn, query, days, tag)
+    rows = _search_like(conn, query, days, tag)
+    return _dedup_results([dict(r) for r in rows])
 
 
 def _search_fts(
@@ -620,7 +683,7 @@ def append_to_experience_file(workspace: Path, topic: str, line: str) -> str:
     return f"memory/experience/{topic}.md"
 
 
-def format_file_label(row: sqlite3.Row) -> str:
+def format_file_label(row: dict | sqlite3.Row) -> str:
     """Convert a result row's source/date into a human-readable file label."""
     if row["source"] == "experience":
         return f"memory/experience/{row['date']}.md"

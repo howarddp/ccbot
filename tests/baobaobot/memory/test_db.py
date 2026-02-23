@@ -354,8 +354,9 @@ class TestSearch:
         assert any(r["source"] == "experience" for r in results)
 
     def test_search_across_files(self, db: MemoryDB, workspace: Path) -> None:
-        write_daily(workspace, "2026-02-15", "- shared keyword\n")
-        write_daily(workspace, "2026-02-16", "- shared keyword again\n")
+        # Content must be sufficiently distinct to survive dedup
+        write_daily(workspace, "2026-02-15", "- shared keyword alpha version\n")
+        write_daily(workspace, "2026-02-16", "- shared keyword beta release\n")
 
         results = db.search("shared keyword")
         assert len(results) >= 2
@@ -398,14 +399,14 @@ class TestSearch:
         today = dt_date.today()
         recent = (today - timedelta(days=2)).isoformat()
 
-        # Create a recent daily file
-        write_daily(workspace, recent, "- daily unique keyword\n")
+        # Create a recent daily file (distinct content to avoid dedup)
+        write_daily(workspace, recent, "- daily unique keyword alpha version\n")
 
-        # Create a recent summary file
+        # Create a recent summary file (distinct content to avoid dedup)
         summaries_dir = workspace / "memory" / "summaries"
         summaries_dir.mkdir(parents=True, exist_ok=True)
         summary_file = summaries_dir / f"{recent}_1400.md"
-        summary_file.write_text("- summary unique keyword\n")
+        summary_file.write_text("- summary unique keyword beta release\n")
 
         results = db.search("unique keyword", days=7)
         sources = {r["source"] for r in results}
@@ -602,14 +603,12 @@ class TestAttachments:
 class TestSchemaSync:
     """Verify that _memory_common.py stays in sync with db.py."""
 
-    def test_schema_version_matches(self) -> None:
-        """_memory_common.py's _SCHEMA_VERSION must match db.py's."""
+    @staticmethod
+    def _load_common_module():
+        """Load _memory_common.py as a module."""
         import importlib.util
         from pathlib import Path as P
 
-        from baobaobot.memory.db import _SCHEMA_VERSION as db_version
-
-        # Load _memory_common.py as a module (it's a standalone script)
         common_path = (
             P(__file__).resolve().parents[3]
             / "src"
@@ -622,8 +621,282 @@ class TestSchemaSync:
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        return mod
+
+    def test_schema_version_matches(self) -> None:
+        """_memory_common.py's _SCHEMA_VERSION must match db.py's."""
+        from baobaobot.memory.db import _SCHEMA_VERSION as db_version
+
+        mod = self._load_common_module()
 
         assert mod._SCHEMA_VERSION == db_version, (
             f"_memory_common._SCHEMA_VERSION ({mod._SCHEMA_VERSION}) != "
             f"db._SCHEMA_VERSION ({db_version}). Keep them in sync!"
         )
+
+    def test_source_priority_matches(self) -> None:
+        """_memory_common.py's _SOURCE_PRIORITY must match db.py's."""
+        from baobaobot.memory.db import _SOURCE_PRIORITY as db_prio
+
+        mod = self._load_common_module()
+
+        assert mod._SOURCE_PRIORITY == db_prio, (
+            f"_memory_common._SOURCE_PRIORITY ({mod._SOURCE_PRIORITY}) != "
+            f"db._SOURCE_PRIORITY ({db_prio}). Keep them in sync!"
+        )
+
+    def test_dedup_results_behavior_matches(self) -> None:
+        """Both _dedup_results implementations must produce identical output."""
+        from baobaobot.memory.db import _dedup_results as db_dedup
+
+        mod = self._load_common_module()
+        common_dedup = mod._dedup_results
+
+        test_input = [
+            {
+                "source": "experience",
+                "date": "topic",
+                "line_num": 1,
+                "content": "討論了架構重構方案",
+            },
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 3,
+                "content": "討論了架構重構方案",
+            },
+            {
+                "source": "summary",
+                "date": "2026-02-15_1400",
+                "line_num": 1,
+                "content": "完全不同的東西",
+            },
+        ]
+        assert db_dedup(test_input) == common_dedup(test_input)
+
+
+class TestDedupHelpers:
+    """Unit tests for dedup helper functions."""
+
+    def test_char_bigrams_ascii(self) -> None:
+        from baobaobot.memory.db import _char_bigrams
+
+        result = _char_bigrams("hello")
+        assert result == {"he", "el", "ll", "lo"}
+
+    def test_char_bigrams_cjk(self) -> None:
+        from baobaobot.memory.db import _char_bigrams
+
+        result = _char_bigrams("架構重構")
+        assert result == {"架構", "構重", "重構"}
+
+    def test_char_bigrams_strips_markdown(self) -> None:
+        from baobaobot.memory.db import _char_bigrams
+
+        result = _char_bigrams("## heading")
+        # After stripping # and space: "heading"
+        assert result == {"he", "ea", "ad", "di", "in", "ng"}
+
+    def test_char_bigrams_single_char(self) -> None:
+        from baobaobot.memory.db import _char_bigrams
+
+        assert _char_bigrams("a") == set()
+
+    def test_char_bigrams_empty(self) -> None:
+        from baobaobot.memory.db import _char_bigrams
+
+        assert _char_bigrams("") == set()
+
+    def test_jaccard_identical(self) -> None:
+        from baobaobot.memory.db import _jaccard
+
+        s = {"ab", "bc", "cd"}
+        assert _jaccard(s, s) == 1.0
+
+    def test_jaccard_disjoint(self) -> None:
+        from baobaobot.memory.db import _jaccard
+
+        assert _jaccard({"ab", "bc"}, {"xy", "yz"}) == 0.0
+
+    def test_jaccard_partial(self) -> None:
+        from baobaobot.memory.db import _jaccard
+
+        a = {"ab", "bc", "cd"}
+        b = {"ab", "bc", "xy"}
+        # intersection=2, union=4
+        assert _jaccard(a, b) == pytest.approx(0.5)
+
+    def test_jaccard_both_empty(self) -> None:
+        from baobaobot.memory.db import _jaccard
+
+        assert _jaccard(set(), set()) == 1.0
+
+    def test_jaccard_one_empty(self) -> None:
+        from baobaobot.memory.db import _jaccard
+
+        assert _jaccard({"ab"}, set()) == 0.0
+
+
+class TestDedup:
+    """Integration tests for _dedup_results."""
+
+    def test_empty_results(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        assert _dedup_results([]) == []
+
+    def test_single_result(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {"source": "daily", "date": "2026-02-15", "line_num": 1, "content": "hello"}
+        ]
+        assert _dedup_results(results) == results
+
+    def test_keeps_distinct_results(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 1,
+                "content": "架構重構方案",
+            },
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 2,
+                "content": "完全不同的內容",
+            },
+        ]
+        assert len(_dedup_results(results)) == 2
+
+    def test_dedup_same_content_cross_source(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {
+                "source": "experience",
+                "date": "topic",
+                "line_num": 1,
+                "content": "討論了架構重構方案",
+            },
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 3,
+                "content": "討論了架構重構方案",
+            },
+            {
+                "source": "summary",
+                "date": "2026-02-15_1400",
+                "line_num": 1,
+                "content": "討論了架構重構方案",
+            },
+        ]
+        deduped = _dedup_results(results)
+        assert len(deduped) == 1
+        assert deduped[0]["source"] == "experience"
+
+    def test_dedup_near_duplicate(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 1,
+                "content": "- 討論了架構重構方案",
+            },
+            {
+                "source": "summary",
+                "date": "2026-02-15_1400",
+                "line_num": 1,
+                "content": "討論架構重構方案",
+            },
+        ]
+        deduped = _dedup_results(results)
+        assert len(deduped) == 1
+        assert deduped[0]["source"] == "daily"
+
+    def test_priority_experience_over_daily(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 1,
+                "content": "same content here",
+            },
+            {
+                "source": "experience",
+                "date": "topic",
+                "line_num": 1,
+                "content": "same content here",
+            },
+        ]
+        deduped = _dedup_results(results)
+        assert len(deduped) == 1
+        assert deduped[0]["source"] == "experience"
+
+    def test_priority_daily_over_summary(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {
+                "source": "summary",
+                "date": "2026-02-15_1400",
+                "line_num": 1,
+                "content": "same content here",
+            },
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 1,
+                "content": "same content here",
+            },
+        ]
+        deduped = _dedup_results(results)
+        assert len(deduped) == 1
+        assert deduped[0]["source"] == "daily"
+
+    def test_custom_threshold(self) -> None:
+        from baobaobot.memory.db import _dedup_results
+
+        results = [
+            {
+                "source": "daily",
+                "date": "2026-02-15",
+                "line_num": 1,
+                "content": "abcdefgh",
+            },
+            {
+                "source": "summary",
+                "date": "2026-02-15_1400",
+                "line_num": 1,
+                "content": "abcxyzgh",
+            },
+        ]
+        # With high threshold they're distinct
+        assert len(_dedup_results(results, threshold=0.9)) == 2
+        # With low threshold they'd be deduped
+        assert len(_dedup_results(results, threshold=0.1)) == 1
+
+    def test_search_deduplicates(self, db: MemoryDB, workspace: Path) -> None:
+        """End-to-end: search results are deduplicated across sources."""
+        # Write same content to daily + experience + summary
+        write_daily(workspace, "2026-02-15", "- 討論了架構重構方案\n")
+
+        exp_dir = workspace / "memory" / "experience"
+        (exp_dir / "arch.md").write_text("- 討論了架構重構方案\n")
+
+        summaries_dir = workspace / "memory" / "summaries"
+        summaries_dir.mkdir(parents=True, exist_ok=True)
+        (summaries_dir / "2026-02-15_1400.md").write_text("- 討論了架構重構方案\n")
+
+        results = db.search("架構重構")
+        # Should be deduped to 1 result (experience wins)
+        assert len(results) == 1
+        assert results[0]["source"] == "experience"
