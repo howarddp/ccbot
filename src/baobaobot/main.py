@@ -22,6 +22,8 @@ from pathlib import Path
 
 PIDFILE_NAME = "baobaobot.pid"
 
+_is_restart = False
+
 
 def _read_pid(config_dir: Path) -> int | None:
     """Read pidfile and return PID or None."""
@@ -54,9 +56,74 @@ def _remove_pid(config_dir: Path) -> None:
         pass
 
 
-def _kill_existing(config_dir: Path) -> None:
-    """If a previous bot instance is running, SIGTERM it (SIGKILL after 5s)."""
-    pid = _read_pid(config_dir)
+def _send_restart_notifications(
+    agent_configs: list,  # list[AgentConfig]
+    message: str,
+) -> None:
+    """Send a notification message to each agent's primary chat via Telegram API.
+
+    Uses httpx for synchronous HTTP calls — no async needed at the pre-startup stage.
+    Reads each agent's state.json to find notification targets:
+    - Forum mode: first thread_binding → group_chat_ids for the chat_id + thread_id
+    - Group mode: first group_binding → chat_id
+    """
+    import json
+
+    import httpx
+
+    for cfg in agent_configs:
+        state_file = cfg.state_file
+        if not state_file.is_file():
+            continue
+        try:
+            state = json.loads(state_file.read_text())
+        except Exception:
+            continue
+
+        token = cfg.bot_token
+        targets: list[tuple[int, int | None]] = []  # (chat_id, thread_id | None)
+
+        if cfg.mode == "group":
+            gb = state.get("group_bindings", {})
+            if gb:
+                first_chat_id = int(next(iter(gb)))
+                targets.append((first_chat_id, None))
+        else:
+            # Forum mode: first thread binding → resolve group_chat_id
+            tb = state.get("thread_bindings", {})
+            gci = state.get("group_chat_ids", {})
+            for uid, bindings in tb.items():
+                for tid in bindings:
+                    key = f"{uid}:{tid}"
+                    chat_id = gci.get(key)
+                    if chat_id:
+                        targets.append((int(chat_id), int(tid)))
+                        break
+                if targets:
+                    break
+
+        for chat_id, thread_id in targets:
+            params: dict[str, object] = {"chat_id": chat_id, "text": message}
+            if thread_id is not None:
+                params["message_thread_id"] = thread_id
+            try:
+                httpx.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json=params,
+                    timeout=10,
+                )
+            except Exception:
+                pass
+
+
+def _kill_existing(config_dir: Path, *, pid: int | None = None) -> None:
+    """If a previous bot instance is running, SIGTERM it (SIGKILL after 5s).
+
+    Args:
+        pid: Pre-read PID to avoid re-reading the pidfile. If None, reads it.
+    """
+    if pid is None:
+        pid = _read_pid(config_dir)
     if pid is None or not _is_pid_alive(pid):
         return
     if pid == os.getpid():
@@ -479,15 +546,9 @@ def main() -> None:
         _launch_in_tmux(config_dir, session_name="baobaobot")
         return
 
-    # Inside tmux: kill any existing instance, write our PID
-    _kill_existing(config_dir)
-    _write_pid(config_dir)
-    atexit.register(_remove_pid, config_dir)
-
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.WARNING,
-    )
+    # Inside tmux: load settings early (needed for restart notifications),
+    # then kill any existing instance, write our PID
+    global _is_restart
 
     from .agent_context import AgentContext, create_agent_context
     from .settings import load_settings
@@ -498,6 +559,25 @@ def main() -> None:
         print(f"Error: {e}\n")
         print("Check your settings.toml configuration.")
         sys.exit(1)
+
+    # Check if an existing instance is running → restart flow
+    existing_pid = _read_pid(config_dir)
+    if (
+        existing_pid is not None
+        and _is_pid_alive(existing_pid)
+        and existing_pid != os.getpid()
+    ):
+        _is_restart = True
+        _send_restart_notifications(agent_configs, "⏳ Preparing to restart...")
+
+    _kill_existing(config_dir, pid=existing_pid)
+    _write_pid(config_dir)
+    atexit.register(_remove_pid, config_dir)
+
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.WARNING,
+    )
 
     logging.getLogger("baobaobot").setLevel(logging.DEBUG)
     logger = logging.getLogger(__name__)
@@ -535,6 +615,7 @@ def main() -> None:
         # Single agent: blocking run_polling
         logger.info("Starting Telegram bot...")
         application = create_bot(agent_contexts[0])
+        application.bot_data["_is_restart"] = _is_restart
         application.run_polling(allowed_updates=["message", "callback_query"])
     else:
         # Multiple agents: run concurrently with asyncio
@@ -582,6 +663,7 @@ def main() -> None:
             apps = []
             for ctx in agent_contexts:
                 app = create_bot(ctx)
+                app.bot_data["_is_restart"] = _is_restart
                 apps.append(app)
 
             # Initialize and start all applications

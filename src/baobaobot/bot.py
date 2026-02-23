@@ -1967,6 +1967,39 @@ async def _deliver_message(
 # --- App lifecycle ---
 
 
+async def _send_restart_complete(bot: Bot, agent_ctx: AgentContext) -> None:
+    """Send 'Restart complete' to the agent's primary chat after startup."""
+    sm = agent_ctx.session_manager
+    cfg = agent_ctx.config
+    targets: list[tuple[int, int | None]] = []  # (chat_id, thread_id | None)
+
+    if cfg.mode == "group":
+        # group_bindings: {chat_id (int) → window_id (str)}
+        for chat_id in sm.group_bindings:
+            targets.append((chat_id, None))
+            break
+    else:
+        # Forum mode: first thread binding → resolve group_chat_id
+        for uid, bindings in sm.thread_bindings.items():
+            for tid in bindings:
+                chat_id = sm.group_chat_ids.get(f"{uid}:{tid}")
+                if chat_id:
+                    targets.append((chat_id, tid))
+                    break
+            if targets:
+                break
+
+    for chat_id, thread_id in targets:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="✅ Restart complete.",
+                message_thread_id=thread_id,
+            )
+        except Exception as e:
+            logger.warning("Failed to send restart-complete notification: %s", e)
+
+
 async def post_init(application: Application) -> None:
     agent_ctx = _agent_ctx(application)
 
@@ -2040,6 +2073,10 @@ async def post_init(application: Application) -> None:
         status_poll_loop(application.bot, agent_ctx=agent_ctx)
     )
     logger.info("Status polling task started")
+
+    # Send restart-complete notification if this is a restart
+    if application.bot_data.get("_is_restart"):
+        await _send_restart_complete(application.bot, agent_ctx)
 
 
 async def post_shutdown(application: Application) -> None:
