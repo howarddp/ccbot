@@ -131,6 +131,8 @@ from .handlers.status_polling import (
 from .screenshot import text_to_image
 from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
 from .terminal_parser import extract_bash_output
+from .handlers.important_handler import handle_important_edit_message
+from .handlers.workspace_resolver import resolve_workspace_for_window
 from .handlers.persona_handler import (
     agentsoul_command,
     cancel_command,
@@ -241,15 +243,7 @@ def _get_thread_id(update: Update) -> int | None:
 def _resolve_workspace_dir(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> Path | None:
-    """Resolve the per-topic workspace directory for the current routing key.
-
-    Prefers the actual cwd from session_map (via WindowState) over computing
-    from the display name, since display names can diverge from the original
-    directory name (e.g. agent-prefixed window names like "baobaobot/fun"
-    vs workspace directory "workspace_fun").
-
-    Returns None if no bound window exists.
-    """
+    """Resolve the per-topic workspace directory for the current routing key."""
     ctx = _ctx(context)
     rk = ctx.router.extract_routing_key(update)
     if rk is None:
@@ -257,17 +251,7 @@ def _resolve_workspace_dir(
     wid = ctx.router.get_window(rk, ctx)
     if not wid:
         return None
-    # Prefer actual cwd from session_map (authoritative)
-    state = ctx.session_manager.get_window_state(wid)
-    if state.cwd:
-        cwd_path = Path(state.cwd)
-        if cwd_path.is_dir():
-            return cwd_path
-    # Fallback: compute from display name (strip agent prefix)
-    display_name = ctx.session_manager.get_display_name(wid)
-    agent_prefix = f"{ctx.config.name}/"
-    ws_name = display_name.removeprefix(agent_prefix)
-    return ctx.config.workspace_dir_for(ws_name)
+    return resolve_workspace_for_window(ctx, wid)
 
 
 # --- Command handlers ---
@@ -1065,6 +1049,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Check if user is in persona edit mode (e.g. /soul edit)
     if await handle_edit_mode_message(update, context):
+        return
+
+    # Check if user is in important instructions edit mode
+    if await handle_important_edit_message(update, context):
         return
 
     # Check if user has a pending file waiting for description

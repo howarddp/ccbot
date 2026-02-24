@@ -24,6 +24,7 @@ from .callback_data import (
 from .history import send_history
 from .message_sender import safe_reply
 from .status_polling import clear_window_health
+from .workspace_resolver import resolve_workspace_for_window
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
 
 
 def _build_config_keyboard() -> InlineKeyboardMarkup:
-    """Build /config menu: 2 buttons in 1 row."""
+    """Build /config menu: 3 buttons in 2 rows."""
     return InlineKeyboardMarkup(
         [
             [
@@ -128,6 +129,30 @@ def _build_config_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "👤 Profile",
                     callback_data=f"{CB_MENU_CONFIG}profile",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📋 Important",
+                    callback_data=f"{CB_MENU_CONFIG}important",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_important_keyboard() -> InlineKeyboardMarkup:
+    """Build Important secondary menu: View / Edit."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "👁 View",
+                    callback_data=f"{CB_MENU_CONFIG}important:view",
+                ),
+                InlineKeyboardButton(
+                    "✏️ Edit",
+                    callback_data=f"{CB_MENU_CONFIG}important:edit",
                 ),
             ],
         ]
@@ -288,6 +313,12 @@ async def _dispatch_config(
         await _handle_agentsoul(query, update, context)
     elif action == "profile":
         await _handle_profile(query, update, context)
+    elif action == "important":
+        await _handle_important(query)
+    elif action == "important:view":
+        await _handle_important_view(query, update, context)
+    elif action == "important:edit":
+        await _handle_important_edit(query, update, context)
     else:
         await query.answer("Unknown action")
 
@@ -319,8 +350,10 @@ async def _handle_clear(
             await safe_reply(
                 query.message, f"📋 [{display}] Summarizing before clear..."
             )
-        agent_prefix = f"{ctx.config.name}/"
-        cron_ws_name = display.removeprefix(agent_prefix)
+        cron_ws_dir = resolve_workspace_for_window(ctx, wid)
+        cron_ws_name = (
+            cron_ws_dir.name.removeprefix("workspace_") if cron_ws_dir else display
+        )
         try:
             summarized = await ctx.cron_service.trigger_summary(cron_ws_name)
             if summarized:
@@ -492,9 +525,8 @@ async def _handle_cron(
         await safe_reply(query.message, "❌ No workspace for this topic.")
         return
 
-    display_name = ctx.session_manager.get_display_name(wid)
-    agent_prefix = f"{ctx.config.name}/"
-    ws_name = display_name.removeprefix(agent_prefix)
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    ws_name = ws_dir.name.removeprefix("workspace_") if ws_dir else ""
 
     cron_svc = ctx.cron_service
     if not cron_svc:
@@ -643,10 +675,7 @@ async def _handle_agentsoul(
     if rk:
         wid = ctx.router.get_window(rk, ctx)
         if wid:
-            display_name = ctx.session_manager.get_display_name(wid)
-            agent_prefix = f"{cfg.name}/"
-            ws_name = display_name.removeprefix(agent_prefix)
-            ws_dir = cfg.workspace_dir_for(ws_name)
+            ws_dir = resolve_workspace_for_window(ctx, wid)
 
     content, source = read_agentsoul_with_source(cfg.shared_dir, ws_dir)
     if content:
@@ -664,6 +693,66 @@ async def _handle_agentsoul(
         )
     else:
         await safe_reply(query.message, "❌ No AGENTSOUL.md found.")
+
+
+async def _handle_important(query: CallbackQuery) -> None:
+    """Show Important secondary menu (View / Edit)."""
+    await query.answer()
+    if query.message:
+        keyboard = _build_important_keyboard()
+        await safe_reply(
+            query.message, "📋 *Important Instructions*", reply_markup=keyboard
+        )
+
+
+async def _handle_important_view(
+    query: CallbackQuery,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """View built-in + workspace important instructions."""
+    from ..handlers.important_handler import view_important
+
+    await query.answer()
+    if not query.message:
+        return
+
+    ctx = _ctx(context)
+    rk = ctx.router.extract_routing_key(update)
+    ws_dir = None
+    if rk:
+        wid = ctx.router.get_window(rk, ctx)
+        if wid:
+            ws_dir = resolve_workspace_for_window(ctx, wid)
+
+    await view_important(query.message, ws_dir)
+
+
+async def _handle_important_edit(
+    query: CallbackQuery,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Enter edit mode for workspace important instructions."""
+    from ..handlers.important_handler import start_important_edit
+
+    await query.answer()
+    if not query.message:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    ctx = _ctx(context)
+    rk = ctx.router.extract_routing_key(update)
+    ws_dir = None
+    if rk:
+        wid = ctx.router.get_window(rk, ctx)
+        if wid:
+            ws_dir = resolve_workspace_for_window(ctx, wid)
+
+    await start_important_edit(query.message, user.id, ws_dir)
 
 
 async def _handle_profile(
@@ -695,10 +784,7 @@ async def _handle_profile(
     if rk:
         wid = ctx.router.get_window(rk, ctx)
         if wid:
-            display_name = ctx.session_manager.get_display_name(wid)
-            agent_prefix = f"{cfg.name}/"
-            ws_name = display_name.removeprefix(agent_prefix)
-            ws_dir = cfg.workspace_dir_for(ws_name)
+            ws_dir = resolve_workspace_for_window(ctx, wid)
 
     profile, source = read_user_profile_with_source(cfg.users_dir, user.id, ws_dir)
     source_label = "📌 workspace-local" if source == "local" else "🌐 shared"

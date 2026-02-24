@@ -20,6 +20,7 @@ from telegram.ext import ContextTypes
 from ..cron.parse import format_schedule, parse_schedule
 from ..cron.types import WorkspaceMeta
 from ..handlers.message_sender import safe_reply
+from ..handlers.workspace_resolver import resolve_workspace_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -29,23 +30,15 @@ def _resolve_workspace_for_thread(
 ) -> tuple[Path | None, str]:
     """Resolve workspace dir and name for the current routing context.
 
-    Uses the router to extract routing key and look up bound window.
     Returns (workspace_dir, workspace_name) or (None, "") if unresolvable.
+    workspace_name is derived from the directory name to match how the cron
+    service indexes workspaces (ws_dir.name.removeprefix("workspace_")).
     """
-    agent_ctx = context.bot_data["agent_ctx"]
-    rk = agent_ctx.router.extract_routing_key(update)
-    if rk is None:
+    ws_dir = resolve_workspace_for_update(update, context)
+    if ws_dir is None:
         return None, ""
-
-    wid = agent_ctx.router.get_window(rk, agent_ctx)
-    if not wid:
-        return None, ""
-
-    display_name = agent_ctx.session_manager.get_display_name(wid)
-    # Strip agent prefix (e.g. "tecoailab/O2O" → "O2O") for workspace resolution
-    agent_prefix = f"{agent_ctx.config.name}/"
-    ws_name = display_name.removeprefix(agent_prefix)
-    return agent_ctx.config.workspace_dir_for(ws_name), ws_name
+    ws_name = ws_dir.name.removeprefix("workspace_")
+    return ws_dir, ws_name
 
 
 def _get_workspace_meta(update: Update) -> WorkspaceMeta:

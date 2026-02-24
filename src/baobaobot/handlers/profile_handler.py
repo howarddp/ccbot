@@ -16,6 +16,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_reply
+from ..handlers.workspace_resolver import resolve_workspace_for_update
 from ..persona.profile import (
     ensure_user_profile,
     read_user_profile_with_source,
@@ -30,19 +31,7 @@ def _resolve_workspace_for_thread(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> Path | None:
     """Resolve the workspace directory for the current topic."""
-    agent_ctx = context.bot_data["agent_ctx"]
-    rk = agent_ctx.router.extract_routing_key(update)
-    if rk is None:
-        return None
-
-    wid = agent_ctx.router.get_window(rk, agent_ctx)
-    if not wid:
-        return None
-
-    display_name = agent_ctx.session_manager.get_display_name(wid)
-    agent_prefix = f"{agent_ctx.config.name}/"
-    ws_name = display_name.removeprefix(agent_prefix)
-    return agent_ctx.config.workspace_dir_for(ws_name)
+    return resolve_workspace_for_update(update, context)
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

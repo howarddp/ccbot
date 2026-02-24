@@ -155,16 +155,17 @@ class TestBuildSystemKeyboard:
 
 
 class TestBuildConfigKeyboard:
-    def test_has_two_buttons(self):
+    def test_has_three_buttons(self):
         kb = _build_config_keyboard()
         buttons = [btn for row in kb.inline_keyboard for btn in row]
-        assert len(buttons) == 2
+        assert len(buttons) == 3
 
     def test_button_labels(self):
         kb = _build_config_keyboard()
         labels = [btn.text for row in kb.inline_keyboard for btn in row]
         assert "🫀 Agent Soul" in labels
         assert "👤 Profile" in labels
+        assert "📋 Important" in labels
 
     def test_callback_data_prefix(self):
         kb = _build_config_keyboard()

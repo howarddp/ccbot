@@ -139,6 +139,18 @@ class ClaudeMdAssembler:
         result = result.replace("{{USERS_DIR}}", str(self.shared_dir / "users"))
         result = result.replace("{{WORKSPACE_DIR}}", str(self.workspace_dir))
         result = result.replace("{{LOCALE}}", self.locale)
+
+        # Inject workspace important instructions
+        important_path = self.workspace_dir / ".persona" / "important.md"
+        workspace_important = self._read_file(important_path) if important_path.exists() else ""
+        result = result.replace(
+            "{{WORKSPACE_IMPORTANT_INSTRUCTIONS}}",
+            f"\n{workspace_important}" if workspace_important else "",
+        )
+
+        # Collapse runs of 3+ newlines to at most 2 (prevents blank-line artifacts from empty placeholders)
+        import re
+        result = re.sub(r"\n{3,}", "\n\n", result)
         return result
 
     def write(self) -> None:
@@ -183,6 +195,14 @@ class ClaudeMdAssembler:
         exp_dir = self.workspace_dir / "memory" / "experience"
         if exp_dir.is_dir():
             self._source_mtimes["experience_dir"] = exp_dir.stat().st_mtime
+
+        # Track workspace important instructions
+        important_path = self.workspace_dir / ".persona" / "important.md"
+        self._source_mtimes["local:important.md:exists"] = (
+            1.0 if important_path.exists() else 0.0
+        )
+        if important_path.exists():
+            self._source_mtimes["local:important.md"] = important_path.stat().st_mtime
 
         # Track user profile files (shared and workspace-local)
         if self.allowed_users:
@@ -245,6 +265,20 @@ class ClaudeMdAssembler:
                     cached = self._source_mtimes.get(f"{source}:{filename}", 0)
                     if current_mtime > cached:
                         return True
+
+        # Check workspace important instructions
+        important_path = self.workspace_dir / ".persona" / "important.md"
+        important_exists = important_path.exists()
+        cached_important_exists = (
+            self._source_mtimes.get("local:important.md:exists", 0.0) == 1.0
+        )
+        if important_exists != cached_important_exists:
+            return True
+        if important_exists:
+            current = important_path.stat().st_mtime
+            cached = self._source_mtimes.get("local:important.md", 0)
+            if current > cached:
+                return True
 
         # Check experience directory for added/removed files
         exp_dir = self.workspace_dir / "memory" / "experience"

@@ -1,5 +1,13 @@
 # Agents
 
+## Important Instructions
+
+- Do not modify code or files unless explicitly instructed by the user. Do not run `git commit` or `git push` on your own initiative.
+- Do not access paths outside the workspace directory unless explicitly instructed by the user.
+- Users interact with you via mobile phone. Keep responses concise and easy to read on a small screen. Use short paragraphs, bullet points, and code blocks where appropriate. Avoid overly long walls of text. Send images (screenshots, diagrams) when they would be clearer than text.
+
+{{WORKSPACE_IMPORTANT_INSTRUCTIONS}}
+
 ## User Identification
 
 - Messages are formatted as `[Username|user_id] content`, e.g. `[Alice|7012345678] fix that bug`
