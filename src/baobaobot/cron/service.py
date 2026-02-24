@@ -49,6 +49,18 @@ _CONSOLIDATION_INTERVAL_S = 7 * 24 * 3600
 # Daily memories older than this many days are candidates for consolidation
 _CONSOLIDATION_AGE_DAYS = 21
 
+# System job name for tmp directory cleanup
+_SYSTEM_TMP_CLEANUP_JOB_NAME = "_system:tmp_cleanup"
+
+# Tmp cleanup interval: once per day
+_TMP_CLEANUP_INTERVAL_S = 86400
+
+# Voice files older than 7 days
+_TMP_VOICE_MAX_AGE_S = 7 * 86400
+
+# Other tmp files older than 30 days
+_TMP_DEFAULT_MAX_AGE_S = 30 * 86400
+
 # Idle threshold: JSONL must not have been written to in the last N seconds
 _IDLE_THRESHOLD_S = 60
 
@@ -403,6 +415,26 @@ class CronService:
                         job.state.last_status = "skipped"
                         continue
 
+                # System tmp cleanup: run directly, no tmux needed
+                if job.system and job.name == _SYSTEM_TMP_CLEANUP_JOB_NAME:
+                    ws_dir = self._workspace_dirs.get(ws_name)
+                    if ws_dir:
+                        deleted = self._run_tmp_cleanup(ws_dir)
+                        job.state.last_run_at = now
+                        job.state.last_status = "ok"
+                        job.state.last_error = ""
+                        job.state.consecutive_errors = 0
+                        job.state.next_run_at = compute_next_run(
+                            job.schedule, time.time(), self._cron_default_tz
+                        )
+                        logger.info(
+                            "Tmp cleanup job %s: deleted %d file(s) in %s",
+                            job.id,
+                            deleted,
+                            ws_name,
+                        )
+                    continue
+
                 await self._execute_job(ws_name, job)
 
                 # Handle delete_after_run
@@ -602,6 +634,52 @@ class CronService:
 
         return False
 
+    # --- Tmp cleanup ---
+
+    def _run_tmp_cleanup(self, ws_dir: Path) -> int:
+        """Delete expired files from workspace tmp directory.
+
+        - tmp/voice/*: delete files older than _TMP_VOICE_MAX_AGE_S (7 days)
+        - tmp/* (top-level files only): delete files older than _TMP_DEFAULT_MAX_AGE_S (30 days)
+
+        Returns total number of deleted files.
+        """
+        now = time.time()
+        deleted = 0
+        tmp_dir = ws_dir / "tmp"
+        if not tmp_dir.is_dir():
+            return 0
+
+        # Clean voice files (7-day TTL)
+        voice_dir = tmp_dir / "voice"
+        if voice_dir.is_dir():
+            for f in voice_dir.iterdir():
+                if not f.is_file():
+                    continue
+                try:
+                    if (now - f.stat().st_mtime) > _TMP_VOICE_MAX_AGE_S:
+                        f.unlink()
+                        deleted += 1
+                except OSError as e:
+                    logger.warning("Failed to delete %s: %s", f, e)
+
+        # Clean top-level tmp files (30-day TTL)
+        for f in tmp_dir.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                if (now - f.stat().st_mtime) > _TMP_DEFAULT_MAX_AGE_S:
+                    f.unlink()
+                    deleted += 1
+            except OSError as e:
+                logger.warning("Failed to delete %s: %s", f, e)
+
+        if deleted:
+            logger.info(
+                "Tmp cleanup: deleted %d expired file(s) in %s", deleted, ws_dir
+            )
+        return deleted
+
     # --- Window resolution ---
 
     def _resolve_window(self, workspace_name: str) -> str | None:
@@ -745,6 +823,34 @@ class CronService:
                 changed = True
                 logger.info(
                     "Created system consolidation job %s in workspace %s",
+                    job.id,
+                    ws_name,
+                )
+
+            # Daily tmp cleanup job
+            has_tmp_cleanup = any(
+                j.name == _SYSTEM_TMP_CLEANUP_JOB_NAME for j in store.jobs
+            )
+            if not has_tmp_cleanup:
+                schedule = CronSchedule(
+                    kind="every", every_seconds=_TMP_CLEANUP_INTERVAL_S
+                )
+                next_run = compute_next_run(schedule, now, self._cron_default_tz)
+                job = CronJob(
+                    id=uuid.uuid4().hex[:8],
+                    name=_SYSTEM_TMP_CLEANUP_JOB_NAME,
+                    schedule=schedule,
+                    message="[System] tmp cleanup",
+                    enabled=True,
+                    system=True,
+                    created_at=now,
+                    updated_at=now,
+                    state=CronJobState(next_run_at=next_run),
+                )
+                store.jobs.append(job)
+                changed = True
+                logger.info(
+                    "Created system tmp cleanup job %s in workspace %s",
                     job.id,
                     ws_name,
                 )

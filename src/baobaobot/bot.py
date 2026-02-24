@@ -698,7 +698,12 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ext = ".mp4"
         filename = f"file_{ts}{ext}"
 
-    dest = tmp_dir / filename
+    if msg.voice:
+        voice_dir = tmp_dir / "voice"
+        voice_dir.mkdir(exist_ok=True)
+        dest = voice_dir / filename
+    else:
+        dest = tmp_dir / filename
     await file_obj.download_to_drive(str(dest))
     logger.info(
         "Downloaded file to %s (user=%d, session_key=%d)", dest, user.id, rk.session_key
@@ -1470,9 +1475,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 if size <= max_inline:
                     try:
                         content = file_path.read_text(errors="replace")[:4000]
-                        await safe_edit(
-                            query, f"📄 `{name}`\n\n```\n{content}\n```"
-                        )
+                        await safe_edit(query, f"📄 `{name}`\n\n```\n{content}\n```")
                     except Exception:
                         await safe_edit(query, f"❌ Cannot read `{name}`.")
                 else:
@@ -1501,9 +1504,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 Path(parent).resolve().relative_to(Path(root).resolve())
             except ValueError:
                 parent = root
-        text, keyboard, new_entries = build_file_browser(
-            parent, page=0, root_path=root
-        )
+        text, keyboard, new_entries = build_file_browser(parent, page=0, root_path=root)
         if context.user_data is not None:
             context.user_data[LS_PATH_KEY] = parent
             context.user_data[LS_ENTRIES_KEY] = new_entries
