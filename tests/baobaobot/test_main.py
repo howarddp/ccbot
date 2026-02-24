@@ -1,11 +1,13 @@
 """Tests for main.main() entry point — tmux auto-launch logic."""
 
+import logging
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from baobaobot.main import main
+from baobaobot.main import _check_optional_deps, main
 
 # Patches needed when main() reaches the bot startup path (past tmux check).
 _BOT_STARTUP_PATCHES = (
@@ -103,3 +105,41 @@ class TestMainSubcommands:
             main()
             mock_add.assert_called_once()
             mock_tmux.assert_not_called()
+
+
+class TestCheckOptionalDeps:
+    def test_no_whisper_model_skips_check(self, caplog):
+        """No agent uses whisper_model — no import attempted, no warning."""
+        cfg = SimpleNamespace(whisper_model="")
+        with caplog.at_level(logging.WARNING):
+            _check_optional_deps([cfg])
+        assert "faster-whisper" not in caplog.text
+
+    def test_whisper_available_no_warning(self, caplog):
+        """whisper_model set and faster_whisper importable — no warning."""
+        cfg = SimpleNamespace(whisper_model="small")
+        with (
+            patch.dict("sys.modules", {"faster_whisper": MagicMock()}),
+            caplog.at_level(logging.WARNING),
+        ):
+            _check_optional_deps([cfg])
+        assert "faster-whisper" not in caplog.text
+
+    def test_whisper_missing_logs_warning(self, caplog):
+        """whisper_model set but faster_whisper missing — logs warning."""
+        cfg = SimpleNamespace(whisper_model="small")
+        with (
+            patch.dict("sys.modules", {"faster_whisper": None}),
+            patch("builtins.__import__", side_effect=_fake_import),
+            caplog.at_level(logging.WARNING),
+        ):
+            _check_optional_deps([cfg])
+        assert "faster-whisper not installed" in caplog.text
+        assert "uv sync --extra voice" in caplog.text
+
+
+def _fake_import(name, *args, **kwargs):
+    """Raise ImportError only for faster_whisper."""
+    if name == "faster_whisper":
+        raise ImportError("No module named 'faster_whisper'")
+    return __builtins__.__import__(name, *args, **kwargs)  # type: ignore[union-attr]

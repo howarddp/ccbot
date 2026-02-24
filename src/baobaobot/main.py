@@ -420,6 +420,19 @@ mode = "{mode}"
     print("\nDone! Restart baobaobot to activate the new agent.")
 
 
+def _check_optional_deps(configs: list) -> None:
+    """Warn about missing optional dependencies at startup."""
+    needs_whisper = any(getattr(c, "whisper_model", "") for c in configs)
+    if needs_whisper:
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            logging.getLogger(__name__).warning(
+                "faster-whisper not installed — voice transcription disabled. "
+                "Fix: uv sync --extra voice"
+            )
+
+
 def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:
     """Create a tmux session and re-launch baobaobot inside it."""
     window_name = "__main__"
@@ -590,6 +603,8 @@ def main() -> None:
 
     logging.getLogger("baobaobot").setLevel(logging.DEBUG)
     logger = logging.getLogger(__name__)
+
+    _check_optional_deps(agent_configs)
 
     agent_contexts: list[AgentContext] = []
 
