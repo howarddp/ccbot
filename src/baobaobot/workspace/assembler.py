@@ -70,14 +70,24 @@ class ClaudeMdAssembler:
             lines.append(f"- `{name}` → memory/experience/{name}.md")
         return "\n".join(lines)
 
+    def _resolve_agentsoul_path(self) -> Path:
+        """Return workspace-local AGENTSOUL.md if it exists, else shared."""
+        local = self.workspace_dir / ".persona" / "AGENTSOUL.md"
+        if local.is_file():
+            return local
+        return self.shared_dir / "AGENTSOUL.md"
+
     def assemble(self) -> str:
         """Build the full CLAUDE.md content from source files."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         parts: list[str] = [_HEADER.format(timestamp=timestamp)]
 
         for filename, section_title, source in _SECTION_ORDER:
-            source_dir = self._resolve_source_dir(source)
-            filepath = source_dir / filename
+            if filename == "AGENTSOUL.md":
+                filepath = self._resolve_agentsoul_path()
+            else:
+                source_dir = self._resolve_source_dir(source)
+                filepath = source_dir / filename
             content = self._read_file(filepath)
             if content:
                 parts.append(f"---\n\n## {section_title}")
@@ -115,10 +125,24 @@ class ClaudeMdAssembler:
         """Cache modification times of source files and experience dir."""
         self._source_mtimes = {}
         for filename, _, source in _SECTION_ORDER:
-            source_dir = self._resolve_source_dir(source)
-            filepath = source_dir / filename
-            if filepath.exists():
-                self._source_mtimes[f"{source}:{filename}"] = filepath.stat().st_mtime
+            if filename == "AGENTSOUL.md":
+                # Track both local (.persona/) and shared paths
+                local = self.workspace_dir / ".persona" / "AGENTSOUL.md"
+                shared = self.shared_dir / "AGENTSOUL.md"
+                if local.exists():
+                    self._source_mtimes["local:AGENTSOUL.md"] = local.stat().st_mtime
+                self._source_mtimes["local:AGENTSOUL.md:exists"] = (
+                    1.0 if local.exists() else 0.0
+                )
+                if shared.exists():
+                    self._source_mtimes["shared:AGENTSOUL.md"] = shared.stat().st_mtime
+            else:
+                source_dir = self._resolve_source_dir(source)
+                filepath = source_dir / filename
+                if filepath.exists():
+                    self._source_mtimes[f"{source}:{filename}"] = (
+                        filepath.stat().st_mtime
+                    )
 
         # Track experience directory (mtime changes when files added/removed)
         exp_dir = self.workspace_dir / "memory" / "experience"
@@ -135,13 +159,39 @@ class ClaudeMdAssembler:
             return True
 
         for filename, _, source in _SECTION_ORDER:
-            source_dir = self._resolve_source_dir(source)
-            filepath = source_dir / filename
-            if filepath.exists():
-                current_mtime = filepath.stat().st_mtime
-                cached = self._source_mtimes.get(f"{source}:{filename}", 0)
-                if current_mtime > cached:
+            if filename == "AGENTSOUL.md":
+                local = self.workspace_dir / ".persona" / "AGENTSOUL.md"
+                shared = self.shared_dir / "AGENTSOUL.md"
+                local_exists = local.exists()
+                cached_exists = (
+                    self._source_mtimes.get("local:AGENTSOUL.md:exists", 0.0) == 1.0
+                )
+
+                # Local created or deleted → rebuild
+                if local_exists != cached_exists:
                     return True
+
+                if local_exists:
+                    # Local is authoritative — only check local mtime
+                    current = local.stat().st_mtime
+                    cached = self._source_mtimes.get("local:AGENTSOUL.md", 0)
+                    if current > cached:
+                        return True
+                else:
+                    # No local — check shared
+                    if shared.exists():
+                        current = shared.stat().st_mtime
+                        cached = self._source_mtimes.get("shared:AGENTSOUL.md", 0)
+                        if current > cached:
+                            return True
+            else:
+                source_dir = self._resolve_source_dir(source)
+                filepath = source_dir / filename
+                if filepath.exists():
+                    current_mtime = filepath.stat().st_mtime
+                    cached = self._source_mtimes.get(f"{source}:{filename}", 0)
+                    if current_mtime > cached:
+                        return True
 
         # Check experience directory for added/removed files
         exp_dir = self.workspace_dir / "memory" / "experience"

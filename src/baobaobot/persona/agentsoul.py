@@ -3,6 +3,10 @@
 Merges the former SOUL.md (personality/tone/boundaries) and IDENTITY.md
 (name/role/emoji/vibe) into a single AGENTSOUL.md file.
 
+Supports per-workspace overrides via copy-on-write: when ``workspace_dir``
+is given and contains its own ``AGENTSOUL.md``, that file takes precedence
+over the shared one.
+
 Key dataclass: AgentIdentity.
 Key functions: read_agentsoul(), write_agentsoul(), read_identity(), update_identity().
 """
@@ -49,20 +53,66 @@ class AgentIdentity:
     vibe: str = "warm, dependable, sharp"
 
 
-def read_agentsoul(shared_dir: Path) -> str:
-    """Read AGENTSOUL.md content from the shared directory."""
-    path = shared_dir / "AGENTSOUL.md"
+def resolve_agentsoul_path(
+    shared_dir: Path, workspace_dir: Path | None = None
+) -> tuple[Path, bool]:
+    """Resolve which AGENTSOUL.md to read.
+
+    The workspace-local copy lives in ``.persona/AGENTSOUL.md`` (hidden
+    directory) so Claude Code does not read it as a separate instructions
+    file — the content is already embedded in the assembled ``CLAUDE.md``.
+
+    Returns:
+        (path, is_local) — *is_local* is True when the workspace has its own copy.
+    """
+    if workspace_dir is not None:
+        local = workspace_dir / ".persona" / "AGENTSOUL.md"
+        if local.is_file():
+            return local, True
+    return shared_dir / "AGENTSOUL.md", False
+
+
+def read_agentsoul(shared_dir: Path, workspace_dir: Path | None = None) -> str:
+    """Read AGENTSOUL.md, preferring a workspace-local copy when present."""
+    path, _ = resolve_agentsoul_path(shared_dir, workspace_dir)
     try:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
 
 
-def write_agentsoul(shared_dir: Path, content: str) -> None:
-    """Write new content to AGENTSOUL.md."""
-    path = shared_dir / "AGENTSOUL.md"
+def read_agentsoul_with_source(
+    shared_dir: Path, workspace_dir: Path | None = None
+) -> tuple[str, str]:
+    """Read AGENTSOUL.md and report its origin.
+
+    Returns:
+        (content, "local" | "shared")
+    """
+    path, is_local = resolve_agentsoul_path(shared_dir, workspace_dir)
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        content = ""
+    return content, "local" if is_local else "shared"
+
+
+def write_agentsoul(
+    shared_dir: Path, content: str, workspace_dir: Path | None = None
+) -> None:
+    """Write new content to AGENTSOUL.md.
+
+    When *workspace_dir* is given the file is written there (copy-on-write);
+    otherwise it goes to the shared directory.
+    """
+    if workspace_dir is not None:
+        persona_dir = workspace_dir / ".persona"
+        persona_dir.mkdir(exist_ok=True)
+        path = persona_dir / "AGENTSOUL.md"
+    else:
+        path = shared_dir / "AGENTSOUL.md"
     path.write_text(content.strip() + "\n", encoding="utf-8")
-    logger.info("Updated AGENTSOUL.md")
+    logger.info("Updated AGENTSOUL.md at %s", path)
 
 
 def parse_identity(content: str) -> AgentIdentity:
@@ -82,28 +132,32 @@ def parse_identity(content: str) -> AgentIdentity:
     return identity
 
 
-def read_identity(shared_dir: Path) -> AgentIdentity:
+def read_identity(shared_dir: Path, workspace_dir: Path | None = None) -> AgentIdentity:
     """Read and parse identity fields from AGENTSOUL.md."""
-    content = read_agentsoul(shared_dir)
+    content = read_agentsoul(shared_dir, workspace_dir)
     if not content:
         return AgentIdentity()
     return parse_identity(content)
 
 
-def update_identity(shared_dir: Path, **kwargs: str) -> AgentIdentity:
+def update_identity(
+    shared_dir: Path, workspace_dir: Path | None = None, **kwargs: str
+) -> AgentIdentity:
     """Update specific identity fields in AGENTSOUL.md.
 
-    Updates the identity fields in the ## Identity section while
-    preserving all other sections (Personality, Tone, Boundaries, etc.).
+    Uses copy-on-write: reads from the effective source (workspace-local if
+    present, otherwise shared), applies the changes, and writes to
+    *workspace_dir* when given — or *shared_dir* otherwise.
 
     Args:
         shared_dir: Path to shared directory.
+        workspace_dir: Optional workspace directory for per-workspace override.
         **kwargs: Fields to update (name, role, emoji, vibe).
 
     Returns:
         Updated AgentIdentity.
     """
-    content = read_agentsoul(shared_dir)
+    content = read_agentsoul(shared_dir, workspace_dir)
     identity = parse_identity(content) if content else AgentIdentity()
 
     for field, value in kwargs.items():
@@ -156,7 +210,7 @@ def update_identity(shared_dir: Path, **kwargs: str) -> AgentIdentity:
             else:
                 new_content = f"# Agent Soul\n\n{new_identity_section}\n\n{content}"
 
-    write_agentsoul(shared_dir, new_content)
+    write_agentsoul(shared_dir, new_content, workspace_dir=workspace_dir)
     logger.info("Updated identity fields in AGENTSOUL.md: %s", kwargs)
 
     return identity

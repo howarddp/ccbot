@@ -3,34 +3,76 @@
 Provides read/edit operations for AGENTSOUL.md (merged personality + identity)
 through Telegram bot commands. Edit mode accepts the next message as new content.
 
-Persona files live in config.shared_dir (shared across all topics).
+Supports per-workspace overrides via copy-on-write: when used in a topic bound
+to a workspace, edits are written to that workspace's own AGENTSOUL.md.
 
 Key functions: agentsoul_command().
 """
 
 import logging
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from ..handlers.message_sender import safe_reply
 from ..persona.agentsoul import (
-    read_agentsoul,
+    read_agentsoul_with_source,
     read_identity,
     update_identity,
     write_agentsoul,
 )
-from ..workspace.assembler import rebuild_all_workspaces
+from ..workspace.assembler import ClaudeMdAssembler, rebuild_all_workspaces
 
 logger = logging.getLogger(__name__)
 
 # Track users in edit mode: user_id -> edit_target ("agentsoul")
 _edit_mode: dict[int, str] = {}
 
+# Workspace dir captured when edit mode starts: user_id -> workspace_dir or None
+_edit_workspace: dict[int, Path | None] = {}
+
 
 def _cfg(context: ContextTypes.DEFAULT_TYPE):
     """Get AgentConfig from context."""
     return context.bot_data["agent_ctx"].config
+
+
+def _resolve_workspace_for_thread(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> Path | None:
+    """Resolve the workspace directory for the current topic.
+
+    Reuses the same routing logic as memory_handler.
+    """
+    agent_ctx = context.bot_data["agent_ctx"]
+    rk = agent_ctx.router.extract_routing_key(update)
+    if rk is None:
+        return None
+
+    wid = agent_ctx.router.get_window(rk, agent_ctx)
+    if not wid:
+        return None
+
+    display_name = agent_ctx.session_manager.get_display_name(wid)
+    agent_prefix = f"{agent_ctx.config.name}/"
+    ws_name = display_name.removeprefix(agent_prefix)
+    return agent_ctx.config.workspace_dir_for(ws_name)
+
+
+def _rebuild_after_edit(cfg, workspace_dir: Path | None) -> None:  # type: ignore[no-untyped-def]
+    """Rebuild CLAUDE.md after an AGENTSOUL.md edit.
+
+    If *workspace_dir* is known, only rebuild that single workspace.
+    Otherwise fall back to rebuilding all workspaces.
+    """
+    if workspace_dir is not None:
+        assembler = ClaudeMdAssembler(cfg.shared_dir, workspace_dir, locale=cfg.locale)
+        assembler.write()
+    else:
+        rebuild_all_workspaces(
+            cfg.shared_dir, cfg.iter_workspace_dirs(), locale=cfg.locale
+        )
 
 
 async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,12 +88,14 @@ async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     cfg = _cfg(context)
+    ws_dir = _resolve_workspace_for_thread(update, context)
     text = (update.message.text or "").strip()
     parts = text.split(maxsplit=3)
 
     # /agentsoul edit
     if len(parts) >= 2 and parts[1].strip().lower() == "edit":
         _edit_mode[user.id] = "agentsoul"
+        _edit_workspace[user.id] = ws_dir
         await safe_reply(
             update.message,
             "✏️ Send the new AGENTSOUL.md content. "
@@ -73,26 +117,29 @@ async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             return
 
-        updated = update_identity(cfg.shared_dir, **{field_map[field]: value})
-        rebuild_all_workspaces(
-            cfg.shared_dir, cfg.iter_workspace_dirs(), locale=cfg.locale
+        updated = update_identity(
+            cfg.shared_dir, workspace_dir=ws_dir, **{field_map[field]: value}
         )
+        _rebuild_after_edit(cfg, ws_dir)
+        source_label = "📌 workspace 專用" if ws_dir else "🌐 共用"
         await safe_reply(
             update.message,
-            f"✅ Updated {field} = {value}\n\n"
+            f"✅ Updated {field} = {value} ({source_label})\n\n"
             f"🪪 {updated.emoji} **{updated.name}** — {updated.role}\n"
             f"Vibe: {updated.vibe}",
         )
         return
 
     # Show current agentsoul
-    content = read_agentsoul(cfg.shared_dir)
+    content, source = read_agentsoul_with_source(cfg.shared_dir, ws_dir)
     if content:
-        identity = read_identity(cfg.shared_dir)
+        identity = read_identity(cfg.shared_dir, ws_dir)
+        source_label = "📌 workspace 專用" if source == "local" else "🌐 共用"
         await safe_reply(
             update.message,
             f"🪪 {identity.emoji} **{identity.name}** — {identity.role}\n"
-            f"Vibe: {identity.vibe}\n\n"
+            f"Vibe: {identity.vibe}\n"
+            f"Source: {source_label}\n\n"
             f"---\n\n"
             f"{content}\n\n"
             f"Use `/agentsoul set <field> <value>` to modify identity fields\n"
@@ -118,6 +165,7 @@ async def handle_edit_mode_message(
     if not target:
         return False
 
+    ws_dir = _edit_workspace.pop(user.id, None)
     text = update.message.text.strip()
 
     if text.lower() == "/cancel":
@@ -126,11 +174,10 @@ async def handle_edit_mode_message(
 
     if target == "agentsoul":
         cfg = _cfg(context)
-        write_agentsoul(cfg.shared_dir, text)
-        rebuild_all_workspaces(
-            cfg.shared_dir, cfg.iter_workspace_dirs(), locale=cfg.locale
-        )
-        await safe_reply(update.message, "✅ AGENTSOUL.md updated!")
+        write_agentsoul(cfg.shared_dir, text, workspace_dir=ws_dir)
+        _rebuild_after_edit(cfg, ws_dir)
+        source_label = "📌 workspace 專用" if ws_dir else "🌐 共用"
+        await safe_reply(update.message, f"✅ AGENTSOUL.md updated! ({source_label})")
         return True
 
     return False
@@ -144,6 +191,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if user.id in _edit_mode:
         del _edit_mode[user.id]
+        _edit_workspace.pop(user.id, None)
         await safe_reply(update.message, "❌ Edit cancelled.")
     else:
         await safe_reply(update.message, "No operation in progress.")

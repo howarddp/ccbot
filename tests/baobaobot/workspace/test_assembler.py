@@ -250,3 +250,71 @@ class TestExperienceListing:
         alpha_pos = content.index("alpha-topic")
         zebra_pos = content.index("zebra-topic")
         assert alpha_pos < zebra_pos
+
+
+def _local_agentsoul(workspace: Path) -> Path:
+    """Return .persona/AGENTSOUL.md path, creating .persona/ if needed."""
+    persona = workspace / ".persona"
+    persona.mkdir(exist_ok=True)
+    return persona / "AGENTSOUL.md"
+
+
+class TestLocalAgentsoul:
+    """Tests for workspace-local AGENTSOUL.md (copy-on-write via .persona/)."""
+
+    def test_prefers_local_agentsoul(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        _local_agentsoul(workspace).write_text("# Local Soul\n\n- Local personality")
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "Local personality" in content
+
+    def test_falls_back_to_shared(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        # No local AGENTSOUL.md — should use shared
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "Agent Soul" in content
+
+    def test_needs_rebuild_after_local_created(self, dirs: tuple[Path, Path]) -> None:
+        """Creating a workspace-local AGENTSOUL.md triggers rebuild."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+
+        import time
+
+        time.sleep(0.01)
+        _local_agentsoul(workspace).write_text("# Local Soul\n")
+        assert assembler.needs_rebuild() is True
+
+    def test_needs_rebuild_after_local_deleted(self, dirs: tuple[Path, Path]) -> None:
+        """Deleting the workspace-local AGENTSOUL.md triggers rebuild."""
+        shared, workspace = dirs
+        _local_agentsoul(workspace).write_text("# Local Soul\n")
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+
+        import time
+
+        time.sleep(0.01)
+        (workspace / ".persona" / "AGENTSOUL.md").unlink()
+        assert assembler.needs_rebuild() is True
+
+    def test_shared_change_ignored_when_local_exists(
+        self, dirs: tuple[Path, Path]
+    ) -> None:
+        """When local exists, shared changes don't trigger rebuild."""
+        shared, workspace = dirs
+        _local_agentsoul(workspace).write_text("# Local Soul\n")
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+
+        import time
+
+        time.sleep(0.01)
+        (shared / "AGENTSOUL.md").write_text("# Updated Shared\n")
+        assert assembler.needs_rebuild() is False

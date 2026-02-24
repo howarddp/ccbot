@@ -8,7 +8,9 @@ from baobaobot.persona.agentsoul import (
     AgentIdentity,
     parse_identity,
     read_agentsoul,
+    read_agentsoul_with_source,
     read_identity,
+    resolve_agentsoul_path,
     update_identity,
     write_agentsoul,
 )
@@ -22,6 +24,20 @@ def shared_dir(tmp_path: Path) -> Path:
     wm = WorkspaceManager(shared, ws)
     wm.init_shared()
     return shared
+
+
+@pytest.fixture
+def workspace_dir(tmp_path: Path) -> Path:
+    ws = tmp_path / "workspace_local"
+    ws.mkdir()
+    return ws
+
+
+def _local_agentsoul(workspace_dir: Path) -> Path:
+    """Return the .persona/AGENTSOUL.md path, creating .persona/ if needed."""
+    persona = workspace_dir / ".persona"
+    persona.mkdir(exist_ok=True)
+    return persona / "AGENTSOUL.md"
 
 
 class TestReadAgentsoul:
@@ -165,3 +181,101 @@ class TestUpdateIdentity:
         updated = update_identity(tmp_path, name="NewBot")
         assert updated.name == "NewBot"
         assert (tmp_path / "AGENTSOUL.md").is_file()
+
+
+class TestResolveAgentsoulPath:
+    def test_falls_back_to_shared(self, shared_dir: Path, workspace_dir: Path) -> None:
+        path, is_local = resolve_agentsoul_path(shared_dir, workspace_dir)
+        assert path == shared_dir / "AGENTSOUL.md"
+        assert is_local is False
+
+    def test_prefers_local(self, shared_dir: Path, workspace_dir: Path) -> None:
+        _local_agentsoul(workspace_dir).write_text("# Local Soul\n")
+        path, is_local = resolve_agentsoul_path(shared_dir, workspace_dir)
+        assert path == workspace_dir / ".persona" / "AGENTSOUL.md"
+        assert is_local is True
+
+    def test_no_workspace_dir(self, shared_dir: Path) -> None:
+        path, is_local = resolve_agentsoul_path(shared_dir, None)
+        assert path == shared_dir / "AGENTSOUL.md"
+        assert is_local is False
+
+
+class TestReadAgentsoulWithWorkspace:
+    def test_read_falls_back_to_shared(
+        self, shared_dir: Path, workspace_dir: Path
+    ) -> None:
+        content = read_agentsoul(shared_dir, workspace_dir)
+        assert "Agent Soul" in content
+
+    def test_read_prefers_local(self, shared_dir: Path, workspace_dir: Path) -> None:
+        _local_agentsoul(workspace_dir).write_text("# Local Only\n")
+        content = read_agentsoul(shared_dir, workspace_dir)
+        assert "Local Only" in content
+        assert "Agent Soul" not in content
+
+
+class TestReadAgentsoulWithSource:
+    def test_shared_source(self, shared_dir: Path, workspace_dir: Path) -> None:
+        content, source = read_agentsoul_with_source(shared_dir, workspace_dir)
+        assert source == "shared"
+        assert "Agent Soul" in content
+
+    def test_local_source(self, shared_dir: Path, workspace_dir: Path) -> None:
+        _local_agentsoul(workspace_dir).write_text("# Local Soul\n")
+        content, source = read_agentsoul_with_source(shared_dir, workspace_dir)
+        assert source == "local"
+        assert "Local Soul" in content
+
+
+class TestWriteAgentsoulToWorkspace:
+    def test_write_to_workspace(self, shared_dir: Path, workspace_dir: Path) -> None:
+        original_shared = read_agentsoul(shared_dir)
+        write_agentsoul(shared_dir, "# Workspace Soul\n", workspace_dir=workspace_dir)
+        # Workspace has the new content in .persona/
+        local = workspace_dir / ".persona" / "AGENTSOUL.md"
+        assert local.is_file()
+        assert "Workspace Soul" in local.read_text()
+        # Shared is unchanged
+        assert read_agentsoul(shared_dir) == original_shared
+
+    def test_write_without_workspace(self, shared_dir: Path) -> None:
+        write_agentsoul(shared_dir, "# Updated Shared\n")
+        assert "Updated Shared" in read_agentsoul(shared_dir)
+
+
+class TestUpdateIdentityCopyOnWrite:
+    def test_copy_on_write(self, shared_dir: Path, workspace_dir: Path) -> None:
+        """update_identity with workspace_dir writes to workspace, shared unchanged."""
+        original_shared = read_agentsoul(shared_dir)
+        updated = update_identity(
+            shared_dir, workspace_dir=workspace_dir, name="LocalBot"
+        )
+        assert updated.name == "LocalBot"
+        # Workspace got the modified file in .persona/
+        local = workspace_dir / ".persona" / "AGENTSOUL.md"
+        assert local.is_file()
+        assert "LocalBot" in local.read_text()
+        # Shared is unchanged
+        assert read_agentsoul(shared_dir) == original_shared
+
+    def test_update_existing_local(self, shared_dir: Path, workspace_dir: Path) -> None:
+        """When workspace already has AGENTSOUL.md, update_identity reads from it."""
+        _local_agentsoul(workspace_dir).write_text(
+            "# Agent Soul\n\n## Identity\n"
+            "- **Name**: LocalBot\n"
+            "- **Role**: Local Assistant\n"
+            "- **Emoji**: 🏠\n"
+            "- **Vibe**: cozy\n"
+        )
+        updated = update_identity(
+            shared_dir, workspace_dir=workspace_dir, vibe="energetic"
+        )
+        assert updated.name == "LocalBot"  # read from local
+        assert updated.vibe == "energetic"  # updated
+
+    def test_backward_compat_no_workspace(self, shared_dir: Path) -> None:
+        """Without workspace_dir, behaves exactly as before."""
+        updated = update_identity(shared_dir, name="TestBot")
+        assert updated.name == "TestBot"
+        assert "TestBot" in read_agentsoul(shared_dir)
