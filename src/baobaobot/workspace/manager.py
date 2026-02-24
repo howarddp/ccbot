@@ -53,6 +53,8 @@ _BIN_SCRIPTS = [
     "todo-update",
     "todo-remove",
     "todo-export",
+    "web-search",
+    "web-read",
 ]
 
 # Skills deployed to each per-topic workspace
@@ -74,6 +76,8 @@ _SKILL_NAMES = [
     "google-places",
     "google-directions",
     "google-geocoding",
+    "web-search",
+    "web-read",
 ]
 
 

@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Search the web via DuckDuckGo.
+
+Usage:
+    web-search "query" [--limit N] [--region REGION] [--time RANGE]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import textwrap
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Search the web via DuckDuckGo")
+    parser.add_argument("query", help="Search query")
+    parser.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
+    parser.add_argument("--region", default="wt-wt", help="Region code (default: wt-wt, tw-tzh for Taiwan)")
+    parser.add_argument("--time", default=None, choices=["d", "w", "m", "y"], help="Time range: d=day, w=week, m=month, y=year")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+    parser.add_argument("--news", action="store_true", help="Search news instead of web")
+    args = parser.parse_args()
+
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        print("Error: duckduckgo-search not installed. Run: pip install duckduckgo-search", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        ddgs = DDGS()
+        if args.news:
+            results = list(ddgs.news(
+                keywords=args.query,
+                region=args.region,
+                timelimit=args.time,
+                max_results=args.limit,
+            ))
+        else:
+            results = list(ddgs.text(
+                keywords=args.query,
+                region=args.region,
+                timelimit=args.time,
+                max_results=args.limit,
+            ))
+    except Exception as e:
+        print(f"Search error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not results:
+        print("No results found.")
+        return
+
+    if args.json_output:
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+        return
+
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "")
+        url = r.get("href") or r.get("url", "")
+        body = r.get("body") or r.get("description", "")
+        date = r.get("date", "")
+        snippet = textwrap.fill(body, width=80, initial_indent="   ", subsequent_indent="   ")
+        print(f"{i}. {title}")
+        if date:
+            print(f"   Date: {date}")
+        print(f"   {url}")
+        print(snippet)
+        print()
+
+    print(f"Found {len(results)} result(s).")
+
+
+if __name__ == "__main__":
+    main()

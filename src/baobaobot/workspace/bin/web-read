@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Extract clean text content from a web page.
+
+Usage:
+    web-read "URL" [--format markdown|text] [--length N]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract clean text from a web page")
+    parser.add_argument("url", help="URL to read")
+    parser.add_argument("--format", default="markdown", choices=["markdown", "text", "xml"], dest="out_format", help="Output format (default: markdown)")
+    parser.add_argument("--length", type=int, default=0, help="Max output length in chars (0=unlimited)")
+    parser.add_argument("--with-metadata", action="store_true", help="Include page metadata (title, author, date)")
+    args = parser.parse_args()
+
+    try:
+        import trafilatura
+    except ImportError:
+        print("Error: trafilatura not installed. Run: pip install trafilatura", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        downloaded = trafilatura.fetch_url(args.url)
+    except Exception as e:
+        print(f"Fetch error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if downloaded is None:
+        print(f"Failed to fetch: {args.url}", file=sys.stderr)
+        sys.exit(1)
+
+    output_format = "txt" if args.out_format == "text" else args.out_format
+    result = trafilatura.extract(
+        downloaded,
+        output_format=output_format,
+        include_links=True,
+        include_images=True,
+        include_tables=True,
+        with_metadata=args.with_metadata,
+    )
+
+    if result is None:
+        print("Could not extract content from this page.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.with_metadata:
+        metadata = trafilatura.extract_metadata(downloaded)
+        if metadata:
+            if metadata.title:
+                print(f"# {metadata.title}")
+            meta_parts = []
+            if metadata.author:
+                meta_parts.append(f"Author: {metadata.author}")
+            if metadata.date:
+                meta_parts.append(f"Date: {metadata.date}")
+            if metadata.sitename:
+                meta_parts.append(f"Site: {metadata.sitename}")
+            if meta_parts:
+                print(" | ".join(meta_parts))
+            print(f"URL: {args.url}")
+            print()
+
+    output = result
+    if args.length > 0 and len(output) > args.length:
+        output = output[:args.length] + "\n\n... [truncated]"
+
+    print(output)
+
+
+if __name__ == "__main__":
+    main()
