@@ -105,10 +105,10 @@ class TestBuildAgentKeyboard:
     def test_button_labels(self):
         kb = _build_agent_keyboard("@1")
         labels = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert "⎋ Esc" in labels
-        assert "🧹 Clear" in labels
-        assert "📦 Compact" in labels
-        assert "📊 Status" in labels
+        assert "/esc" in labels
+        assert "/clear" in labels
+        assert "/compact" in labels
+        assert "/status" in labels
 
     def test_callback_data_prefix(self):
         kb = _build_agent_keyboard("@5")
@@ -345,44 +345,21 @@ class TestHandleMenuCallbackCompact:
 
 class TestHandleMenuCallbackStatus:
     @pytest.mark.asyncio
-    async def test_shows_idle_status(self):
+    async def test_sends_status_command(self):
         agent_ctx = _make_agent_ctx()
-        # capture_pane returns idle prompt
-        agent_ctx.tmux_manager.capture_pane = AsyncMock(return_value="❯ ")
+        agent_ctx.session_manager.send_to_window = AsyncMock(return_value=(True, ""))
         update, query = _make_callback_update(f"{CB_MENU_AGENT}status:@1")
 
         with patch(
             "baobaobot.handlers.menu_handler.safe_reply", new_callable=AsyncMock
-        ) as mock_reply:
+        ):
             await handle_menu_callback(
                 update, _make_context(agent_ctx), query, query.data, agent_ctx
             )
 
-            mock_reply.assert_called_once()
-            text = mock_reply.call_args[0][1]
-            assert "Idle" in text
-            assert "abc12345" in text
-            assert "@1" in text
-
-    @pytest.mark.asyncio
-    async def test_shows_working_status(self):
-        agent_ctx = _make_agent_ctx()
-        # capture_pane returns active spinner
-        agent_ctx.tmux_manager.capture_pane = AsyncMock(
-            return_value="✻ Exploring codebase\n"
+        agent_ctx.session_manager.send_to_window.assert_called_once_with(
+            "@1", "/status"
         )
-        update, query = _make_callback_update(f"{CB_MENU_AGENT}status:@1")
-
-        with patch(
-            "baobaobot.handlers.menu_handler.safe_reply", new_callable=AsyncMock
-        ) as mock_reply:
-            await handle_menu_callback(
-                update, _make_context(agent_ctx), query, query.data, agent_ctx
-            )
-
-            text = mock_reply.call_args[0][1]
-            assert "Working" in text
-            assert "Exploring codebase" in text
 
 
 class TestHandleMenuCallbackHistory:

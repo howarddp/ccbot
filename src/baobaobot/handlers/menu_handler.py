@@ -14,7 +14,6 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, 
 from telegram.ext import ContextTypes
 
 from ..agent_context import AgentContext
-from ..terminal_parser import parse_status_line
 from .callback_data import (
     CB_KEYS_PREFIX,
     CB_MENU_AGENT,
@@ -51,21 +50,21 @@ def _build_agent_keyboard(wid: str) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    "⎋ Esc",
+                    "/esc",
                     callback_data=f"{CB_MENU_AGENT}esc:{wid}"[:64],
                 ),
                 InlineKeyboardButton(
-                    "🧹 Clear",
+                    "/clear",
                     callback_data=f"{CB_MENU_AGENT}clear:{wid}"[:64],
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "📦 Compact",
+                    "/compact",
                     callback_data=f"{CB_MENU_AGENT}compact:{wid}"[:64],
                 ),
                 InlineKeyboardButton(
-                    "📊 Status",
+                    "/status",
                     callback_data=f"{CB_MENU_AGENT}status:{wid}"[:64],
                 ),
             ],
@@ -351,47 +350,15 @@ async def _handle_compact(query: CallbackQuery, ctx: AgentContext, wid: str) -> 
 
 
 async def _handle_status(query: CallbackQuery, ctx: AgentContext, wid: str) -> None:
-    """Show session status: state, session ID, cwd, window."""
-    await query.answer()
-
+    """Forward /status to Claude Code via tmux."""
     display = ctx.session_manager.get_display_name(wid)
-    state = ctx.session_manager.get_window_state(wid)
-
-    # Determine running/idle from terminal
-    pane_text = await ctx.tmux_manager.capture_pane(wid)
-    status_line = parse_status_line(pane_text) if pane_text else None
-
-    if status_line:
-        state_str = "🟢 Working"
-        activity = status_line
+    success, message = await ctx.session_manager.send_to_window(wid, "/status")
+    if success:
+        await query.answer("📊 Checking status...")
+        if query.message:
+            await safe_reply(query.message, f"📊 [{display}] Sent: /status")
     else:
-        state_str = "💤 Idle"
-        activity = None
-
-    session_id = state.session_id or "—"
-    if len(session_id) > 8:
-        session_id_display = session_id[:8] + "…"
-    else:
-        session_id_display = session_id
-
-    cwd = state.cwd or "—"
-    # Shorten cwd for display
-    if len(cwd) > 50:
-        cwd = "…" + cwd[-47:]
-
-    lines = [
-        f"📊 *Session Status* — {display}",
-        "",
-        f"State: {state_str}",
-        f"Session: `{session_id_display}`",
-        f"CWD: `{cwd}`",
-        f"Window: `{wid}`",
-    ]
-    if activity:
-        lines.append(f"Activity: {activity}")
-
-    if query.message:
-        await safe_reply(query.message, "\n".join(lines))
+        await query.answer(f"❌ {message}", show_alert=True)
 
 
 async def _handle_history(query: CallbackQuery, ctx: AgentContext, wid: str) -> None:
