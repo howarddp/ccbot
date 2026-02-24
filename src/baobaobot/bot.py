@@ -473,7 +473,10 @@ async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     ctx = _ctx(context)
     assembler = ClaudeMdAssembler(
-        ctx.config.shared_dir, workspace_dir, locale=ctx.config.locale
+        ctx.config.shared_dir,
+        workspace_dir,
+        locale=ctx.config.locale,
+        allowed_users=ctx.config.allowed_users,
     )
     assembler.write()
     await safe_reply(
@@ -975,7 +978,10 @@ async def _auto_create_session(
 
     # Assemble CLAUDE.md
     assembler = ClaudeMdAssembler(
-        ctx.config.shared_dir, workspace_path, locale=ctx.config.locale
+        ctx.config.shared_dir,
+        workspace_path,
+        locale=ctx.config.locale,
+        allowed_users=ctx.config.allowed_users,
     )
     assembler.write()
 
@@ -2193,6 +2199,7 @@ async def post_init(application: Application) -> None:
             agent_ctx.config.shared_dir,
             workspace_dirs,
             locale=agent_ctx.config.locale,
+            allowed_users=agent_ctx.config.allowed_users,
         )
         if rebuilt:
             logger.info(

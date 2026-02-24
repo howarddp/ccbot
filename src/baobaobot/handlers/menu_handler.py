@@ -456,7 +456,10 @@ async def _handle_rebuild(
         return
 
     assembler = ClaudeMdAssembler(
-        ctx.config.shared_dir, workspace_dir, locale=ctx.config.locale
+        ctx.config.shared_dir,
+        workspace_dir,
+        locale=ctx.config.locale,
+        allowed_users=ctx.config.allowed_users,
     )
     assembler.write()
 
@@ -648,7 +651,7 @@ async def _handle_agentsoul(
     content, source = read_agentsoul_with_source(cfg.shared_dir, ws_dir)
     if content:
         identity = read_identity(cfg.shared_dir, ws_dir)
-        source_label = "📌 workspace 專用" if source == "local" else "🌐 共用"
+        source_label = "📌 workspace-local" if source == "local" else "🌐 shared"
         await safe_reply(
             query.message,
             f"🪪 {identity.emoji} **{identity.name}** — {identity.role}\n"
@@ -669,7 +672,7 @@ async def _handle_profile(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Show user profile (default /profile behavior)."""
-    from ..persona.profile import ensure_user_profile, read_user_profile
+    from ..persona.profile import ensure_user_profile, read_user_profile_with_source
 
     await query.answer()
     if not query.message:
@@ -680,16 +683,28 @@ async def _handle_profile(
         return
 
     ctx = _ctx(context)
-    users_dir = ctx.config.users_dir
+    cfg = ctx.config
 
     first_name = user.first_name or ""
     username = user.username or ""
-    ensure_user_profile(users_dir, user.id, first_name, username)
+    ensure_user_profile(cfg.users_dir, user.id, first_name, username)
 
-    profile = read_user_profile(users_dir, user.id)
+    # Resolve workspace for this topic
+    rk = ctx.router.extract_routing_key(update)
+    ws_dir = None
+    if rk:
+        wid = ctx.router.get_window(rk, ctx)
+        if wid:
+            display_name = ctx.session_manager.get_display_name(wid)
+            agent_prefix = f"{cfg.name}/"
+            ws_name = display_name.removeprefix(agent_prefix)
+            ws_dir = cfg.workspace_dir_for(ws_name)
+
+    profile, source = read_user_profile_with_source(cfg.users_dir, user.id, ws_dir)
+    source_label = "📌 workspace-local" if source == "local" else "🌐 shared"
     await safe_reply(
         query.message,
-        f"👤 **Profile** (`{user.id}`)\n\n"
+        f"👤 **Profile** (`{user.id}`) — {source_label}\n\n"
         f"Name: {profile.name}\n"
         f"Telegram: {profile.telegram or '(none)'}\n"
         f"Timezone: {profile.timezone}\n"

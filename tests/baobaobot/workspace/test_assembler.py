@@ -252,6 +252,152 @@ class TestExperienceListing:
         assert alpha_pos < zebra_pos
 
 
+class TestUserProfilesSection:
+    """Tests for embedded user profiles in CLAUDE.md."""
+
+    def test_profiles_embedded(self, dirs: tuple[Path, Path]) -> None:
+        """Allowed user profiles are embedded in CLAUDE.md."""
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice\n")
+
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset({111})
+        )
+        content = assembler.assemble()
+        assert "## User Profiles" in content
+        assert "### User 111" in content
+        assert "Alice" in content
+
+    def test_local_profile_preferred(self, dirs: tuple[Path, Path]) -> None:
+        """Workspace-local profile takes priority over shared."""
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Shared Alice\n")
+
+        persona = workspace / ".persona"
+        persona.mkdir(parents=True, exist_ok=True)
+        (persona / "111.md").write_text("# User\n\n- **Name**: Local Alice\n")
+
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset({111})
+        )
+        content = assembler.assemble()
+        assert "Local Alice" in content
+        assert "Shared Alice" not in content
+
+    def test_no_users_no_section(self, dirs: tuple[Path, Path]) -> None:
+        """Without allowed_users, no User Profiles section."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        content = assembler.assemble()
+        assert "## User Profiles" not in content
+
+    def test_empty_users_no_section(self, dirs: tuple[Path, Path]) -> None:
+        """With empty allowed_users, no User Profiles section."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset()
+        )
+        content = assembler.assemble()
+        assert "## User Profiles" not in content
+
+    def test_missing_profile_skipped(self, dirs: tuple[Path, Path]) -> None:
+        """Users without profile files are silently skipped."""
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice\n")
+
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset({111, 222})
+        )
+        content = assembler.assemble()
+        assert "### User 111" in content
+        assert "### User 222" not in content
+
+    def test_multiple_users_sorted(self, dirs: tuple[Path, Path]) -> None:
+        """Multiple users are sorted by user ID."""
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "222.md").write_text("# User\n\n- **Name**: Bob\n")
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice\n")
+
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset({111, 222})
+        )
+        content = assembler.assemble()
+        alice_pos = content.index("### User 111")
+        bob_pos = content.index("### User 222")
+        assert alice_pos < bob_pos
+
+
+class TestProfileMtimeRebuild:
+    """Tests for profile file change detection in needs_rebuild."""
+
+    def test_shared_profile_change_triggers_rebuild(
+        self, dirs: tuple[Path, Path]
+    ) -> None:
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice\n")
+
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset({111})
+        )
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+
+        import time
+
+        time.sleep(0.01)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice Updated\n")
+        assert assembler.needs_rebuild() is True
+
+    def test_local_profile_created_triggers_rebuild(
+        self, dirs: tuple[Path, Path]
+    ) -> None:
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice\n")
+
+        assembler = ClaudeMdAssembler(
+            shared, workspace, allowed_users=frozenset({111})
+        )
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+
+        import time
+
+        time.sleep(0.01)
+        persona = workspace / ".persona"
+        persona.mkdir(parents=True, exist_ok=True)
+        (persona / "111.md").write_text("# User\n\n- **Name**: Local Alice\n")
+        assert assembler.needs_rebuild() is True
+
+    def test_no_users_no_profile_rebuild(self, dirs: tuple[Path, Path]) -> None:
+        """Without allowed_users, profile changes don't trigger rebuild."""
+        shared, workspace = dirs
+        users_dir = shared / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Alice\n")
+
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+
+        import time
+
+        time.sleep(0.01)
+        (users_dir / "111.md").write_text("# User\n\n- **Name**: Updated\n")
+        assert assembler.needs_rebuild() is False
+
+
 def _local_agentsoul(workspace: Path) -> Path:
     """Return .persona/AGENTSOUL.md path, creating .persona/ if needed."""
     persona = workspace / ".persona"

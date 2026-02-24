@@ -67,11 +67,19 @@ def _rebuild_after_edit(cfg, workspace_dir: Path | None) -> None:  # type: ignor
     Otherwise fall back to rebuilding all workspaces.
     """
     if workspace_dir is not None:
-        assembler = ClaudeMdAssembler(cfg.shared_dir, workspace_dir, locale=cfg.locale)
+        assembler = ClaudeMdAssembler(
+            cfg.shared_dir,
+            workspace_dir,
+            locale=cfg.locale,
+            allowed_users=cfg.allowed_users,
+        )
         assembler.write()
     else:
         rebuild_all_workspaces(
-            cfg.shared_dir, cfg.iter_workspace_dirs(), locale=cfg.locale
+            cfg.shared_dir,
+            cfg.iter_workspace_dirs(),
+            locale=cfg.locale,
+            allowed_users=cfg.allowed_users,
         )
 
 
@@ -121,7 +129,7 @@ async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             cfg.shared_dir, workspace_dir=ws_dir, **{field_map[field]: value}
         )
         _rebuild_after_edit(cfg, ws_dir)
-        source_label = "📌 workspace 專用" if ws_dir else "🌐 共用"
+        source_label = "📌 workspace-local" if ws_dir else "🌐 shared"
         await safe_reply(
             update.message,
             f"✅ Updated {field} = {value} ({source_label})\n\n"
@@ -134,7 +142,7 @@ async def agentsoul_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     content, source = read_agentsoul_with_source(cfg.shared_dir, ws_dir)
     if content:
         identity = read_identity(cfg.shared_dir, ws_dir)
-        source_label = "📌 workspace 專用" if source == "local" else "🌐 共用"
+        source_label = "📌 workspace-local" if source == "local" else "🌐 shared"
         await safe_reply(
             update.message,
             f"🪪 {identity.emoji} **{identity.name}** — {identity.role}\n"
@@ -176,7 +184,7 @@ async def handle_edit_mode_message(
         cfg = _cfg(context)
         write_agentsoul(cfg.shared_dir, text, workspace_dir=ws_dir)
         _rebuild_after_edit(cfg, ws_dir)
-        source_label = "📌 workspace 專用" if ws_dir else "🌐 共用"
+        source_label = "📌 workspace-local" if ws_dir else "🌐 shared"
         await safe_reply(update.message, f"✅ AGENTSOUL.md updated! ({source_label})")
         return True
 

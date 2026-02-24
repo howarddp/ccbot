@@ -382,6 +382,105 @@ def ensure_user_profile(
     return create_user_profile(users_dir, user_id, name, telegram_username)
 
 
+def resolve_user_profile_path(
+    users_dir: Path, user_id: int, workspace_dir: Path | None = None
+) -> tuple[Path, bool]:
+    """Return the resolved profile path, checking workspace-local first.
+
+    Args:
+        users_dir: Shared users/ directory.
+        user_id: Telegram user ID.
+        workspace_dir: Optional workspace directory with .persona/ overrides.
+
+    Returns:
+        (path, is_local) — path to the profile file and whether it's workspace-local.
+    """
+    if workspace_dir is not None:
+        local = workspace_dir / ".persona" / f"{user_id}.md"
+        if local.is_file():
+            return local, True
+    return _user_profile_path(users_dir, user_id), False
+
+
+def read_user_profile_with_source(
+    users_dir: Path, user_id: int, workspace_dir: Path | None = None
+) -> tuple[UserProfile, str]:
+    """Read a user profile with workspace resolution, reporting source.
+
+    Returns:
+        (UserProfile, "local"|"shared") — the profile and its source.
+        Does NOT use _profile_cache (same user_id may have different profiles).
+    """
+    path, is_local = resolve_user_profile_path(users_dir, user_id, workspace_dir)
+    try:
+        content = path.read_text(encoding="utf-8")
+        return parse_profile(content), "local" if is_local else "shared"
+    except OSError:
+        return UserProfile(), "shared"
+
+
+def read_user_profile_resolved(
+    users_dir: Path, user_id: int, workspace_dir: Path | None = None
+) -> UserProfile:
+    """Read a user profile with workspace resolution.
+
+    Workspace-local .persona/<user_id>.md takes priority over shared.
+    Does NOT use _profile_cache.
+    """
+    profile, _ = read_user_profile_with_source(users_dir, user_id, workspace_dir)
+    return profile
+
+
+def read_user_profile_raw_resolved(
+    users_dir: Path, user_id: int, workspace_dir: Path | None = None
+) -> str:
+    """Read raw user profile content with workspace resolution.
+
+    Returns the raw markdown content, suitable for embedding in CLAUDE.md.
+    """
+    path, _ = resolve_user_profile_path(users_dir, user_id, workspace_dir)
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_user_profile(
+    users_dir: Path, user_id: int, workspace_dir: Path | None = None, **kwargs: str
+) -> UserProfile:
+    """Update a user profile with copy-on-write workspace support.
+
+    When workspace_dir is provided, writes to .persona/<user_id>.md
+    (creating it from shared if it doesn't exist yet).
+    When workspace_dir is None, writes to shared users/<user_id>.md.
+
+    Invalidates _profile_cache for the user_id to ensure consistency.
+    """
+    if workspace_dir is not None:
+        # Copy-on-write: read from resolved path, write to workspace-local
+        profile = read_user_profile_resolved(users_dir, user_id, workspace_dir)
+        for attr, value in kwargs.items():
+            if hasattr(profile, attr) and value:
+                setattr(profile, attr, value)
+        persona_dir = workspace_dir / ".persona"
+        persona_dir.mkdir(parents=True, exist_ok=True)
+        target = persona_dir / f"{user_id}.md"
+        target.write_text(_serialize_user_profile(profile), encoding="utf-8")
+    else:
+        # Write to shared (same as update_user_profile but cache-safe)
+        profile = read_user_profile(users_dir, user_id)
+        for attr, value in kwargs.items():
+            if hasattr(profile, attr) and value:
+                setattr(profile, attr, value)
+        profile_path = _user_profile_path(users_dir, user_id)
+        profile_path.write_text(_serialize_user_profile(profile), encoding="utf-8")
+
+    # Invalidate cache — same user_id may now resolve differently
+    _profile_cache.pop(user_id, None)
+    logger.info("Wrote user profile %d (workspace=%s): %s", user_id, workspace_dir, kwargs)
+    return profile
+
+
 def convert_user_mentions(text: str, users_dir: Path) -> str:
     """Convert @[user_id] markers to Telegram mention format.
 

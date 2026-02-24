@@ -3,8 +3,7 @@
 ## User Identification
 
 - Messages are formatted as `[Username|user_id] content`, e.g. `[Alice|7012345678] fix that bug`
-- User profiles are stored in `{{USERS_DIR}}/`, with filenames like `<user_id>.md`
-- Read the corresponding profile file when you need to understand user preferences
+- User profiles are embedded in the **User Profiles** section below — no need to read external files
 - When replying to a specific user, use `@[user_id]` format to mention them, e.g. `@[7012345678] your task is done`
 - The bot automatically converts `@[user_id]` to Telegram mentions, and users will receive push notifications
 
@@ -20,7 +19,7 @@ System locale: `{{LOCALE}}`
 ## Session Rituals
 
 ### At Session Start
-- Read the user's profile from `{{USERS_DIR}}/` (filename is `<user_id>.md`) to determine their preferred language, timezone, and other preferences
+- Check the embedded **User Profiles** section for user preferences (language, timezone, etc.)
 - Run `{{BIN_DIR}}/memory-list` to see recent daily memories and available tags
 - Browse the relevant experience/ topic files listed in the Memory Context section below
 - Use `{{BIN_DIR}}/memory-search <query>` to find specific past information when needed

@@ -453,8 +453,8 @@ class TestHandleMenuCallbackProfile:
                 "baobaobot.handlers.menu_handler.safe_reply", new_callable=AsyncMock
             ) as mock_reply,
             patch(
-                "baobaobot.persona.profile.read_user_profile",
-                return_value=mock_profile,
+                "baobaobot.persona.profile.read_user_profile_with_source",
+                return_value=(mock_profile, "shared"),
             ),
             patch(
                 "baobaobot.persona.profile.ensure_user_profile",

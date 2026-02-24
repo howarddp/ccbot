@@ -3,8 +3,9 @@
 Reads AGENTS.md and AGENTSOUL.md from shared_dir, then writes a single
 assembled CLAUDE.md in the workspace root.  A dynamic "Memory Context"
 section lists available experience/ topic files so Claude Code knows what
-long-term memory exists.  Daily memories are NOT embedded — Claude Code
-reads those on demand via skills (memory-list, memory-search).
+long-term memory exists.  User profiles are embedded directly so Claude Code
+doesn't need to read them from disk.  Daily memories are NOT embedded —
+Claude Code reads those on demand via skills (memory-list, memory-search).
 
 Key class: ClaudeMdAssembler.
 """
@@ -37,11 +38,16 @@ class ClaudeMdAssembler:
     """Reads shared persona files, assembles CLAUDE.md."""
 
     def __init__(
-        self, shared_dir: Path, workspace_dir: Path, locale: str = "en-US"
+        self,
+        shared_dir: Path,
+        workspace_dir: Path,
+        locale: str = "en-US",
+        allowed_users: frozenset[int] | None = None,
     ) -> None:
         self.shared_dir = shared_dir
         self.workspace_dir = workspace_dir
         self.locale = locale
+        self.allowed_users = allowed_users
         self.output_path = workspace_dir / "CLAUDE.md"
         self._source_mtimes: dict[str, float] = {}
 
@@ -77,6 +83,30 @@ class ClaudeMdAssembler:
             return local
         return self.shared_dir / "AGENTSOUL.md"
 
+    def _user_profiles_section(self) -> str:
+        """Generate the embedded User Profiles section.
+
+        For each allowed user, reads the resolved profile (workspace-local
+        takes priority over shared) and formats it as a markdown subsection.
+        """
+        if not self.allowed_users:
+            return ""
+
+        from baobaobot.persona.profile import read_user_profile_raw_resolved
+
+        users_dir = self.shared_dir / "users"
+        parts: list[str] = []
+        for uid in sorted(self.allowed_users):
+            raw = read_user_profile_raw_resolved(
+                users_dir, uid, workspace_dir=self.workspace_dir
+            )
+            if raw:
+                parts.append(f"### User {uid}\n\n{raw}")
+
+        if not parts:
+            return ""
+        return "\n\n".join(parts)
+
     def assemble(self) -> str:
         """Build the full CLAUDE.md content from source files."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -97,6 +127,11 @@ class ClaudeMdAssembler:
         exp_listing = self._experience_listing()
         if exp_listing:
             parts.append(f"---\n\n## Memory Context\n\n{exp_listing}")
+
+        # Embedded user profiles
+        profiles_section = self._user_profiles_section()
+        if profiles_section:
+            parts.append(f"---\n\n## User Profiles\n\n{profiles_section}")
 
         result = "\n\n".join(parts) + "\n"
         # Replace template variables (safety net for old AGENTS.md with {{BIN_DIR}})
@@ -122,7 +157,7 @@ class ClaudeMdAssembler:
         self._update_mtimes()
 
     def _update_mtimes(self) -> None:
-        """Cache modification times of source files and experience dir."""
+        """Cache modification times of source files, experience dir, and profiles."""
         self._source_mtimes = {}
         for filename, _, source in _SECTION_ORDER:
             if filename == "AGENTSOUL.md":
@@ -149,8 +184,26 @@ class ClaudeMdAssembler:
         if exp_dir.is_dir():
             self._source_mtimes["experience_dir"] = exp_dir.stat().st_mtime
 
+        # Track user profile files (shared and workspace-local)
+        if self.allowed_users:
+            users_dir = self.shared_dir / "users"
+            for uid in self.allowed_users:
+                shared_p = users_dir / f"{uid}.md"
+                local_p = self.workspace_dir / ".persona" / f"{uid}.md"
+                if shared_p.exists():
+                    self._source_mtimes[f"shared:profile:{uid}"] = (
+                        shared_p.stat().st_mtime
+                    )
+                if local_p.exists():
+                    self._source_mtimes[f"local:profile:{uid}"] = (
+                        local_p.stat().st_mtime
+                    )
+                self._source_mtimes[f"local:profile:{uid}:exists"] = (
+                    1.0 if local_p.exists() else 0.0
+                )
+
     def needs_rebuild(self) -> bool:
-        """Check if any source file or experience dir has changed since last assembly."""
+        """Check if any source file, experience dir, or profile has changed."""
         if not self.output_path.exists():
             return True
 
@@ -201,11 +254,43 @@ class ClaudeMdAssembler:
             if current_mtime > cached:
                 return True
 
+        # Check user profile files for changes
+        if self.allowed_users:
+            users_dir = self.shared_dir / "users"
+            for uid in self.allowed_users:
+                shared_p = users_dir / f"{uid}.md"
+                local_p = self.workspace_dir / ".persona" / f"{uid}.md"
+
+                # Local profile created or deleted → rebuild
+                local_exists = local_p.exists()
+                cached_exists = (
+                    self._source_mtimes.get(f"local:profile:{uid}:exists", 0.0) == 1.0
+                )
+                if local_exists != cached_exists:
+                    return True
+
+                # Check local profile mtime
+                if local_exists:
+                    current = local_p.stat().st_mtime
+                    cached = self._source_mtimes.get(f"local:profile:{uid}", 0)
+                    if current > cached:
+                        return True
+
+                # Check shared profile mtime
+                if shared_p.exists():
+                    current = shared_p.stat().st_mtime
+                    cached = self._source_mtimes.get(f"shared:profile:{uid}", 0)
+                    if current > cached:
+                        return True
+
         return False
 
 
 def rebuild_all_workspaces(
-    shared_dir: Path, workspace_dirs: list[Path], locale: str = "en-US"
+    shared_dir: Path,
+    workspace_dirs: list[Path],
+    locale: str = "en-US",
+    allowed_users: frozenset[int] | None = None,
 ) -> int:
     """Rebuild CLAUDE.md for all workspaces where sources have changed.
 
@@ -213,7 +298,9 @@ def rebuild_all_workspaces(
     """
     rebuilt = 0
     for ws in workspace_dirs:
-        assembler = ClaudeMdAssembler(shared_dir, ws, locale=locale)
+        assembler = ClaudeMdAssembler(
+            shared_dir, ws, locale=locale, allowed_users=allowed_users
+        )
         if assembler.needs_rebuild():
             assembler.write()
             rebuilt += 1
