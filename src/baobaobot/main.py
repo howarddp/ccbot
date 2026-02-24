@@ -421,16 +421,27 @@ mode = "{mode}"
 
 
 def _check_optional_deps(configs: list) -> None:
-    """Warn about missing optional dependencies at startup."""
+    """Auto-install missing optional dependencies at startup."""
+    logger = logging.getLogger(__name__)
     needs_whisper = any(getattr(c, "whisper_model", "") for c in configs)
     if needs_whisper:
         try:
             import faster_whisper  # noqa: F401
         except ImportError:
-            logging.getLogger(__name__).warning(
-                "faster-whisper not installed — voice transcription disabled. "
-                "Fix: uv sync --extra voice"
-            )
+            logger.info("Installing faster-whisper...")
+            uv = shutil.which("uv")
+            if uv:
+                cmd = [uv, "pip", "install", "faster-whisper>=1.0.0"]
+            else:
+                cmd = [sys.executable, "-m", "pip", "install", "faster-whisper>=1.0.0"]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode == 0:
+                logger.info("faster-whisper installed successfully")
+            else:
+                logger.warning(
+                    "faster-whisper installation failed — voice transcription disabled. "
+                    "Fix: uv pip install faster-whisper"
+                )
 
 
 def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:

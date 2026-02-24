@@ -125,17 +125,31 @@ class TestCheckOptionalDeps:
             _check_optional_deps([cfg])
         assert "faster-whisper" not in caplog.text
 
-    def test_whisper_missing_logs_warning(self, caplog):
-        """whisper_model set but faster_whisper missing — logs warning."""
+    def test_whisper_missing_auto_installs(self, caplog):
+        """whisper_model set but faster_whisper missing — auto-installs."""
         cfg = SimpleNamespace(whisper_model="small")
         with (
             patch.dict("sys.modules", {"faster_whisper": None}),
             patch("builtins.__import__", side_effect=_fake_import),
+            patch("subprocess.run", return_value=SimpleNamespace(returncode=0)) as mock_run,
+            caplog.at_level(logging.INFO),
+        ):
+            _check_optional_deps([cfg])
+        mock_run.assert_called_once()
+        assert "faster-whisper" in str(mock_run.call_args)
+        assert "installed successfully" in caplog.text
+
+    def test_whisper_install_failure_logs_warning(self, caplog):
+        """whisper_model set, install fails — logs warning."""
+        cfg = SimpleNamespace(whisper_model="small")
+        with (
+            patch.dict("sys.modules", {"faster_whisper": None}),
+            patch("builtins.__import__", side_effect=_fake_import),
+            patch("subprocess.run", return_value=SimpleNamespace(returncode=1)),
             caplog.at_level(logging.WARNING),
         ):
             _check_optional_deps([cfg])
-        assert "faster-whisper not installed" in caplog.text
-        assert "uv sync --extra voice" in caplog.text
+        assert "installation failed" in caplog.text
 
 
 def _fake_import(name, *args, **kwargs):
