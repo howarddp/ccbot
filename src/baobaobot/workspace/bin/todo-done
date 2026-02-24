@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Mark a TODO as done.
+
+Usage:
+    todo-done ID [--workspace DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _todo_common import connect_db, done_todo, get_todo, resolve_workspace
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Mark TODO as done")
+    parser.add_argument("id", help="TODO ID (e.g. T20260225-1)")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    conn = connect_db(workspace)
+
+    row = get_todo(conn, args.id)
+    if row is None:
+        print(f"❌ TODO not found: {args.id}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    if row["status"] == "done":
+        print(f"⚠️ Already done: {args.id} (done at {row['done_at']})")
+        conn.close()
+        sys.exit(1)
+
+    done_todo(conn, args.id)
+    print(f"✅ Marked as done: {args.id} — {row['title']}")
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

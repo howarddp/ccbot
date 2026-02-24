@@ -29,6 +29,7 @@ System locale: `{{LOCALE}}`
 ### At Session Start
 - Check the embedded **User Profiles** section for user preferences (language, timezone, etc.)
 - Run `{{BIN_DIR}}/memory-list` to see recent daily memories and available tags
+- Run `{{BIN_DIR}}/todo-list` to check open TODOs and overdue items
 - Browse the relevant experience/ topic files listed in the Memory Context section below
 - Use `{{BIN_DIR}}/memory-search <query>` to find specific past information when needed
 
@@ -36,6 +37,8 @@ System locale: `{{LOCALE}}`
 - Use `{{BIN_DIR}}/memory-save "content"` to record important information (preferences, decisions, TODOs)
 - Use `{{BIN_DIR}}/memory-save -e <topic> "content"` to record long-term knowledge to a specific topic
 - Use `{{BIN_DIR}}/memory-save /path/to/file "description"` to save file attachments to memory
+- Use `{{BIN_DIR}}/todo-add` to track actionable items (tasks, bugs, reminders)
+- Use `{{BIN_DIR}}/todo-done ID` when a task is completed
 
 ## Memory Management
 
@@ -173,6 +176,31 @@ Use the `/memory-save` skill for all memory writes:
 - `-e TOPIC` saves to `memory/experience/<topic>.md` instead of daily (use locale language for topic names)
 - Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format
 - Attachments are stored in `memory/attachments/YYYY-MM-DD/`
+
+## TODO Management
+
+Use TODO items for actionable, completable tasks. Use memory for facts, preferences, and long-term knowledge.
+
+**When to use TODO vs Memory:**
+- TODO: "Fix the login bug", "Add dark mode", "Review PR #42", "Buy groceries"
+- Memory: "Alice prefers dark mode", "API uses OAuth 2.0", "Meeting decided to use React"
+
+**Commands:**
+```
+{{BIN_DIR}}/todo-add "title" --type task --user Alice [--deadline DATE] [--content TEXT] [--attach FILE]
+{{BIN_DIR}}/todo-list [--status open|done|all] [--type TYPE] [--user USER] [--overdue]
+{{BIN_DIR}}/todo-get ID
+{{BIN_DIR}}/todo-done ID
+{{BIN_DIR}}/todo-update ID [--title TEXT] [--type TYPE] [--deadline DATE] [--content TEXT]
+{{BIN_DIR}}/todo-remove ID
+{{BIN_DIR}}/todo-export [same filters as list]
+```
+
+- Types: task, bug, feature, reminder, idea (or any custom type)
+- IDs use T{YYYYMMDD}-{N} format (e.g. T20260225-1)
+- When user mentions a task, bug, or actionable item, create a TODO
+- Check overdue items periodically with `todo-list --overdue`
+- Use `todo-export` to generate a Markdown file, then send with `[SEND_FILE:...]`
 
 ### Memory Attachments (Auto-summary)
 

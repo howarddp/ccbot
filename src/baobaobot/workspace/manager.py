@@ -39,12 +39,20 @@ _WORKSPACE_TEMPLATE_FILES: list[tuple[str, str]] = []
 # Scripts deployed to shared bin/
 _BIN_SCRIPTS = [
     "_memory_common.py",
+    "_todo_common.py",
     "memory-search",
     "memory-list",
     "memory-save",
     "cron-add",
     "cron-list",
     "cron-remove",
+    "todo-add",
+    "todo-list",
+    "todo-get",
+    "todo-done",
+    "todo-update",
+    "todo-remove",
+    "todo-export",
 ]
 
 # Skills deployed to each per-topic workspace
@@ -55,6 +63,13 @@ _SKILL_NAMES = [
     "cron-add",
     "cron-list",
     "cron-remove",
+    "todo-add",
+    "todo-list",
+    "todo-get",
+    "todo-done",
+    "todo-update",
+    "todo-remove",
+    "todo-export",
     "weather",
     "google-places",
     "google-directions",

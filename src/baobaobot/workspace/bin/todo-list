@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""List TODO items.
+
+Usage:
+    todo-list [--status open|done|all] [--type TYPE] [--user USER]
+              [--before DATE] [--after DATE] [--overdue] [--json]
+              [--workspace DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _todo_common import connect_db, format_todo_short, list_todos, resolve_workspace
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="List TODO items")
+    parser.add_argument("--status", default="open", choices=["open", "done", "all"], help="Filter by status (default: open)")
+    parser.add_argument("--type", default=None, dest="todo_type", help="Filter by type")
+    parser.add_argument("--user", default=None, help="Filter by creator")
+    parser.add_argument("--before", default=None, help="Deadline before date (YYYY-MM-DD)")
+    parser.add_argument("--after", default=None, help="Created after date (YYYY-MM-DD)")
+    parser.add_argument("--overdue", action="store_true", help="Only show overdue items")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    conn = connect_db(workspace)
+
+    rows = list_todos(
+        conn,
+        status=args.status,
+        todo_type=args.todo_type,
+        user=args.user,
+        before=args.before,
+        after=args.after,
+        overdue=args.overdue,
+    )
+
+    if args.json_output:
+        items = []
+        for r in rows:
+            items.append({
+                "id": r["id"],
+                "type": r["type"],
+                "title": r["title"],
+                "content": r["content"],
+                "created_by": r["created_by"],
+                "created_at": r["created_at"],
+                "deadline": r["deadline"],
+                "status": r["status"],
+                "done_at": r["done_at"],
+                "attachments": json.loads(r["attachments"] or "[]"),
+            })
+        print(json.dumps(items, ensure_ascii=False, indent=2))
+    else:
+        if not rows:
+            label = args.status if args.status != "all" else ""
+            print(f"No {label} TODOs found.".strip())
+        else:
+            for row in rows:
+                print(format_todo_short(row))
+            print(f"\n📋 {len(rows)} item(s)")
+
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

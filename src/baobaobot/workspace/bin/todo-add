@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Add a TODO item.
+
+Usage:
+    todo-add "title" [--type TYPE] [--user NAME] [--user-id ID]
+                     [--deadline DATE] [--content TEXT] [--attach FILE]
+                     [--workspace DIR]
+
+Types: task (default), bug, feature, reminder, idea, or any custom string.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _todo_common import add_todo, append_attachment, connect_db, copy_to_attachments, resolve_workspace
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Add a TODO item")
+    parser.add_argument("title", help="TODO title")
+    parser.add_argument("--type", default="task", dest="todo_type", help="Type (task/bug/feature/reminder/idea/custom)")
+    parser.add_argument("--user", default="", help="Creator name")
+    parser.add_argument("--user-id", default="", help="Creator user ID")
+    parser.add_argument("--deadline", default=None, help="Deadline (YYYY-MM-DD)")
+    parser.add_argument("--content", default="", help="Detailed content")
+    parser.add_argument("--attach", action="append", default=[], help="Attach file (can be repeated)")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    conn = connect_db(workspace)
+
+    # Process attachments
+    attachment_paths: list[str] = []
+    for fpath in args.attach:
+        source = Path(fpath)
+        if not source.is_file():
+            print(f"Warning: attachment not found: {fpath}", file=sys.stderr)
+            continue
+        rel_path = copy_to_attachments(workspace, source)
+        attachment_paths.append(rel_path)
+
+    todo_id = add_todo(
+        conn,
+        args.title,
+        todo_type=args.todo_type,
+        user=args.user,
+        user_id=args.user_id,
+        deadline=args.deadline,
+        content=args.content,
+        attachments=attachment_paths,
+    )
+    print(f"✅ TODO added: {todo_id}")
+    print(f"   Title: {args.title}")
+    print(f"   Type: {args.todo_type}")
+    if args.deadline:
+        print(f"   Deadline: {args.deadline}")
+    if attachment_paths:
+        print(f"   Attachments: {len(attachment_paths)} file(s)")
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

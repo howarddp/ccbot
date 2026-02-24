@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Update a TODO item.
+
+Usage:
+    todo-update ID [--title TEXT] [--type TYPE] [--deadline DATE]
+                   [--content TEXT] [--attach FILE] [--status open|done]
+                   [--workspace DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _todo_common import (
+    append_attachment,
+    connect_db,
+    copy_to_attachments,
+    format_todo_detail,
+    get_todo,
+    resolve_workspace,
+    update_todo,
+)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Update a TODO item")
+    parser.add_argument("id", help="TODO ID (e.g. T20260225-1)")
+    parser.add_argument("--title", default=None, help="New title")
+    parser.add_argument("--type", default=None, dest="todo_type", help="New type")
+    parser.add_argument("--deadline", default=None, help="New deadline (YYYY-MM-DD)")
+    parser.add_argument("--content", default=None, help="New content")
+    parser.add_argument("--status", default=None, choices=["open", "done"], help="New status")
+    parser.add_argument("--attach", action="append", default=[], help="Add attachment (can be repeated)")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    conn = connect_db(workspace)
+
+    row = get_todo(conn, args.id)
+    if row is None:
+        print(f"❌ TODO not found: {args.id}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    # Build update fields
+    fields: dict[str, str] = {}
+    if args.title is not None:
+        fields["title"] = args.title
+    if args.todo_type is not None:
+        fields["type"] = args.todo_type
+    if args.deadline is not None:
+        fields["deadline"] = args.deadline
+    if args.content is not None:
+        fields["content"] = args.content
+    if args.status is not None:
+        fields["status"] = args.status
+
+    if fields:
+        update_todo(conn, args.id, **fields)
+
+    # Process attachments
+    for fpath in args.attach:
+        source = Path(fpath)
+        if not source.is_file():
+            print(f"Warning: attachment not found: {fpath}", file=sys.stderr)
+            continue
+        rel_path = copy_to_attachments(workspace, source)
+        append_attachment(conn, args.id, rel_path)
+
+    if not fields and not args.attach:
+        print("Nothing to update. Use --title, --type, --deadline, --content, --status, or --attach.")
+        conn.close()
+        sys.exit(1)
+
+    # Show updated record
+    updated = get_todo(conn, args.id)
+    print(f"✅ Updated: {args.id}")
+    print(format_todo_detail(updated))
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

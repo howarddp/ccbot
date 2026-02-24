@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Export TODOs as Markdown to tmp/.
+
+Usage:
+    todo-export [--status open|done|all] [--type TYPE] [--user USER]
+                [--before DATE] [--after DATE] [--overdue]
+                [--workspace DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _todo_common import connect_db, export_markdown, list_todos, resolve_workspace
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Export TODOs as Markdown")
+    parser.add_argument("--status", default="open", choices=["open", "done", "all"], help="Filter by status (default: open)")
+    parser.add_argument("--type", default=None, dest="todo_type", help="Filter by type")
+    parser.add_argument("--user", default=None, help="Filter by creator")
+    parser.add_argument("--before", default=None, help="Deadline before date (YYYY-MM-DD)")
+    parser.add_argument("--after", default=None, help="Created after date (YYYY-MM-DD)")
+    parser.add_argument("--overdue", action="store_true", help="Only show overdue items")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    conn = connect_db(workspace)
+
+    rows = list_todos(
+        conn,
+        status=args.status,
+        todo_type=args.todo_type,
+        user=args.user,
+        before=args.before,
+        after=args.after,
+        overdue=args.overdue,
+    )
+
+    md = export_markdown(rows)
+
+    tmp_dir = workspace / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_path = tmp_dir / f"todos-export-{ts}.md"
+    out_path.write_text(md, encoding="utf-8")
+
+    print(f"📄 Exported {len(rows)} TODO(s) to: {out_path}")
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

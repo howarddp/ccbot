@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Remove a TODO item.
+
+Usage:
+    todo-remove ID [--workspace DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _todo_common import connect_db, get_todo, remove_todo, resolve_workspace
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Remove a TODO item")
+    parser.add_argument("id", help="TODO ID (e.g. T20260225-1)")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    conn = connect_db(workspace)
+
+    row = get_todo(conn, args.id)
+    if row is None:
+        print(f"❌ TODO not found: {args.id}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    remove_todo(conn, args.id)
+    print(f"🗑️ Removed: {args.id} — {row['title']}")
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()
