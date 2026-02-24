@@ -3,6 +3,7 @@
 from baobaobot.handlers.file_browser import (
     ITEMS_PER_PAGE,
     _format_size,
+    _truncate_filename,
     build_file_browser,
     clear_ls_state,
 )
@@ -25,6 +26,27 @@ class TestFormatSize:
 
     def test_gigabytes(self):
         assert _format_size(1024 * 1024 * 1024) == "1GB"
+
+
+class TestTruncateFilename:
+    def test_short_name_unchanged(self):
+        assert _truncate_filename("readme.md") == "readme.md"
+
+    def test_long_name_with_extension(self):
+        result = _truncate_filename("file_20260221_214225.ogg", max_len=16)
+        assert len(result) <= 16
+        assert result.endswith(".ogg")
+        assert "…" in result
+
+    def test_long_name_no_extension(self):
+        result = _truncate_filename("a_very_long_filename_without_ext", max_len=16)
+        assert len(result) <= 16
+        assert result.endswith("…")
+
+    def test_preserves_extension(self):
+        result = _truncate_filename("screenshot_2026-02-24_at_17.30.45.png", max_len=16)
+        assert result.endswith(".png")
+        assert "…" in result
 
 
 class TestBuildFileBrowser:
@@ -80,7 +102,7 @@ class TestBuildFileBrowser:
             str(tmp_path), root_path=str(tmp_path)
         )
         action_labels = [btn.text for btn in keyboard.inline_keyboard[-1]]
-        assert "── .. ──" not in action_labels
+        assert ".." not in action_labels
 
     def test_root_boundary_shows_up_in_subdir(self, tmp_path):
         """'..' button should appear when in a subdirectory."""
@@ -90,7 +112,7 @@ class TestBuildFileBrowser:
             str(child), root_path=str(tmp_path)
         )
         action_labels = [btn.text for btn in keyboard.inline_keyboard[-1]]
-        assert "── .. ──" in action_labels
+        assert ".." in action_labels
 
     def test_empty_dir(self, tmp_path):
         """Empty directory shows _(empty)_ message."""

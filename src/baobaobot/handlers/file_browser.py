@@ -53,6 +53,28 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f}GB"  # pragma: no cover
 
 
+def _truncate_filename(name: str, max_len: int = 16) -> str:
+    """Truncate a filename preserving the extension.
+
+    Uses middle truncation so the extension stays visible.
+    E.g. "file_20260221_214225.ogg" → "file_2…225.ogg"
+    """
+    if len(name) <= max_len:
+        return name
+    dot = name.rfind(".")
+    if dot > 0:
+        ext = name[dot:]  # ".ogg"
+        # Budget for stem: max_len - len(ext) - 1 (for "…")
+        stem_budget = max_len - len(ext) - 1
+        if stem_budget >= 4:
+            head = stem_budget // 2
+            tail = stem_budget - head
+            stem = name[:dot]
+            return stem[:head] + "…" + stem[-tail:] + ext
+    # No useful extension or budget too tight: simple end truncation
+    return name[: max_len - 1] + "…"
+
+
 def build_file_browser(
     current_path: str, page: int = 0, root_path: str | None = None
 ) -> tuple[str, InlineKeyboardMarkup, list[tuple[str, bool, int]]]:
@@ -139,7 +161,7 @@ def build_file_browser(
                     )
                 )
             else:
-                label = name[:10] + "…" if len(name) > 11 else name
+                label = _truncate_filename(name)
                 row.append(
                     InlineKeyboardButton(
                         f"📄 {label}", callback_data=f"{CB_LS_FILE}{idx}"
@@ -169,7 +191,7 @@ def build_file_browser(
     if root_path:
         at_root = at_root or path == Path(root_path).resolve()
     if not at_root:
-        action_row.append(InlineKeyboardButton("── .. ──", callback_data=CB_LS_UP))
+        action_row.append(InlineKeyboardButton("..", callback_data=CB_LS_UP))
     action_row.append(InlineKeyboardButton("✕ 關閉", callback_data=CB_LS_CLOSE))
     buttons.append(action_row)
 
