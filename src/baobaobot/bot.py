@@ -2170,6 +2170,7 @@ async def post_init(application: Application) -> None:
         BotCommand("rebuild", "Rebuild CLAUDE.md"),
         BotCommand("cron", "Manage scheduled tasks"),
         BotCommand("verbosity", "Set message display verbosity"),
+        BotCommand("ls", "Browse workspace files"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
