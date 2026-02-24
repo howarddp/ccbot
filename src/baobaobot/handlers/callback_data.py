@@ -11,6 +11,7 @@ Constants:
   - CB_ASK_*: Interactive UI navigation (arrows, enter, esc)
   - CB_FILE_*: File action prompt (no-caption attachment)
   - CB_KEYS_PREFIX: Screenshot control keys (kb:<key_id>:<window>)
+  - CB_LS_*: File browser (/ls command)
 """
 
 # History pagination
@@ -61,3 +62,10 @@ CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>
 
 # Verbosity setting
 CB_VERBOSITY = "vb:"  # vb:<level>
+
+# File browser (/ls)
+CB_LS_DIR = "ls:d:"  # ls:d:<index>  — enter directory
+CB_LS_FILE = "ls:f:"  # ls:f:<index>  — view/download file
+CB_LS_UP = "ls:up"  # go up one level
+CB_LS_PAGE = "ls:p:"  # ls:p:<page>   — pagination
+CB_LS_CLOSE = "ls:close"  # close browser

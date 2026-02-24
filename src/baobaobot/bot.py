@@ -75,12 +75,24 @@ from .handlers.callback_data import (
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
+    CB_LS_CLOSE,
+    CB_LS_DIR,
+    CB_LS_FILE,
+    CB_LS_PAGE,
+    CB_LS_UP,
     CB_RESTART_SESSION,
     CB_SCREENSHOT_REFRESH,
     CB_VERBOSITY,
     CB_VOICE_CANCEL,
     CB_VOICE_EDIT,
     CB_VOICE_SEND,
+)
+from .handlers.file_browser import (
+    LS_ENTRIES_KEY,
+    LS_PATH_KEY,
+    LS_ROOT_KEY,
+    build_file_browser,
+    clear_ls_state,
 )
 from .handlers.history import send_history
 from .handlers.interactive_ui import (
@@ -396,6 +408,45 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     await safe_reply(update.message, f"📁 **Workspace**\n\nPath: `{workspace_dir}`")
+
+
+async def ls_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Browse workspace files and directories via inline keyboard."""
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    workspace_dir = _resolve_workspace_dir(update, context)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ No workspace for this topic.")
+        return
+
+    root = str(workspace_dir)
+    # Support /ls subpath — jump directly to a subdirectory
+    args = (update.message.text or "").split(None, 1)
+    if len(args) > 1:
+        target = (workspace_dir / args[1]).resolve()
+        # Must stay within workspace
+        try:
+            target.relative_to(workspace_dir.resolve())
+        except ValueError:
+            target = workspace_dir
+        if not target.is_dir():
+            target = workspace_dir
+        current = str(target)
+    else:
+        current = root
+
+    text, keyboard, entries = build_file_browser(current, page=0, root_path=root)
+    ud = context.user_data
+    if ud is not None:
+        ud[LS_PATH_KEY] = current
+        ud[LS_ROOT_KEY] = root
+        ud[LS_ENTRIES_KEY] = entries
+
+    await safe_reply(update.message, text, reply_markup=keyboard)
 
 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1385,6 +1436,106 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data.startswith(CB_VERBOSITY):
         await handle_verbosity_callback(query, ctx)
 
+    # File browser: enter directory
+    elif data.startswith(CB_LS_DIR):
+        idx = int(data[len(CB_LS_DIR) :])
+        ud = context.user_data or {}
+        entries = ud.get(LS_ENTRIES_KEY, [])
+        root = ud.get(LS_ROOT_KEY)
+        cur = ud.get(LS_PATH_KEY, root or "")
+        if idx < len(entries):
+            name, is_dir, _size = entries[idx]
+            if is_dir:
+                new_path = str(Path(cur) / name)
+                text, keyboard, new_entries = build_file_browser(
+                    new_path, page=0, root_path=root
+                )
+                if context.user_data is not None:
+                    context.user_data[LS_PATH_KEY] = new_path
+                    context.user_data[LS_ENTRIES_KEY] = new_entries
+                await safe_edit(query, text, reply_markup=keyboard)
+        await query.answer()
+
+    # File browser: view/download file
+    elif data.startswith(CB_LS_FILE):
+        idx = int(data[len(CB_LS_FILE) :])
+        ud = context.user_data or {}
+        entries = ud.get(LS_ENTRIES_KEY, [])
+        cur = ud.get(LS_PATH_KEY, "")
+        if idx < len(entries):
+            name, _is_dir, size = entries[idx]
+            file_path = Path(cur) / name
+            if file_path.is_file():
+                max_inline = 50 * 1024  # 50 KB
+                if size <= max_inline:
+                    try:
+                        content = file_path.read_text(errors="replace")[:4000]
+                        await safe_edit(
+                            query, f"📄 `{name}`\n\n```\n{content}\n```"
+                        )
+                    except Exception:
+                        await safe_edit(query, f"❌ Cannot read `{name}`.")
+                else:
+                    try:
+                        await query.message.reply_document(
+                            document=open(file_path, "rb"),  # noqa: SIM115
+                            filename=name,
+                        )
+                        await query.answer(f"📤 {name}")
+                    except Exception:
+                        await safe_edit(query, f"❌ Cannot send `{name}`.")
+            else:
+                await query.answer("File not found", show_alert=True)
+        else:
+            await query.answer("Invalid index", show_alert=True)
+
+    # File browser: go up
+    elif data == CB_LS_UP:
+        ud = context.user_data or {}
+        root = ud.get(LS_ROOT_KEY)
+        cur = ud.get(LS_PATH_KEY, root or "")
+        parent = str(Path(cur).parent)
+        # Don't go above root
+        if root:
+            try:
+                Path(parent).resolve().relative_to(Path(root).resolve())
+            except ValueError:
+                parent = root
+        text, keyboard, new_entries = build_file_browser(
+            parent, page=0, root_path=root
+        )
+        if context.user_data is not None:
+            context.user_data[LS_PATH_KEY] = parent
+            context.user_data[LS_ENTRIES_KEY] = new_entries
+        await safe_edit(query, text, reply_markup=keyboard)
+        await query.answer()
+
+    # File browser: pagination
+    elif data.startswith(CB_LS_PAGE):
+        page_num = int(data[len(CB_LS_PAGE) :])
+        ud = context.user_data or {}
+        root = ud.get(LS_ROOT_KEY)
+        cur = ud.get(LS_PATH_KEY, root or "")
+        text, keyboard, new_entries = build_file_browser(
+            cur, page=page_num, root_path=root
+        )
+        if context.user_data is not None:
+            context.user_data[LS_ENTRIES_KEY] = new_entries
+        await safe_edit(query, text, reply_markup=keyboard)
+        await query.answer()
+
+    # File browser: close
+    elif data == CB_LS_CLOSE:
+        clear_ls_state(context.user_data)
+        try:
+            await query.message.delete()
+        except Exception:
+            try:
+                await query.edit_message_text("✕ Closed.")
+            except Exception:
+                pass
+        await query.answer()
+
     elif data == "noop":
         await query.answer()
 
@@ -2140,6 +2291,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("memory", memory_command))
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("workspace", workspace_command))
+    application.add_handler(CommandHandler("ls", ls_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("verbosity", verbosity_command))
