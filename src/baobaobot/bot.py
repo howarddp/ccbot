@@ -2179,7 +2179,6 @@ async def post_init(application: Application) -> None:
         BotCommand("agent", "Claude Code operations"),
         BotCommand("system", "System management"),
         BotCommand("config", "Personal settings"),
-        BotCommand("ls", "Browse workspace files"),
     ]
 
     await application.bot.set_my_commands(bot_commands)
