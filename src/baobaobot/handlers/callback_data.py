@@ -12,6 +12,7 @@ Constants:
   - CB_FILE_*: File action prompt (no-caption attachment)
   - CB_KEYS_PREFIX: Screenshot control keys (kb:<key_id>:<window>)
   - CB_LS_*: File browser (/ls command)
+  - CB_MENU_*: Menu commands (/agent, /system, /config)
 """
 
 # History pagination
@@ -69,3 +70,8 @@ CB_LS_FILE = "ls:f:"  # ls:f:<index>  — view/download file
 CB_LS_UP = "ls:up"  # go up one level
 CB_LS_PAGE = "ls:p:"  # ls:p:<page>   — pagination
 CB_LS_CLOSE = "ls:close"  # close browser
+
+# Menu commands (/agent, /system, /config)
+CB_MENU_AGENT = "mn:a:"  # mn:a:<action>:<window_id>
+CB_MENU_SYSTEM = "mn:s:"  # mn:s:<action>:<window_id>
+CB_MENU_CONFIG = "mn:c:"  # mn:c:<action>

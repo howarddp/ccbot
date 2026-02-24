@@ -4,10 +4,11 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
-  - Command handlers: /history, /screenshot, /esc, /forcekill,
+  - Menu commands: /agent, /system, /config (inline keyboard menus)
+  - Hidden alias commands: /history, /screenshot, /esc, /forcekill,
     /agentsoul, /profile, /memory, /forget, /workspace, /rebuild,
     plus forwarding unknown /commands to Claude Code via tmux.
-  - Callback query handler: history pagination,
+  - Callback query handler: menu actions, history pagination,
     interactive UI navigation, screenshot refresh.
   - Topic-based routing: each named topic binds to one tmux window.
     Unbound topics auto-create a per-topic workspace and session.
@@ -18,6 +19,7 @@ Core responsibilities:
 
 Handler modules (in handlers/):
   - callback_data: Callback data constants
+  - menu_handler: /agent, /system, /config menu commands
   - message_queue: Per-user message queue management
   - message_sender: Safe message sending helpers
   - history: Message history pagination
@@ -80,6 +82,9 @@ from .handlers.callback_data import (
     CB_LS_FILE,
     CB_LS_PAGE,
     CB_LS_UP,
+    CB_MENU_AGENT,
+    CB_MENU_CONFIG,
+    CB_MENU_SYSTEM,
     CB_RESTART_SESSION,
     CB_SCREENSHOT_REFRESH,
     CB_VERBOSITY,
@@ -139,6 +144,12 @@ from .handlers.verbosity_handler import (
     verbosity_command,
 )
 from .handlers.cron_handler import cron_command
+from .handlers.menu_handler import (
+    agent_command,
+    config_command,
+    handle_menu_callback,
+    system_command,
+)
 from .persona.profile import (
     NAME_NOT_SET_SENTINELS,
     convert_user_mentions,
@@ -193,12 +204,10 @@ def _ensure_user_and_prefix(users_dir: Path, user: User, text: str) -> str:
     return f"[{display}|{user.id}] {text}"
 
 
-# Claude Code commands shown in bot menu (forwarded via tmux)
+# Claude Code commands forwarded via tmux (hidden aliases, not in bot menu)
 CC_COMMANDS: dict[str, str] = {
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
-    "cost": "↗ Show token/cost usage",
-    "help": "↗ Show Claude Code help",
 }
 
 
@@ -1225,6 +1234,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     data = query.data
 
+    # Menu commands (/agent, /system, /config)
+    if (
+        data.startswith(CB_MENU_AGENT)
+        or data.startswith(CB_MENU_SYSTEM)
+        or data.startswith(CB_MENU_CONFIG)
+    ):
+        await handle_menu_callback(update, context, query, data, ctx)
+        return
+
     # History: older/newer pagination
     # Format: hp:<page>:<window_id>:<start>:<end> or hn:<page>:<window_id>:<start>:<end>
     if data.startswith(CB_HISTORY_PREV) or data.startswith(CB_HISTORY_NEXT):
@@ -2158,23 +2176,10 @@ async def post_init(application: Application) -> None:
     await application.bot.delete_my_commands()
 
     bot_commands = [
-        BotCommand("history", "Message history for this topic"),
-        BotCommand("screenshot", "Terminal screenshot with control keys"),
-        BotCommand("esc", "Send Escape to interrupt Claude"),
-        BotCommand("forcekill", "Kill & restart Claude in this session"),
-        BotCommand("agentsoul", "View/edit agent personality & identity"),
-        BotCommand("profile", "View/set user profile"),
-        BotCommand("memory", "List/view/search memories"),
-        BotCommand("forget", "Delete memory entries"),
-        BotCommand("workspace", "Workspace status & project linking"),
-        BotCommand("rebuild", "Rebuild CLAUDE.md"),
-        BotCommand("cron", "Manage scheduled tasks"),
-        BotCommand("verbosity", "Set message display verbosity"),
-        BotCommand("ls", "Browse workspace files"),
+        BotCommand("agent", "Claude Code operations"),
+        BotCommand("system", "System management"),
+        BotCommand("config", "Personal settings"),
     ]
-    # Add Claude Code slash commands
-    for cmd_name, desc in CC_COMMANDS.items():
-        bot_commands.append(BotCommand(cmd_name, desc))
 
     await application.bot.set_my_commands(bot_commands)
 
@@ -2283,11 +2288,15 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     # Store agent context in bot_data for handler access
     application.bot_data["agent_ctx"] = agent_ctx
 
+    # Menu commands (visible in bot menu)
+    application.add_handler(CommandHandler("agent", agent_command))
+    application.add_handler(CommandHandler("system", system_command))
+    application.add_handler(CommandHandler("config", config_command))
+    # Hidden aliases (individual commands still work when typed directly)
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("forcekill", forcekill_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
-    # BaoBao persona/memory/workspace commands
     application.add_handler(CommandHandler("agentsoul", agentsoul_command))
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("memory", memory_command))
