@@ -25,14 +25,14 @@ logger = logging.getLogger(__name__)
 
 # Schema version — bump to force DB recreation on next connect.
 # IMPORTANT: keep in sync with _memory_common.py (standalone bin scripts).
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 # ---------------------------------------------------------------------------
 # Dedup helpers — character-bigram Jaccard similarity
 # IMPORTANT: keep in sync with _memory_common.py
 # ---------------------------------------------------------------------------
 
-_SOURCE_PRIORITY: dict[str, int] = {"experience": 0, "daily": 1, "summary": 2}
+_SOURCE_PRIORITY: dict[str, int] = {"experience": 0, "daily": 1, "todo": 2, "cron": 3, "summary": 4}
 
 _MD_STRIP_RE = re.compile(r"[#*>\[\]()`~_|!-]")
 

@@ -41,8 +41,24 @@ _INLINE_TAG_RE = re.compile(r"(?:^|(?<=\s))#([a-zA-Z][a-zA-Z0-9/-]*)")
 # Attachment references: ![desc](path) for images, [desc](path) for files
 _ATTACHMENT_RE = re.compile(r"!?\[([^\]]+)\]\(([^)]+)\)")
 
+# Regex to insert spaces at CJK ↔ ASCII boundaries for FTS5 tokenization
+_CJK_RANGE = (
+    r"\u2e80-\u9fff\uf900-\ufaff"  # CJK Unified + Compatibility
+    r"\U00020000-\U0002a6df"        # CJK Extension B
+)
+_CJK_TO_ASCII = re.compile(rf"([{_CJK_RANGE}])([A-Za-z0-9])")
+_ASCII_TO_CJK = re.compile(rf"([A-Za-z0-9])([{_CJK_RANGE}])")
+
+
+def _pad_cjk_ascii(text: str) -> str:
+    """Insert spaces at CJK ↔ ASCII boundaries for FTS5 tokenization."""
+    text = _CJK_TO_ASCII.sub(r"\1 \2", text)
+    text = _ASCII_TO_CJK.sub(r"\1 \2", text)
+    return text
+
+
 # Schema version — MUST match baobaobot.memory.db._SCHEMA_VERSION
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -79,7 +95,7 @@ def _parse_tags(text: str) -> list[str]:
 # IMPORTANT: keep in sync with baobaobot.memory.db
 # ---------------------------------------------------------------------------
 
-_SOURCE_PRIORITY: dict[str, int] = {"experience": 0, "daily": 1, "summary": 2}
+_SOURCE_PRIORITY: dict[str, int] = {"experience": 0, "daily": 1, "todo": 2, "cron": 3, "summary": 4}
 
 _MD_STRIP_RE = re.compile(r"[#*>\[\]()`~_|!-]")
 
@@ -306,7 +322,7 @@ def _sync_file(
             conn.execute(
                 "INSERT INTO memories (path, source, date, line_num, content, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (rel, source, date_str, i, stripped, now),
+                (rel, source, date_str, i, _pad_cjk_ascii(stripped), now),
             )
 
     # Parse and store attachment metadata
@@ -382,6 +398,137 @@ def _migrate_legacy_daily_files(workspace: Path) -> int:
     return migrated
 
 
+def _sync_todos(conn: sqlite3.Connection) -> int:
+    """Sync TODO items into the memories table as source='todo'."""
+    virtual_path = "__todos__"
+    now = datetime.now().isoformat()
+
+    # Check if todos table exists
+    has_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='todos'"
+    ).fetchone()
+    if not has_table:
+        return 0
+
+    # Serialize current TODOs for change detection
+    rows = conn.execute(
+        "SELECT id, type, title, content, created_by, status, deadline "
+        "FROM todos ORDER BY id"
+    ).fetchall()
+    serialized = json.dumps(
+        [dict(r) for r in rows], ensure_ascii=False, sort_keys=True
+    )
+    current_hash = hashlib.md5(serialized.encode()).hexdigest()
+
+    # Check if anything changed
+    meta = conn.execute(
+        "SELECT content_hash FROM file_meta WHERE path = ?", (virtual_path,)
+    ).fetchone()
+    if meta and meta["content_hash"] == current_hash:
+        return 0
+
+    # Clear old todo entries and re-index
+    conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
+
+    line_num = 0
+    for r in rows:
+        line_num += 1
+        status_mark = "done" if r["status"] == "done" else "open"
+        title_line = f"[{r['id']}] [{r['type']}] {r['title']} ({status_mark})"
+        if r["created_by"]:
+            title_line += f" @{r['created_by']}"
+        conn.execute(
+            "INSERT INTO memories (path, source, date, line_num, content, updated_at) "
+            "VALUES (?, 'todo', ?, ?, ?, ?)",
+            (virtual_path, r["id"], line_num, _pad_cjk_ascii(title_line), now),
+        )
+        # Index content lines if present
+        if r["content"]:
+            for content_line in r["content"].splitlines():
+                stripped = content_line.strip()
+                if stripped:
+                    line_num += 1
+                    conn.execute(
+                        "INSERT INTO memories (path, source, date, line_num, content, updated_at) "
+                        "VALUES (?, 'todo', ?, ?, ?, ?)",
+                        (virtual_path, r["id"], line_num, _pad_cjk_ascii(stripped), now),
+                    )
+
+    conn.execute(
+        "INSERT OR REPLACE INTO file_meta (path, content_hash, synced_at, tags) "
+        "VALUES (?, ?, ?, '[]')",
+        (virtual_path, current_hash, now),
+    )
+    return 1
+
+
+def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
+    """Sync cron jobs into the memories table as source='cron'."""
+    virtual_path = "__cron__"
+    now = datetime.now().isoformat()
+
+    jobs_file = workspace / "cron" / "jobs.json"
+    if not jobs_file.is_file():
+        # Clean up if jobs.json was removed
+        meta = conn.execute(
+            "SELECT path FROM file_meta WHERE path = ?", (virtual_path,)
+        ).fetchone()
+        if meta:
+            conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
+            conn.execute("DELETE FROM file_meta WHERE path = ?", (virtual_path,))
+            return 1
+        return 0
+
+    # Change detection via file hash
+    current_hash = hashlib.md5(jobs_file.read_bytes()).hexdigest()
+    meta = conn.execute(
+        "SELECT content_hash FROM file_meta WHERE path = ?", (virtual_path,)
+    ).fetchone()
+    if meta and meta["content_hash"] == current_hash:
+        return 0
+
+    # Parse jobs
+    try:
+        data = json.loads(jobs_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return 0
+
+    jobs = data.get("jobs", [])
+
+    # Clear old cron entries and re-index
+    conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
+
+    line_num = 0
+    for job in jobs:
+        job_id = job.get("id", "?")
+        name = job.get("name", "")
+        message = job.get("message", "")
+        enabled = job.get("enabled", True)
+        status = "enabled" if enabled else "paused"
+
+        line_num += 1
+        title_line = f"[{job_id}] {name} ({status})"
+        conn.execute(
+            "INSERT INTO memories (path, source, date, line_num, content, updated_at) "
+            "VALUES (?, 'cron', ?, ?, ?, ?)",
+            (virtual_path, job_id, line_num, _pad_cjk_ascii(title_line), now),
+        )
+        if message:
+            line_num += 1
+            conn.execute(
+                "INSERT INTO memories (path, source, date, line_num, content, updated_at) "
+                "VALUES (?, 'cron', ?, ?, ?, ?)",
+                (virtual_path, job_id, line_num, _pad_cjk_ascii(message), now),
+            )
+
+    conn.execute(
+        "INSERT OR REPLACE INTO file_meta (path, content_hash, synced_at, tags) "
+        "VALUES (?, ?, ?, '[]')",
+        (virtual_path, current_hash, now),
+    )
+    return 1
+
+
 def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
     """Sync all memory files to SQLite. Returns number of files synced."""
     # Auto-migrate legacy daily files
@@ -424,10 +571,18 @@ def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
                 _sync_file(conn, f, rel, "summary", date_str)
                 synced += 1
 
-    # Clean up deleted files
+    # Sync TODOs into memories table
+    synced += _sync_todos(conn)
+
+    # Sync Cron jobs into memories table
+    synced += _sync_cron(conn, workspace)
+
+    # Clean up deleted files (skip virtual paths used by todo/cron sync)
     rows = conn.execute("SELECT path FROM file_meta").fetchall()
     for row in rows:
         rel = row["path"]
+        if rel.startswith("__"):
+            continue  # virtual paths for todo/cron
         full = workspace / rel
         if not full.exists():
             conn.execute("DELETE FROM file_meta WHERE path = ?", (rel,))
@@ -685,10 +840,15 @@ def append_to_experience_file(workspace: Path, topic: str, line: str) -> str:
 
 def format_file_label(row: dict | sqlite3.Row) -> str:
     """Convert a result row's source/date into a human-readable file label."""
-    if row["source"] == "experience":
+    source = row["source"]
+    if source == "experience":
         return f"memory/experience/{row['date']}.md"
-    elif row["source"] == "summary":
+    elif source == "summary":
         return f"memory/summaries/{row['date']}.md"
+    elif source == "todo":
+        return f"\u2705 TODO {row['date']}"
+    elif source == "cron":
+        return f"\u23f0 Cron {row['date']}"
     else:
         # Daily: date is 'YYYY-MM-DD', path is 'memory/daily/YYYY-MM/YYYY-MM-DD.md'
         d = row["date"]
