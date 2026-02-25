@@ -45,6 +45,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaDocument,
+    Message,
     Update,
     User,
 )
@@ -204,6 +205,30 @@ def _ensure_user_and_prefix(users_dir: Path, user: User, text: str) -> str:
         else first_name
     )
     return f"[{display}|{user.id}] {text}"
+
+
+_REPLY_PREVIEW_MAX = 100  # max chars of the replied-to message to include
+
+
+def _extract_reply_context(message: Message) -> str:
+    """Extract reply-to context from a Telegram message.
+
+    Returns a '[Reply to: "..."]' line if the message is a reply,
+    or an empty string otherwise.
+    """
+    rtm = message.reply_to_message
+    if rtm is None:
+        return ""
+    # Skip forum-topic-created service messages (used for topic name backfill)
+    if rtm.forum_topic_created:
+        return ""
+    original = rtm.text or rtm.caption or ""
+    if not original:
+        return ""
+    preview = original[:_REPLY_PREVIEW_MAX]
+    if len(original) > _REPLY_PREVIEW_MAX:
+        preview += "..."
+    return f'[Reply to: "{preview}"]\n'
 
 
 # Claude Code commands forwarded via tmux (hidden aliases, not in bot menu)
@@ -1168,8 +1193,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(context.bot_data, user.id, rk.session_key)
 
-    # Add [Name|user_id] prefix for multi-user identification
-    prefixed_text = _ensure_user_and_prefix(ctx.config.users_dir, user, text)
+    # Add reply context (if replying to a message) and user prefix
+    reply_ctx = _extract_reply_context(update.message)
+    prefixed_text = _ensure_user_and_prefix(
+        ctx.config.users_dir, user, reply_ctx + text
+    )
     success, message = await ctx.session_manager.send_to_window(wid, prefixed_text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
