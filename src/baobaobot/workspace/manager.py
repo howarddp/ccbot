@@ -76,6 +76,11 @@ _SKILL_NAMES = [
     "google-places",
     "google-directions",
     "google-geocoding",
+    "google-static-maps",
+    "google-distance-matrix",
+    "google-timezone",
+    "google-street-view",
+    "google-air-quality",
     "web-search",
     "web-read",
 ]
