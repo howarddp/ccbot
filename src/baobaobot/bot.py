@@ -5,7 +5,7 @@ Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
   - Menu commands: /agent, /system, /config (inline keyboard menus)
-  - Hidden alias commands: /history, /screenshot, /esc, /forcekill,
+  - Hidden alias commands: /history, /screenshot, /esc, /restart,
     /agentsoul, /profile, /memory, /forget, /workspace, /rebuild,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: menu actions, history pagination,
@@ -257,7 +257,7 @@ def _resolve_workspace_dir(
 # --- Command handlers ---
 
 
-async def forcekill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kill the Claude process in the current session and restart it."""
     user = update.effective_user
     if not user or not _is_user_allowed(context, user.id):
@@ -2289,7 +2289,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("config", config_command))
     # Hidden aliases (individual commands still work when typed directly)
     application.add_handler(CommandHandler("history", history_command))
-    application.add_handler(CommandHandler("forcekill", forcekill_command))
+    application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("agentsoul", agentsoul_command))
