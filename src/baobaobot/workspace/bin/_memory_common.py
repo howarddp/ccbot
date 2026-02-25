@@ -20,14 +20,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
+import struct
 import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Embedding configuration
+# ---------------------------------------------------------------------------
+_EMBEDDING_MODEL = "text-embedding-3-small"
+_EMBEDDING_DIMS = 512
+_EMBEDDING_BATCH_SIZE = 100  # max paragraphs per API call
+_EMBEDDING_SYNC_TIMEOUT = 5.0  # seconds — stop embedding after this during sync
 
 # Regex to strip YAML frontmatter (--- ... ---) from the beginning of a file
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
@@ -58,7 +68,148 @@ def _pad_cjk_ascii(text: str) -> str:
 
 
 # Schema version — MUST match baobaobot.memory.db._SCHEMA_VERSION
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
+
+# Heading regex for paragraph splitting
+_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+
+# Max paragraph length (characters) before forced split
+_PARA_MAX_CHARS = 500
+
+# Min paragraph length — shorter paragraphs are merged with the next one
+_PARA_MIN_CHARS = 25
+
+
+class _Paragraph:
+    """A paragraph extracted from a memory file."""
+
+    __slots__ = ("heading", "content", "line_start", "line_end")
+
+    def __init__(self, heading: str, content: str, line_start: int, line_end: int):
+        self.heading = heading
+        self.content = content
+        self.line_start = line_start
+        self.line_end = line_end
+
+
+def _normalize_for_hash(text: str) -> str:
+    """Normalize paragraph content for consistent hashing.
+
+    Strips whitespace per line and removes blank lines so that minor
+    formatting changes (trailing spaces, extra blank lines) don't
+    invalidate the embedding cache.
+    """
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    return "\n".join(lines)
+
+
+def _split_paragraphs(content: str) -> list[_Paragraph]:
+    """Split memory file content (frontmatter already stripped) into paragraphs.
+
+    Rules:
+    1. ``##`` (or any level heading) starts a new paragraph; heading text is
+       included in the paragraph content.
+    2. Sections without headings are split on blank lines.
+    3. Paragraphs exceeding ``_PARA_MAX_CHARS`` are force-split.
+    4. Paragraphs shorter than ``_PARA_MIN_CHARS`` are merged with the next.
+    5. Pure separator lines (``---``), empty headings, and whitespace-only
+       paragraphs are discarded.
+    """
+    lines = content.splitlines()
+    if not lines:
+        return []
+
+    # --- Phase 1: group lines into raw paragraphs -------------------------
+    raw_groups: list[tuple[str, list[str], int]] = []  # (heading, lines, start_line)
+    current_heading = ""
+    current_lines: list[str] = []
+    current_start = 1
+
+    for idx, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Heading starts a new paragraph
+        if _HEADING_RE.match(line):
+            # Flush previous group
+            if current_lines:
+                raw_groups.append((current_heading, current_lines, current_start))
+            current_heading = stripped
+            current_lines = [stripped]
+            current_start = idx
+            continue
+
+        # Blank line — split if we have accumulated content and no heading
+        if not stripped:
+            if current_lines and not current_heading:
+                raw_groups.append((current_heading, current_lines, current_start))
+                current_heading = ""
+                current_lines = []
+                current_start = idx + 1
+            # Within a headed section, blank lines don't split
+            continue
+
+        # Skip separator lines
+        if stripped == "---":
+            continue
+
+        if not current_lines:
+            current_start = idx
+        current_lines.append(stripped)
+
+    # Flush last group
+    if current_lines:
+        raw_groups.append((current_heading, current_lines, current_start))
+
+    # --- Phase 2: force-split long paragraphs ------------------------------
+    split_groups: list[tuple[str, str, int, int]] = []  # (heading, content, start, end)
+    for heading, grp_lines, start in raw_groups:
+        text = "\n".join(grp_lines)
+        if len(text) <= _PARA_MAX_CHARS:
+            split_groups.append((heading, text, start, start + len(grp_lines) - 1))
+        else:
+            # Split by lines, accumulating until max
+            chunk_lines: list[str] = []
+            chunk_start = start
+            chunk_len = 0
+            for i, ln in enumerate(grp_lines):
+                if chunk_len + len(ln) + 1 > _PARA_MAX_CHARS and chunk_lines:
+                    split_groups.append((
+                        heading,
+                        "\n".join(chunk_lines),
+                        chunk_start,
+                        chunk_start + len(chunk_lines) - 1,
+                    ))
+                    heading = ""  # subsequent chunks lose the heading
+                    chunk_lines = []
+                    chunk_start = start + i
+                    chunk_len = 0
+                chunk_lines.append(ln)
+                chunk_len += len(ln) + 1
+            if chunk_lines:
+                split_groups.append((
+                    heading,
+                    "\n".join(chunk_lines),
+                    chunk_start,
+                    chunk_start + len(chunk_lines) - 1,
+                ))
+
+    # --- Phase 3: merge short paragraphs -----------------------------------
+    merged: list[_Paragraph] = []
+    for heading, text, start, end in split_groups:
+        # Filter out whitespace-only or too-short content
+        if len(text.strip()) < _PARA_MIN_CHARS:
+            # Merge into previous paragraph if one exists
+            if merged:
+                prev = merged[-1]
+                prev.content += "\n" + text
+                prev.line_end = end
+                if not prev.heading and heading:
+                    prev.heading = heading
+            continue
+        merged.append(_Paragraph(heading, text, start, end))
+
+    return merged
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -183,10 +334,33 @@ CREATE TABLE IF NOT EXISTS attachment_meta (
     file_type   TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS paragraphs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    path         TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    date         TEXT    NOT NULL,
+    heading      TEXT    NOT NULL DEFAULT '',
+    content      TEXT    NOT NULL,
+    line_start   INTEGER NOT NULL,
+    line_end     INTEGER NOT NULL,
+    content_hash TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_cache (
+    content_hash TEXT    NOT NULL,
+    model_name   TEXT    NOT NULL,
+    embedding    BLOB    NOT NULL,
+    token_count  INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT    NOT NULL,
+    PRIMARY KEY (content_hash, model_name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_memories_date    ON memories(date);
 CREATE INDEX IF NOT EXISTS idx_memories_source  ON memories(source);
 CREATE INDEX IF NOT EXISTS idx_memories_path    ON memories(path);
 CREATE INDEX IF NOT EXISTS idx_attachment_path  ON attachment_meta(memory_path);
+CREATE INDEX IF NOT EXISTS idx_paragraphs_path  ON paragraphs(path);
+CREATE INDEX IF NOT EXISTS idx_paragraphs_hash  ON paragraphs(content_hash);
 """
 
 # Track FTS5 availability at module level.
@@ -207,11 +381,15 @@ def connect_db(workspace: Path) -> sqlite3.Connection:
             f"Recreating memory DB (schema v{version} -> v{_SCHEMA_VERSION})",
             file=__import__("sys").stderr,
         )
+        # Only DROP tables that can be rebuilt from markdown files / API.
+        # ⚠️ NEVER DROP: todos (sole data source is DB, no markdown backup)
         conn.executescript(
             "DROP TABLE IF EXISTS memories_fts;\n"
             "DROP TABLE IF EXISTS attachment_meta;\n"
             "DROP TABLE IF EXISTS memories;\n"
             "DROP TABLE IF EXISTS file_meta;\n"
+            "DROP TABLE IF EXISTS paragraphs;\n"
+            "DROP TABLE IF EXISTS embedding_cache;\n"
         )
         try:
             conn.executescript(_SCHEMA)
@@ -233,6 +411,9 @@ def connect_db(workspace: Path) -> sqlite3.Connection:
             "SELECT name FROM sqlite_master WHERE name = 'memories_fts'"
         ).fetchone()
         _fts_available = fts_check is not None
+
+    # Check embedding capabilities (sqlite-vec + API key)
+    _check_embedding_capabilities(conn)
 
     return conn
 
@@ -298,11 +479,12 @@ def _sync_file(
     source: str,
     date_str: str,
 ) -> None:
-    """Index a single .md file into the memories table."""
+    """Index a single .md file into the memories and paragraphs tables."""
     current_hash = _file_hash(path)
     now = datetime.now().isoformat()
 
     conn.execute("DELETE FROM memories WHERE path = ?", (rel,))
+    conn.execute("DELETE FROM paragraphs WHERE path = ?", (rel,))
     conn.execute("DELETE FROM attachment_meta WHERE memory_path = ?", (rel,))
 
     try:
@@ -316,6 +498,7 @@ def _sync_file(
     # Strip frontmatter for indexing
     content = _strip_frontmatter(raw_content)
 
+    # --- Line-level indexing (for FTS5) ---
     for i, line in enumerate(content.splitlines(), 1):
         stripped = line.strip()
         if stripped:
@@ -324,6 +507,18 @@ def _sync_file(
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (rel, source, date_str, i, _pad_cjk_ascii(stripped), now),
             )
+
+    # --- Paragraph-level indexing (for vector search) ---
+    for para in _split_paragraphs(content):
+        content_hash = hashlib.md5(
+            _normalize_for_hash(para.content).encode("utf-8")
+        ).hexdigest()
+        conn.execute(
+            "INSERT INTO paragraphs "
+            "(path, source, date, heading, content, line_start, line_end, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (rel, source, date_str, para.heading, para.content, para.line_start, para.line_end, content_hash),
+        )
 
     # Parse and store attachment metadata
     for desc, fpath, ftype in _parse_attachments(content):
@@ -350,6 +545,172 @@ def _rebuild_fts(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         _fts_available = False
+
+
+# ---------------------------------------------------------------------------
+# Embedding: OpenAI API + sqlite-vec
+# ---------------------------------------------------------------------------
+
+# Module-level capability flag (set once per process in connect_db via
+# _check_embedding_capabilities).  Only requires openai + API key;
+# cosine similarity is computed in pure Python (no sqlite-vec needed).
+_embedding_enabled = False
+
+
+def _load_dotenv_once() -> None:
+    """Load .env from baobaobot config dir if OPENAI_API_KEY is not already set."""
+    if os.environ.get("OPENAI_API_KEY"):
+        return
+    # Resolve config dir: BAOBAOBOT_DIR env → pointer file → ~/.baobaobot
+    config_dir = os.environ.get("BAOBAOBOT_DIR", "")
+    if not config_dir:
+        pointer = Path.home() / ".config" / "baobaobot" / "dir"
+        if pointer.is_file():
+            config_dir = pointer.read_text().strip()
+    if not config_dir:
+        config_dir = str(Path.home() / ".baobaobot")
+    env_file = Path(config_dir) / ".env"
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, val = line.partition("=")
+                key, val = key.strip(), val.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = val
+
+
+def _check_embedding_capabilities(conn: sqlite3.Connection) -> None:
+    """Detect whether vector search is available (openai + API key).
+
+    Note: We compute cosine similarity in pure Python, so sqlite-vec
+    extension loading is NOT required.  Only the ``openai`` package
+    and a valid API key are needed.
+    """
+    global _embedding_enabled
+
+    # Ensure API key is loaded from .env if not in environment
+    _load_dotenv_once()
+
+    has_openai = False
+    try:
+        import openai as _oa  # noqa: F401
+
+        has_openai = True
+    except ImportError:
+        pass
+
+    _embedding_enabled = has_openai and bool(os.environ.get("OPENAI_API_KEY"))
+
+    status = "enabled" if _embedding_enabled else "disabled"
+    reason = ""
+    if not _embedding_enabled:
+        reasons = []
+        if not has_openai:
+            reasons.append("openai package not installed")
+        if not os.environ.get("OPENAI_API_KEY"):
+            reasons.append("OPENAI_API_KEY not set")
+        reason = f" ({', '.join(reasons)})"
+    logger.info("Vector search: %s%s", status, reason)
+
+
+def _get_openai_embeddings(texts: list[str]) -> tuple[list[list[float]], int]:
+    """Call OpenAI embedding API. Returns (vectors, total_tokens)."""
+    from openai import OpenAI
+
+    client = OpenAI()
+    response = client.embeddings.create(
+        model=_EMBEDDING_MODEL,
+        input=texts,
+        dimensions=_EMBEDDING_DIMS,
+    )
+    # Sort by index to maintain input order
+    sorted_data = sorted(response.data, key=lambda x: x.index)
+    total_tokens = response.usage.total_tokens if response.usage else len(texts)
+    return [d.embedding for d in sorted_data], total_tokens
+
+
+def _serialize_embedding(vector: list[float]) -> bytes:
+    """Serialize embedding vector to bytes for SQLite BLOB storage."""
+    return struct.pack(f"<{_EMBEDDING_DIMS}f", *vector)
+
+
+def _deserialize_embedding(blob: bytes) -> list[float]:
+    """Deserialize embedding vector from SQLite BLOB."""
+    return list(struct.unpack(f"<{_EMBEDDING_DIMS}f", blob))
+
+
+def _compute_embeddings(conn: sqlite3.Connection, timeout: float = _EMBEDDING_SYNC_TIMEOUT) -> int:
+    """Compute embeddings for paragraphs that don't have one yet.
+
+    Uses LEFT JOIN to find paragraphs missing from embedding_cache,
+    independent of file_meta state. Returns number of new embeddings computed.
+    """
+    if not _embedding_enabled:
+        return 0
+
+    import time
+
+    start_time = time.monotonic()
+
+    # Find paragraphs missing embeddings (deduplicated by content_hash)
+    rows = conn.execute(
+        "SELECT DISTINCT p.content_hash, p.content "
+        "FROM paragraphs p "
+        "LEFT JOIN embedding_cache e "
+        "  ON p.content_hash = e.content_hash "
+        "  AND e.model_name = ? "
+        "WHERE e.content_hash IS NULL",
+        (_EMBEDDING_MODEL,),
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    total_computed = 0
+    now = datetime.now().isoformat()
+
+    # Process in batches
+    for batch_start in range(0, len(rows), _EMBEDDING_BATCH_SIZE):
+        # Check timeout
+        if time.monotonic() - start_time > timeout:
+            logger.info(
+                "Embedding timeout after %d/%d paragraphs, rest will be computed next sync",
+                total_computed,
+                len(rows),
+            )
+            break
+
+        batch = rows[batch_start : batch_start + _EMBEDDING_BATCH_SIZE]
+        texts = [r["content"] for r in batch]
+        hashes = [r["content_hash"] for r in batch]
+
+        try:
+            vectors, batch_tokens = _get_openai_embeddings(texts)
+        except Exception as exc:
+            logger.warning("Embedding API error: %s — skipping batch, will retry next sync", exc)
+            continue
+
+        # Distribute total tokens evenly across batch items
+        per_item_tokens = max(1, batch_tokens // len(texts))
+
+        # Store in embedding_cache
+        for content_hash, vector in zip(hashes, vectors):
+            blob = _serialize_embedding(vector)
+            conn.execute(
+                "INSERT OR REPLACE INTO embedding_cache "
+                "(content_hash, model_name, embedding, token_count, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (content_hash, _EMBEDDING_MODEL, blob, per_item_tokens, now),
+            )
+            total_computed += 1
+
+        conn.commit()
+
+    if total_computed:
+        logger.info("Computed %d new embeddings (%d remaining)", total_computed, len(rows) - total_computed)
+
+    return total_computed
 
 
 def _migrate_legacy_daily_files(workspace: Path) -> int:
@@ -587,6 +948,7 @@ def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
         if not full.exists():
             conn.execute("DELETE FROM file_meta WHERE path = ?", (rel,))
             conn.execute("DELETE FROM memories WHERE path = ?", (rel,))
+            conn.execute("DELETE FROM paragraphs WHERE path = ?", (rel,))
             conn.execute("DELETE FROM attachment_meta WHERE memory_path = ?", (rel,))
             synced += 1
 
@@ -596,7 +958,21 @@ def sync_workspace(conn: sqlite3.Connection, workspace: Path) -> int:
     if synced:
         _rebuild_fts(conn)
 
+    # Compute embeddings for paragraphs that don't have one yet.
+    # Runs even when synced==0 (catches paragraphs from previous failed attempts).
+    _compute_embeddings(conn)
+
     return synced
+
+
+# Source weights for hybrid search ranking
+_SOURCE_WEIGHT: dict[str, float] = {
+    "experience": 1.3,
+    "daily": 1.0,
+    "summary": 0.8,
+}
+
+_SEARCH_LIMIT = 200  # max results from FTS/LIKE to prevent huge result sets
 
 
 def search(
@@ -604,20 +980,47 @@ def search(
     query: str,
     days: int | None = None,
     tag: str | None = None,
-) -> list[dict]:
-    """Search memories using FTS5 (with LIKE fallback on error).
+    mode: str = "hybrid",
+) -> tuple[list[dict], str]:
+    """Search memories.
 
     Args:
         conn: SQLite connection (already synced).
         query: Search string.
         days: Optional — limit to daily memories from the last N days.
         tag: Optional — filter by tag name (without # prefix).
+        mode: "keyword" (FTS5 only), "vector" (embedding only),
+              or "hybrid" (both + RRF merge). Default "hybrid".
 
     Returns:
-        List of dicts with keys: source, date, line_num, content.
+        Tuple of (results, effective_mode).
+        results: List of dicts with keys: source, date, line_num, content.
+            In hybrid/vector mode, also includes: heading, paragraph.
+        effective_mode: The mode actually used (may differ from requested
+            if embedding is unavailable).
     """
-    # FTS5's default tokenizer doesn't handle CJK; use LIKE directly
-    # for non-ASCII queries.  For ASCII queries, trust FTS results.
+    # Determine effective mode
+    effective_mode = mode
+    if mode in ("hybrid", "vector") and not _embedding_enabled:
+        effective_mode = "keyword"
+
+    if effective_mode == "keyword":
+        return _search_keyword(conn, query, days, tag), effective_mode
+
+    if effective_mode == "vector":
+        return _search_vector_only(conn, query, days, tag), effective_mode
+
+    # hybrid mode: FTS/LIKE + vector, merged via RRF
+    return _search_hybrid(conn, query, days, tag), effective_mode
+
+
+def _search_keyword(
+    conn: sqlite3.Connection,
+    query: str,
+    days: int | None,
+    tag: str | None,
+) -> list[dict]:
+    """Original keyword search (FTS5 with LIKE fallback)."""
     use_fts = _fts_available and query.isascii()
     if use_fts:
         try:
@@ -628,6 +1031,229 @@ def search(
 
     rows = _search_like(conn, query, days, tag)
     return _dedup_results([dict(r) for r in rows])
+
+
+def _search_vector(
+    conn: sqlite3.Connection,
+    query: str,
+    top_k: int = 50,
+    days: int | None = None,
+    tag: str | None = None,
+) -> list[dict]:
+    """Search paragraphs by embedding cosine similarity.
+
+    Returns list of dicts with: source, date, line_num (=line_start),
+    content (=paragraph text), heading, content_hash, similarity.
+    """
+    if not _embedding_enabled:
+        return []
+
+    try:
+        vecs, _ = _get_openai_embeddings([query])
+        query_vec = vecs[0]
+    except Exception as exc:
+        logger.warning("Embedding query failed: %s", exc)
+        return []
+
+    query_blob = _serialize_embedding(query_vec)
+
+    # Compute cosine similarity in Python (avoids vec0 virtual table complexity)
+    # Fetch all cached embeddings and compute dot product
+    rows = conn.execute(
+        "SELECT DISTINCT p.id, p.source, p.date, p.heading, p.content, "
+        "p.line_start, p.line_end, p.content_hash, e.embedding "
+        "FROM paragraphs p "
+        "JOIN embedding_cache e ON p.content_hash = e.content_hash "
+        "  AND e.model_name = ?",
+        (_EMBEDDING_MODEL,),
+    ).fetchall()
+
+    if not rows:
+        return []
+
+    # Compute cosine similarities
+    scored: list[tuple[float, sqlite3.Row]] = []
+    for row in rows:
+        stored_vec = _deserialize_embedding(row["embedding"])
+        sim = _cosine_similarity(query_vec, stored_vec)
+        scored.append((sim, row))
+
+    # Sort by similarity descending
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Apply similarity threshold and filters, take top-K
+    _SIMILARITY_THRESHOLD = 0.18  # lowered for better CJK semantic recall
+    results: list[dict] = []
+    cutoff_date = None
+    if days is not None:
+        cutoff_date = (date.today() - timedelta(days=days)).isoformat()
+
+    for sim, row in scored[:top_k * 2]:  # over-fetch to account for filtering
+        if len(results) >= top_k:
+            break
+
+        # Skip results below similarity threshold
+        if sim < _SIMILARITY_THRESHOLD:
+            break  # sorted desc, all remaining will be lower
+
+        source = row["source"]
+
+        # Days filter: only apply to daily/summary
+        if cutoff_date and source in ("daily", "summary") and row["date"] < cutoff_date:
+            continue
+
+        # Tag filter
+        if tag is not None:
+            tag_row = conn.execute(
+                "SELECT tags FROM file_meta WHERE path = (SELECT path FROM paragraphs WHERE id = ?)",
+                (row["id"],),
+            ).fetchone()
+            if not tag_row or f'"{tag}"' not in tag_row["tags"]:
+                continue
+
+        results.append({
+            "source": source,
+            "date": row["date"],
+            "line_num": row["line_start"],
+            "content": row["content"],
+            "heading": row["heading"],
+            "similarity": sim,
+            "_para_id": row["id"],
+        })
+
+    return results
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _line_to_paragraph(conn: sqlite3.Connection, row: dict) -> int | None:
+    """Map a line-level result to its paragraph ID."""
+    # Use the path from the memories row to find the paragraph
+    mem_row = conn.execute(
+        "SELECT path FROM memories WHERE source = ? AND date = ? AND line_num = ? LIMIT 1",
+        (row["source"], row["date"], row["line_num"]),
+    ).fetchone()
+    if not mem_row:
+        return None
+
+    para = conn.execute(
+        "SELECT id FROM paragraphs "
+        "WHERE path = ? AND line_start <= ? AND line_end >= ? LIMIT 1",
+        (mem_row["path"], row["line_num"], row["line_num"]),
+    ).fetchone()
+    return para["id"] if para else None
+
+
+def _rrf_merge(
+    fts_para_ids: list[int],
+    vec_para_ids: list[int],
+    k: int = 60,
+) -> dict[int, float]:
+    """Reciprocal Rank Fusion on paragraph IDs.
+
+    Returns dict of para_id → RRF score.
+    """
+    scores: dict[int, float] = {}
+    for rank, pid in enumerate(fts_para_ids):
+        scores[pid] = scores.get(pid, 0) + 1 / (k + rank)
+    for rank, pid in enumerate(vec_para_ids):
+        scores[pid] = scores.get(pid, 0) + 1 / (k + rank)
+    return scores
+
+
+def _search_hybrid(
+    conn: sqlite3.Connection,
+    query: str,
+    days: int | None,
+    tag: str | None,
+) -> list[dict]:
+    """Hybrid search: FTS/LIKE + vector, merged via RRF."""
+    # 1. Keyword search (line-level)
+    kw_results = _search_keyword(conn, query, days, tag)
+
+    # 2. Vector search (paragraph-level)
+    vec_results = _search_vector(conn, query, top_k=50, days=days, tag=tag)
+
+    # If only one side has results, return that
+    if not vec_results:
+        return kw_results
+    if not kw_results:
+        return vec_results
+
+    # 3. Map keyword results to paragraph IDs
+    fts_para_ids: list[int] = []
+    fts_seen: set[int] = set()
+    for r in kw_results:
+        pid = _line_to_paragraph(conn, r)
+        if pid and pid not in fts_seen:
+            fts_para_ids.append(pid)
+            fts_seen.add(pid)
+
+    vec_para_ids = [r["_para_id"] for r in vec_results]
+
+    # 4. RRF merge
+    rrf_scores = _rrf_merge(fts_para_ids, vec_para_ids)
+
+    # Apply source weights
+    # Build para_id → source mapping
+    all_para_ids = list(rrf_scores.keys())
+    if all_para_ids:
+        placeholders = ",".join("?" * len(all_para_ids))
+        para_rows = conn.execute(
+            f"SELECT id, source, date, heading, content, line_start FROM paragraphs "
+            f"WHERE id IN ({placeholders})",
+            all_para_ids,
+        ).fetchall()
+        para_map = {r["id"]: dict(r) for r in para_rows}
+    else:
+        para_map = {}
+
+    for pid, score in rrf_scores.items():
+        if pid in para_map:
+            source = para_map[pid]["source"]
+            rrf_scores[pid] = score * _SOURCE_WEIGHT.get(source, 1.0)
+
+    # 5. Sort by RRF score
+    sorted_ids = sorted(rrf_scores, key=lambda pid: rrf_scores[pid], reverse=True)
+
+    # 6. Build result list (paragraph-level)
+    results: list[dict] = []
+    for pid in sorted_ids:
+        if pid not in para_map:
+            continue
+        p = para_map[pid]
+        results.append({
+            "source": p["source"],
+            "date": p["date"],
+            "line_num": p["line_start"],
+            "content": p["content"],
+            "heading": p["heading"],
+        })
+
+    # 7. Append TODO/Cron results from keyword search (they don't have paragraphs)
+    for r in kw_results:
+        if r["source"] in ("todo", "cron"):
+            results.append(r)
+
+    return results
+
+
+def _search_vector_only(
+    conn: sqlite3.Connection,
+    query: str,
+    days: int | None,
+    tag: str | None,
+) -> list[dict]:
+    """Pure vector search."""
+    return _search_vector(conn, query, top_k=50, days=days, tag=tag)
 
 
 def _search_fts(
@@ -660,7 +1286,7 @@ def _search_fts(
         params.append(cutoff)
 
     sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY fts.rank"
+    sql += f" ORDER BY fts.rank LIMIT {_SEARCH_LIMIT}"
 
     return conn.execute(sql, params).fetchall()
 
@@ -688,7 +1314,7 @@ def _search_like(
         params.append(cutoff)
 
     sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY m.date DESC, m.line_num ASC"
+    sql += f" ORDER BY m.date DESC, m.line_num ASC LIMIT {_SEARCH_LIMIT}"
 
     return conn.execute(sql, params).fetchall()
 

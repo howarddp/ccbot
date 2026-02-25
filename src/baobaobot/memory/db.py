@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Schema version — bump to force DB recreation on next connect.
 # IMPORTANT: keep in sync with _memory_common.py (standalone bin scripts).
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 # ---------------------------------------------------------------------------
 # Dedup helpers — character-bigram Jaccard similarity
@@ -120,10 +120,33 @@ CREATE TABLE IF NOT EXISTS attachment_meta (
     file_type   TEXT    NOT NULL DEFAULT ''  -- 'image' or 'file'
 );
 
+CREATE TABLE IF NOT EXISTS paragraphs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    path         TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    date         TEXT    NOT NULL,
+    heading      TEXT    NOT NULL DEFAULT '',
+    content      TEXT    NOT NULL,
+    line_start   INTEGER NOT NULL,
+    line_end     INTEGER NOT NULL,
+    content_hash TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_cache (
+    content_hash TEXT    NOT NULL,
+    model_name   TEXT    NOT NULL,
+    embedding    BLOB    NOT NULL,
+    token_count  INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT    NOT NULL,
+    PRIMARY KEY (content_hash, model_name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_memories_date    ON memories(date);
 CREATE INDEX IF NOT EXISTS idx_memories_source  ON memories(source);
 CREATE INDEX IF NOT EXISTS idx_memories_path    ON memories(path);
 CREATE INDEX IF NOT EXISTS idx_attachment_path  ON attachment_meta(memory_path);
+CREATE INDEX IF NOT EXISTS idx_paragraphs_path  ON paragraphs(path);
+CREATE INDEX IF NOT EXISTS idx_paragraphs_hash  ON paragraphs(content_hash);
 """
 
 
@@ -161,12 +184,15 @@ class MemoryDB:
                 version,
                 _SCHEMA_VERSION,
             )
-            # Drop old tables and recreate
+            # Only DROP tables that can be rebuilt from markdown files / API.
+            # ⚠️ NEVER DROP: todos (sole data source is DB, no markdown backup)
             conn.executescript(
                 "DROP TABLE IF EXISTS memories_fts;\n"
                 "DROP TABLE IF EXISTS attachment_meta;\n"
                 "DROP TABLE IF EXISTS memories;\n"
                 "DROP TABLE IF EXISTS file_meta;\n"
+                "DROP TABLE IF EXISTS paragraphs;\n"
+                "DROP TABLE IF EXISTS embedding_cache;\n"
             )
             try:
                 conn.executescript(_SCHEMA)

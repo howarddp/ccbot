@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Reindex memory embeddings for vector search.
+
+Usage:
+    memory-reindex [--force] [--stats] [--workspace PATH]
+
+Modes:
+    (default)   Compute embeddings for paragraphs that don't have one yet
+    --force     Clear all cached embeddings and recompute from scratch
+    --stats     Show embedding statistics without computing anything
+
+Examples:
+    memory-reindex                    # Fill in missing embeddings
+    memory-reindex --force            # Full recompute
+    memory-reindex --stats            # Show stats only
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+# Allow importing _memory_common from the same directory
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _memory_common
+from _memory_common import (
+    _EMBEDDING_MODEL,
+    _EMBEDDING_DIMS,
+    _compute_embeddings,
+    connect_db,
+    resolve_workspace,
+    sync_workspace,
+)
+
+
+def _show_stats(conn) -> None:
+    """Display embedding statistics."""
+    # Paragraph counts
+    total_paras = conn.execute("SELECT COUNT(*) FROM paragraphs").fetchone()[0]
+    by_source = conn.execute(
+        "SELECT source, COUNT(*) as cnt FROM paragraphs GROUP BY source ORDER BY cnt DESC"
+    ).fetchall()
+
+    # Embedding counts
+    total_cached = conn.execute(
+        "SELECT COUNT(*) FROM embedding_cache WHERE model_name = ?",
+        (_EMBEDDING_MODEL,),
+    ).fetchone()[0]
+
+    # Unique hashes in paragraphs (some paragraphs may share content)
+    unique_hashes = conn.execute(
+        "SELECT COUNT(DISTINCT content_hash) FROM paragraphs"
+    ).fetchone()[0]
+
+    # Missing embeddings
+    missing = conn.execute(
+        "SELECT COUNT(DISTINCT p.content_hash) "
+        "FROM paragraphs p "
+        "LEFT JOIN embedding_cache e "
+        "  ON p.content_hash = e.content_hash "
+        "  AND e.model_name = ? "
+        "WHERE e.content_hash IS NULL",
+        (_EMBEDDING_MODEL,),
+    ).fetchone()[0]
+
+    # Token usage by month
+    token_rows = conn.execute(
+        "SELECT strftime('%Y-%m', created_at) AS month, "
+        "COUNT(*) AS embeddings, SUM(token_count) AS tokens "
+        "FROM embedding_cache WHERE model_name = ? "
+        "GROUP BY month ORDER BY month DESC LIMIT 6",
+        (_EMBEDDING_MODEL,),
+    ).fetchall()
+
+    # Total cache size
+    cache_size = conn.execute(
+        "SELECT SUM(LENGTH(embedding)) FROM embedding_cache WHERE model_name = ?",
+        (_EMBEDDING_MODEL,),
+    ).fetchone()[0] or 0
+
+    # Display
+    print(f"Embedding Model: {_EMBEDDING_MODEL} ({_EMBEDDING_DIMS}d)")
+    print(f"Vector Search:   {'enabled' if _memory_common._embedding_enabled else 'disabled'}")
+    print()
+    print(f"Paragraphs:      {total_paras}")
+    for row in by_source:
+        print(f"  {row['source']:12s}  {row['cnt']}")
+    print()
+    print(f"Unique content:  {unique_hashes}")
+    print(f"Cached embeds:   {total_cached}")
+    pct = (total_cached / unique_hashes * 100) if unique_hashes > 0 else 0
+    print(f"Coverage:        {pct:.0f}%")
+    print(f"Missing:         {missing}")
+    print(f"Cache size:      {cache_size / 1024:.1f} KB")
+
+    if token_rows:
+        print()
+        print("Token usage (by month):")
+        for row in token_rows:
+            print(f"  {row['month']}  {row['embeddings']:>5} embeds  {row['tokens'] or 0:>8} tokens")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Reindex memory embeddings")
+    parser.add_argument(
+        "--force", action="store_true", help="Clear cache and recompute all embeddings"
+    )
+    parser.add_argument(
+        "--stats", action="store_true", help="Show embedding statistics only"
+    )
+    parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    if not workspace.exists():
+        print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    conn = connect_db(workspace)
+
+    # Ensure paragraphs are up to date
+    synced = sync_workspace(conn, workspace)
+    if synced:
+        print(f"Synced {synced} file(s)", file=sys.stderr)
+
+    if args.stats:
+        _show_stats(conn)
+        conn.close()
+        return
+
+    if not _memory_common._embedding_enabled:
+        print(
+            "Vector search is disabled. Set OPENAI_API_KEY and install sqlite-vec to enable.",
+        )
+        print()
+        _show_stats(conn)
+        conn.close()
+        sys.exit(1)
+
+    if args.force:
+        deleted = conn.execute(
+            "DELETE FROM embedding_cache WHERE model_name = ?",
+            (_EMBEDDING_MODEL,),
+        ).rowcount
+        conn.commit()
+        print(f"Cleared {deleted} cached embeddings", file=sys.stderr)
+
+    # Compute without timeout (reindex is an explicit user action)
+    computed = _compute_embeddings(conn, timeout=600.0)
+    print(f"Computed {computed} new embedding(s)")
+
+    print()
+    _show_stats(conn)
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

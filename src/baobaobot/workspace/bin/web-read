@@ -32,7 +32,11 @@ def _fetch_with_playwright(url: str) -> str | None:
             browser.close()
             return html
     except Exception as e:
-        print(f"Playwright fetch error: {e}", file=sys.stderr)
+        msg = str(e)
+        if "Executable doesn't exist" in msg or "browserType.launch" in msg:
+            print("Chromium not installed. Run: playwright install chromium", file=sys.stderr)
+        else:
+            print(f"Playwright fetch error: {e}", file=sys.stderr)
         return None
 
 

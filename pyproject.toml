@@ -16,6 +16,7 @@ dependencies = [
     "duckduckgo-search>=8.1.1",
     "trafilatura>=2.0.0",
     "playwright>=1.58.0",
+    "openai>=2.24.0",
 ]
 
 [project.scripts]
