@@ -76,9 +76,11 @@ def generate_todo_id(conn: sqlite3.Connection, date_str: str | None = None) -> s
         date_str = date_str.replace("-", "")
     prefix = f"T{date_str}-"
     row = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM todos WHERE id LIKE ?", (f"{prefix}%",)
+        "SELECT MAX(CAST(SUBSTR(id, ?) AS INTEGER)) AS max_n "
+        "FROM todos WHERE id LIKE ?",
+        (len(prefix) + 1, f"{prefix}%"),
     ).fetchone()
-    n = (row["cnt"] if row else 0) + 1
+    n = (row["max_n"] if row and row["max_n"] else 0) + 1
     return f"{prefix}{n}"
 
 
