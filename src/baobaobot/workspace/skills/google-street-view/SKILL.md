@@ -21,6 +21,7 @@ Enable "Street View Static API" in your [Google Cloud Console](https://console.c
 
 ```bash
 GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+[ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Basic Street View (by coordinates)

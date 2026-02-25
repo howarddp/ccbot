@@ -23,6 +23,7 @@ All commands below assume the key is loaded. Run this first:
 
 ```bash
 GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}}"
+[ -z "$GMAP_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Text Search

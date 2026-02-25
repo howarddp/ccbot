@@ -21,6 +21,7 @@ Uses the same "Places API (New)" already enabled for google-places skill.
 
 ```bash
 GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}}"
+[ -z "$GMAP_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Step 1: Get Photo References

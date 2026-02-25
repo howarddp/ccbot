@@ -30,6 +30,7 @@ Enable "Weather API" in your [Google Cloud Console](https://console.cloud.google
 
 ```bash
 GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+[ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Current Conditions
