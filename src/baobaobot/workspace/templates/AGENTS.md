@@ -125,6 +125,18 @@ Your workspace directory is `{{WORKSPACE_DIR}}`. All file operations should defa
 | `memory/experience/` | Long-term topic memories (one topic per file, locale language naming) |
 | `memory/summaries/` | Auto summaries (generated hourly by system, don't delete manually) |
 | `memory/attachments/` | File attachments organized by date |
+| `users/<name>/` | Per-user personal file storage |
+
+### User Personal Directories
+
+Each user has a personal directory at `users/<username>/` (lowercase username from User Profile).
+
+- When a user asks to save/store a file → save to `users/<username>/`
+- When a user asks to find a previously saved file → search in `users/<username>/`
+- Create the directory automatically on first use
+- You may organize files into subdirectories (e.g. `images/`, `docs/`) as appropriate
+- This directory is for the user's personal files only, not shared data
+- Files here persist across sessions — they are never auto-deleted
 
 ### Exceptions
 - When the user **explicitly requests** operations outside the workspace, you may proceed
