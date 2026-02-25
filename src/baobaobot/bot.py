@@ -657,20 +657,28 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     file_obj = None
     original_name: str | None = None
 
-    if msg.document:
-        file_obj = await msg.document.get_file()
-        original_name = msg.document.file_name
-    elif msg.photo:
-        # Use largest photo
-        file_obj = await msg.photo[-1].get_file()
-    elif msg.video:
-        file_obj = await msg.video.get_file()
-        original_name = msg.video.file_name
-    elif msg.audio:
-        file_obj = await msg.audio.get_file()
-        original_name = msg.audio.file_name
-    elif msg.voice:
-        file_obj = await msg.voice.get_file()
+    try:
+        if msg.document:
+            file_obj = await msg.document.get_file()
+            original_name = msg.document.file_name
+        elif msg.photo:
+            # Use largest photo
+            file_obj = await msg.photo[-1].get_file()
+        elif msg.video:
+            file_obj = await msg.video.get_file()
+            original_name = msg.video.file_name
+        elif msg.audio:
+            file_obj = await msg.audio.get_file()
+            original_name = msg.audio.file_name
+        elif msg.voice:
+            file_obj = await msg.voice.get_file()
+    except Exception as exc:
+        logger.warning("Failed to get file (user=%d): %s", user.id, exc)
+        await safe_reply(
+            update.message,
+            "❌ File too large to download (Telegram Bot API limit: 20 MB).",
+        )
+        return
 
     if file_obj is None:
         await safe_reply(update.message, "❌ Cannot retrieve file.")

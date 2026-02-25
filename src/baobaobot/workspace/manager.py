@@ -81,6 +81,8 @@ _SKILL_NAMES = [
     "google-timezone",
     "google-street-view",
     "google-air-quality",
+    "google-place-photos",
+    "exchange-rate",
     "web-search",
     "web-read",
 ]
