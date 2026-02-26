@@ -231,14 +231,10 @@ function formatTime(ts) {
   return d.toLocaleDateString('zh-TW', {month:'short', day:'numeric'});
 }
 
-const nameParam = DATA.source ? '?name=' + encodeURIComponent(DATA.source) : '';
-
 function itemUrl(item) {
   const base = `/p/${encodeURIComponent(DATA.token)}`;
   const p = DATA.path ? DATA.path + '/' + item.name : item.name;
-  const raw = `${base}/${p.split('/').map(encodeURIComponent).join('/')}`;
-  // Propagate source name on directory navigation
-  return item.is_dir ? raw + nameParam : raw;
+  return `${base}/${p.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 function fileUrl(item) {
@@ -339,13 +335,13 @@ function escHtml(s) {
 function renderBreadcrumb() {
   const bc = document.getElementById('breadcrumb');
   const parts = DATA.path ? DATA.path.split('/') : [];
-  let html = `<a href="/p/${encodeURIComponent(DATA.token)}/${nameParam}">Home</a>`;
+  let html = `<a href="/p/${encodeURIComponent(DATA.token)}/">Home</a>`;
   let cumPath = '';
   parts.forEach((part, i) => {
     cumPath += (cumPath ? '/' : '') + part;
     const encoded = cumPath.split('/').map(encodeURIComponent).join('/');
     if (i < parts.length - 1) {
-      html += `<span class="sep">›</span><a href="/p/${encodeURIComponent(DATA.token)}/${encoded}${nameParam}">${escHtml(part)}</a>`;
+      html += `<span class="sep">›</span><a href="/p/${encodeURIComponent(DATA.token)}/${encoded}">${escHtml(part)}</a>`;
     } else {
       html += `<span class="sep">›</span><span class="current">${escHtml(part)}</span>`;
     }

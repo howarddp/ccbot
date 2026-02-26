@@ -14,6 +14,7 @@ Reads SHARE_SECRET and SHARE_PUBLIC_URL from environment.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import os
@@ -39,10 +40,17 @@ def _parse_ttl(ttl_str: str) -> int:
         return int(ttl_str)
 
 
-def _generate_token(path: str, ttl: int, secret: str) -> str:
+def _encode_name(name: str) -> str:
+    return base64.urlsafe_b64encode(name.encode()).rstrip(b"=").decode()
+
+
+def _generate_token(path: str, ttl: int, secret: str, name: str = "") -> str:
     expires = int(time.time()) + ttl
-    msg = f"{path}:{expires}"
+    name_part = _encode_name(name) if name else ""
+    msg = f"{path}:{expires}:{name_part}"
     sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:_SIG_LENGTH]
+    if name_part:
+        return f"{sig}-{expires}-{name_part}"
     return f"{sig}-{expires}"
 
 
@@ -72,6 +80,9 @@ def main() -> None:
     parser.add_argument(
         "--ttl", default="30m", help="Time-to-live (default: 30m). Examples: 30m, 2h, 1d"
     )
+    parser.add_argument(
+        "--name", default="", help="Display name (e.g. topic name) embedded in token"
+    )
     args = parser.parse_args()
 
     if not args.upload and not args.path:
@@ -95,9 +106,11 @@ def main() -> None:
         # Fall back to CWD itself as workspace root
         ws_root = Path.cwd().resolve()
 
+    name = args.name
+
     if args.upload:
         # Workspace-aware upload token: uploads go to THIS workspace
-        token = _generate_token(f"upload:{ws_root}", ttl, secret)
+        token = _generate_token(f"upload:{ws_root}", ttl, secret, name)
         url = f"{public_url}/u/{token}"
         print(url)
     else:
@@ -119,10 +132,10 @@ def main() -> None:
 
         # Workspace-aware token: server resolves against this specific workspace
         if abs_path.is_dir():
-            token = _generate_token(f"p:{root}:{rel_path}", ttl, secret)
+            token = _generate_token(f"p:{root}:{rel_path}", ttl, secret, name)
             url = f"{public_url}/p/{token}/{rel_path}"
         else:
-            token = _generate_token(f"f:{root}:{rel_path}", ttl, secret)
+            token = _generate_token(f"f:{root}:{rel_path}", ttl, secret, name)
             url = f"{public_url}/f/{token}/{rel_path}"
 
         print(url)

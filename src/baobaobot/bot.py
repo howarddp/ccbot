@@ -37,7 +37,6 @@ import asyncio
 import io
 import logging
 import os
-import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2155,9 +2154,8 @@ async def _deliver_message(
                 if agent_ctx.share_server:
                     agent_ctx.share_server.add_workspace(ws_root)
 
-            # Topic/group name for display on share pages
-            display_name = agent_ctx.session_manager.get_display_name(wid)
-            name_param = f"?name={urllib.parse.quote(display_name)}" if display_name else ""
+            # Topic/group name for embedding in tokens
+            display_name = agent_ctx.session_manager.get_display_name(wid) or ""
 
             # Replace [SHARE_LINK:path] with generated file/dir URL
             for path_str in msg.share_links:
@@ -2170,11 +2168,11 @@ async def _deliver_message(
                     url = f"(file outside workspace: {path_str})"
                 elif p.is_dir():
                     root, rel = result
-                    token = generate_token(f"p:{root}:{rel}")
-                    url = f"{public_url}/p/{token}/{rel}{name_param}"
+                    token = generate_token(f"p:{root}:{rel}", name=display_name)
+                    url = f"{public_url}/p/{token}/{rel}"
                 elif p.is_file():
                     root, rel = result
-                    token = generate_token(f"f:{root}:{rel}")
+                    token = generate_token(f"f:{root}:{rel}", name=display_name)
                     url = f"{public_url}/f/{token}/{rel}"
                 else:
                     url = f"(file not found: {path_str})"
@@ -2187,8 +2185,8 @@ async def _deliver_message(
 
                 ttl = parse_ttl(ttl_str) if ttl_str else 1800
                 token_path = f"upload:{upload_ws}" if upload_ws else "upload"
-                token = generate_token(token_path, ttl=ttl)
-                url = f"{public_url}/u/{token}{name_param}"
+                token = generate_token(token_path, ttl=ttl, name=display_name)
+                url = f"{public_url}/u/{token}"
                 marker = f"[UPLOAD_LINK:{ttl_str}]" if ttl_str else "[UPLOAD_LINK]"
                 text = text.replace(marker, url, 1)
         else:

@@ -12,6 +12,7 @@ Routes:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html as html_mod
@@ -28,7 +29,8 @@ from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-# Token format: {signature_hex[:32]}-{expires_timestamp}
+# Token format: {sig}-{expires} or {sig}-{expires}-{base64url_name}
+# Name is optional metadata (e.g. topic name) encoded into the token.
 _DEFAULT_TTL = 1800  # 30 minutes
 _SIG_LENGTH = 32  # 128-bit HMAC truncation (32 hex chars)
 
@@ -71,13 +73,33 @@ def _load_secret() -> str:
     return secret
 
 
-def generate_token(path: str, ttl: int = _DEFAULT_TTL, secret: str = "") -> str:
-    """Generate a signed token for a path with expiry."""
+def _encode_name(name: str) -> str:
+    """Encode a display name to URL-safe base64 (no padding)."""
+    return base64.urlsafe_b64encode(name.encode()).rstrip(b"=").decode()
+
+
+def _decode_name(encoded: str) -> str:
+    """Decode a URL-safe base64 name (re-add padding)."""
+    padded = encoded + "=" * (-len(encoded) % 4)
+    return base64.urlsafe_b64decode(padded).decode()
+
+
+def generate_token(
+    path: str, ttl: int = _DEFAULT_TTL, secret: str = "", *, name: str = ""
+) -> str:
+    """Generate a signed token for a path with expiry.
+
+    Token format: {sig}-{expires} or {sig}-{expires}-{base64url_name}
+    The name (if provided) participates in the HMAC signature.
+    """
     if not secret:
         secret = _load_secret()
     expires = int(time.time()) + ttl
-    msg = f"{path}:{expires}"
+    name_part = _encode_name(name) if name else ""
+    msg = f"{path}:{expires}:{name_part}"
     sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:_SIG_LENGTH]
+    if name_part:
+        return f"{sig}-{expires}-{name_part}"
     return f"{sig}-{expires}"
 
 
@@ -86,15 +108,28 @@ def verify_token(token: str, path: str, secret: str = "") -> bool:
     if not secret:
         secret = _load_secret()
     try:
-        sig, expires_str = token.rsplit("-", 1)
-        expires = int(expires_str)
-    except (ValueError, AttributeError):
+        parts = token.split("-", 2)
+        sig = parts[0]
+        expires = int(parts[1])
+        name_part = parts[2] if len(parts) > 2 else ""
+    except (ValueError, AttributeError, IndexError):
         return False
     if time.time() > expires:
         return False
-    msg = f"{path}:{expires}"
+    msg = f"{path}:{expires}:{name_part}"
     expected = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:_SIG_LENGTH]
     return hmac.compare_digest(sig, expected)
+
+
+def extract_token_name(token: str) -> str:
+    """Extract the display name from a token (empty string if none)."""
+    try:
+        parts = token.split("-", 2)
+        if len(parts) > 2:
+            return _decode_name(parts[2])
+    except Exception:
+        pass
+    return ""
 
 
 def _resolve_relative(workspace_roots: list[Path], abs_path: Path) -> tuple[Path, str] | None:
@@ -348,8 +383,8 @@ class ShareServer:
             except OSError:
                 items_data.append({"name": item.name, "is_dir": item.is_dir(), "size": None, "mtime": None})
 
-        # Display name from query param (topic/group name)
-        source_name = request.query.get("name", "")
+        # Display name embedded in token
+        source_name = extract_token_name(token)
 
         data = {
             "title": Path(path).name or "Files",
@@ -381,8 +416,8 @@ class ShareServer:
         if workspace is None and not verify_token(token, "upload"):
             return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
 
-        # Inject source name from query param
-        source_name = request.query.get("name", "")
+        # Display name embedded in token
+        source_name = extract_token_name(token)
         page_html = _UPLOAD_HTML.replace(
             "/*__SOURCE__*/''/*__END__*/",
             json.dumps(source_name, ensure_ascii=False),
