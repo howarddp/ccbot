@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Generate signed share/upload URLs for the file share server.
+
+Usage:
+    share-link /path/to/file.html              # share file (30m TTL)
+    share-link /path/to/file.html --ttl 2h     # custom TTL
+    share-link /path/to/dir/                   # share directory
+    share-link --upload                        # upload link (30m TTL)
+    share-link --upload --ttl 1h               # upload link with TTL
+
+Reads SHARE_SECRET and SHARE_PUBLIC_URL from environment.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import hmac
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+_SIG_LENGTH = 32  # Must match share_server.py
+
+
+def _parse_ttl(ttl_str: str) -> int:
+    """Parse TTL string like '30m', '2h', '1d' into seconds."""
+    ttl_str = ttl_str.strip().lower()
+    if ttl_str.endswith("m"):
+        return int(ttl_str[:-1]) * 60
+    elif ttl_str.endswith("h"):
+        return int(ttl_str[:-1]) * 3600
+    elif ttl_str.endswith("d"):
+        return int(ttl_str[:-1]) * 86400
+    elif ttl_str.endswith("s"):
+        return int(ttl_str[:-1])
+    else:
+        return int(ttl_str)
+
+
+def _encode_name(name: str) -> str:
+    return base64.urlsafe_b64encode(name.encode()).rstrip(b"=").decode()
+
+
+def _generate_token(path: str, ttl: int, secret: str, name: str = "") -> str:
+    expires = int(time.time()) + ttl
+    name_part = _encode_name(name) if name else ""
+    msg = f"{path}:{expires}:{name_part}"
+    sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:_SIG_LENGTH]
+    if name_part:
+        return f"{sig}-{expires}-{name_part}"
+    return f"{sig}-{expires}"
+
+
+def _get_tmux_window_name() -> str:
+    """Read the current tmux window name and extract the topic name part.
+
+    Window names follow the format '{prefix}/{topic_name}' (e.g. 'baobaobot/test').
+    Uses $TMUX_PANE to target the correct window when multiple windows exist.
+    """
+    if not os.environ.get("TMUX"):
+        return ""
+    try:
+        # Use TMUX_PANE to target the correct window (not the client's current window)
+        pane = os.environ.get("TMUX_PANE", "")
+        cmd = ["tmux", "display-message", "-p", "#{window_name}"]
+        if pane:
+            cmd = ["tmux", "display-message", "-t", pane, "-p", "#{window_name}"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        name = result.stdout.strip() if result.returncode == 0 else ""
+        # Extract topic name: 'baobaobot/test' → 'test'
+        if "/" in name:
+            name = name.rsplit("/", 1)[1]
+        return name
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _find_workspace_root(abs_path: Path) -> Path | None:
+    """Find the workspace root that contains abs_path.
+
+    Checks WORKSPACE_ROOTS env var (colon-separated), falling back to CWD.
+    """
+    roots_env = os.environ.get("WORKSPACE_ROOTS", "")
+    roots = [Path(r) for r in roots_env.split(":") if r] if roots_env else [Path.cwd()]
+    for root in roots:
+        root_resolved = root.resolve()
+        try:
+            abs_path.resolve().relative_to(root_resolved)
+            return root_resolved
+        except ValueError:
+            continue
+    return None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate share/upload URLs")
+    parser.add_argument("path", nargs="?", help="File or directory path to share")
+    parser.add_argument(
+        "--upload", action="store_true", help="Generate an upload link"
+    )
+    parser.add_argument(
+        "--ttl", default="30m", help="Time-to-live (default: 30m). Examples: 30m, 2h, 1d"
+    )
+    parser.add_argument(
+        "--name", default="", help="Display name (e.g. topic name) embedded in token"
+    )
+    args = parser.parse_args()
+
+    if not args.upload and not args.path:
+        parser.error("Provide a path to share, or use --upload for an upload link")
+
+    secret = os.environ.get("SHARE_SECRET", "")
+    if not secret:
+        print("Error: SHARE_SECRET not set", file=sys.stderr)
+        sys.exit(1)
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url:
+        print("Error: SHARE_PUBLIC_URL not set (tunnel not running?)", file=sys.stderr)
+        sys.exit(1)
+
+    ttl = _parse_ttl(args.ttl)
+
+    # Determine workspace root from CWD or WORKSPACE_ROOTS
+    ws_root = _find_workspace_root(Path.cwd())
+    if ws_root is None:
+        # Fall back to CWD itself as workspace root
+        ws_root = Path.cwd().resolve()
+
+    name = args.name or _get_tmux_window_name()
+
+    if args.upload:
+        # Workspace-aware upload token: uploads go to THIS workspace
+        token = _generate_token(f"upload:{ws_root}", ttl, secret, name)
+        url = f"{public_url}/u/{token}"
+        print(url)
+    else:
+        abs_path = Path(args.path).resolve()
+        if not abs_path.exists():
+            print(f"Error: {args.path} not found", file=sys.stderr)
+            sys.exit(1)
+
+        # Resolve to relative path from workspace root
+        root = _find_workspace_root(abs_path)
+        if root is None:
+            print("Error: path is outside all workspace roots", file=sys.stderr)
+            sys.exit(1)
+
+        rel_path = str(abs_path.relative_to(root))
+        # "." (root dir itself) is unreliable in URLs — browsers strip trailing dots
+        if rel_path == ".":
+            rel_path = ""
+
+        # Workspace-aware token: server resolves against this specific workspace
+        if abs_path.is_dir():
+            token = _generate_token(f"p:{root}:{rel_path}", ttl, secret, name)
+            url = f"{public_url}/p/{token}/{rel_path}"
+        else:
+            token = _generate_token(f"f:{root}:{rel_path}", ttl, secret, name)
+            url = f"{public_url}/f/{token}/{rel_path}"
+
+        print(url)
+
+
+if __name__ == "__main__":
+    main()
