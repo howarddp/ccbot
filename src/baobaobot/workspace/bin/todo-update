@@ -30,7 +30,9 @@ def main() -> None:
     parser.add_argument("id", help="TODO ID (e.g. T20260225-1)")
     parser.add_argument("--title", default=None, help="New title")
     parser.add_argument("--type", default=None, dest="todo_type", help="New type")
-    parser.add_argument("--deadline", default=None, help="New deadline (YYYY-MM-DD)")
+    parser.add_argument("--start", default=None, help="New start date (YYYY-MM-DD [HH:MM])")
+    parser.add_argument("--deadline", "--end", default=None, help="New end date / deadline (YYYY-MM-DD [HH:MM])")
+    parser.add_argument("--location", default=None, help="New location")
     parser.add_argument("--content", default=None, help="New content")
     parser.add_argument("--status", default=None, choices=["open", "done"], help="New status")
     parser.add_argument("--attach", action="append", default=[], help="Add attachment (can be repeated)")
@@ -52,8 +54,12 @@ def main() -> None:
         fields["title"] = args.title
     if args.todo_type is not None:
         fields["type"] = args.todo_type
+    if args.start is not None:
+        fields["start_date"] = args.start
     if args.deadline is not None:
         fields["deadline"] = args.deadline
+    if args.location is not None:
+        fields["location"] = args.location
     if args.content is not None:
         fields["content"] = args.content
     if args.status is not None:

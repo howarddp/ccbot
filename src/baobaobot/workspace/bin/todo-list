@@ -26,6 +26,8 @@ def main() -> None:
     parser.add_argument("--before", default=None, help="Deadline before date (YYYY-MM-DD)")
     parser.add_argument("--after", default=None, help="Created after date (YYYY-MM-DD)")
     parser.add_argument("--overdue", action="store_true", help="Only show overdue items")
+    parser.add_argument("--today", action="store_true", dest="today_only", help="Show items active today")
+    parser.add_argument("--upcoming", type=int, default=None, metavar="N", help="Show items within the next N days")
     parser.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
     parser.add_argument("--workspace", default=None, help="Workspace directory")
     args = parser.parse_args()
@@ -41,6 +43,8 @@ def main() -> None:
         before=args.before,
         after=args.after,
         overdue=args.overdue,
+        today_only=args.today_only,
+        upcoming=args.upcoming,
     )
 
     if args.json_output:
@@ -53,7 +57,9 @@ def main() -> None:
                 "content": r["content"],
                 "created_by": r["created_by"],
                 "created_at": r["created_at"],
+                "start_date": r["start_date"],
                 "deadline": r["deadline"],
+                "location": r["location"],
                 "status": r["status"],
                 "done_at": r["done_at"],
                 "attachments": json.loads(r["attachments"] or "[]"),

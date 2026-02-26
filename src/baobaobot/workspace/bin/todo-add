@@ -25,7 +25,9 @@ def main() -> None:
     parser.add_argument("--type", default="task", dest="todo_type", help="Type (task/bug/feature/reminder/idea/custom)")
     parser.add_argument("--user", default="", help="Creator name")
     parser.add_argument("--user-id", default="", help="Creator user ID")
-    parser.add_argument("--deadline", default=None, help="Deadline (YYYY-MM-DD)")
+    parser.add_argument("--start", default=None, help="Start date (YYYY-MM-DD [HH:MM])")
+    parser.add_argument("--deadline", "--end", default=None, help="End date / deadline (YYYY-MM-DD [HH:MM])")
+    parser.add_argument("--location", default="", help="Location")
     parser.add_argument("--content", default="", help="Detailed content")
     parser.add_argument("--attach", action="append", default=[], help="Attach file (can be repeated)")
     parser.add_argument("--workspace", default=None, help="Workspace directory")
@@ -50,15 +52,23 @@ def main() -> None:
         todo_type=args.todo_type,
         user=args.user,
         user_id=args.user_id,
+        start_date=args.start,
         deadline=args.deadline,
+        location=args.location,
         content=args.content,
         attachments=attachment_paths,
     )
     print(f"✅ TODO added: {todo_id}")
     print(f"   Title: {args.title}")
     print(f"   Type: {args.todo_type}")
-    if args.deadline:
+    if args.start and args.deadline:
+        print(f"   Date: {args.start} ~ {args.deadline}")
+    elif args.start:
+        print(f"   Start: {args.start}")
+    elif args.deadline:
         print(f"   Deadline: {args.deadline}")
+    if args.location:
+        print(f"   Location: {args.location}")
     if attachment_paths:
         print(f"   Attachments: {len(attachment_paths)} file(s)")
     conn.close()

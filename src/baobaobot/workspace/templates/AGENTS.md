@@ -168,51 +168,15 @@ When you need to send a file to the user, use this marker in your reply:
 - Multiple `[SEND_FILE:...]` markers can be included in a single message
 - Files sent by users via Telegram are saved to `tmp/`, and you'll receive a file path notification
 
-## Memory Save
-
-Use the `/memory-save` skill for all memory writes:
-
-**Text memories:**
-```
-{{BIN_DIR}}/memory-save "important decision or observation" --user Alice
-{{BIN_DIR}}/memory-save -e 使用者偏好 "long-term knowledge" --user Alice
-```
-
-**File attachments:**
-```
-{{BIN_DIR}}/memory-save /path/to/file "description" --user Alice
-{{BIN_DIR}}/memory-save -e 專案筆記 /path/to/file "description"
-```
-
-- Auto-detects mode: existing file path → attachment, otherwise → text
-- `-e TOPIC` saves to `memory/experience/<topic>.md` instead of daily (use locale language for topic names)
-- Images (`.jpg/.png/.gif/.webp`) use `![description](path)` format
-- Attachments are stored in `memory/attachments/YYYY-MM-DD/`
-
 ## TODO Management
 
-Use TODO items for actionable, completable tasks. Use memory for facts, preferences, and long-term knowledge.
+Use `todo-add` / `todo-list` / `todo-done` / `todo-update` / `todo-remove` / `todo-export` skills to manage TODOs and events. See each skill for detailed parameters.
 
-**When to use TODO vs Memory:**
-- TODO: "Fix the login bug", "Add dark mode", "Review PR #42", "Buy groceries"
-- Memory: "Alice prefers dark mode", "API uses OAuth 2.0", "Meeting decided to use React"
-
-**Commands:**
-```
-{{BIN_DIR}}/todo-add "title" --type task --user Alice [--deadline DATE] [--content TEXT] [--attach FILE]
-{{BIN_DIR}}/todo-list [--status open|done|all] [--type TYPE] [--user USER] [--overdue]
-{{BIN_DIR}}/todo-get ID
-{{BIN_DIR}}/todo-done ID
-{{BIN_DIR}}/todo-update ID [--title TEXT] [--type TYPE] [--deadline DATE] [--content TEXT]
-{{BIN_DIR}}/todo-remove ID
-{{BIN_DIR}}/todo-export [same filters as list]
-```
-
-- Types: task, bug, feature, reminder, idea (or any custom type)
-- IDs use T{YYYYMMDD}-{N} format (e.g. T20260225-1)
+- Types: task, bug, feature, reminder, idea, event (or any custom type)
+- Events/appointments: use `--type event` with `--start` / `--end` / `--location`
 - When user mentions a task, bug, or actionable item, create a TODO
 - Check overdue items periodically with `todo-list --overdue`
-- Use `todo-export` to generate a Markdown file, then send with `[SEND_FILE:...]`
+- Use `todo-list --today` for today's events, `--upcoming 7` for next 7 days
 
 ### Memory Attachments (Auto-summary)
 

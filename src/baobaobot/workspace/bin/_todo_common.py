@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS todos (
     created_by    TEXT NOT NULL DEFAULT '',
     created_by_id TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
+    start_date    TEXT,
     deadline      TEXT,
+    location      TEXT NOT NULL DEFAULT '',
     status        TEXT NOT NULL DEFAULT 'open',
     done_at       TEXT,
     attachments   TEXT NOT NULL DEFAULT '[]'
@@ -35,6 +37,7 @@ CREATE TABLE IF NOT EXISTS todos (
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
 CREATE INDEX IF NOT EXISTS idx_todos_type ON todos(type);
 CREATE INDEX IF NOT EXISTS idx_todos_deadline ON todos(deadline);
+CREATE INDEX IF NOT EXISTS idx_todos_start_date ON todos(start_date);
 CREATE INDEX IF NOT EXISTS idx_todos_created_by ON todos(created_by);
 """
 
@@ -50,6 +53,15 @@ def connect_db(workspace: Path) -> sqlite3.Connection:
     ).fetchone()
     if row is None:
         conn.executescript(_TODO_SCHEMA)
+        conn.commit()
+    else:
+        # Migrate: add new columns if missing
+        cols = {c["name"] for c in conn.execute("PRAGMA table_info(todos)").fetchall()}
+        if "start_date" not in cols:
+            conn.execute("ALTER TABLE todos ADD COLUMN start_date TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_todos_start_date ON todos(start_date)")
+        if "location" not in cols:
+            conn.execute("ALTER TABLE todos ADD COLUMN location TEXT NOT NULL DEFAULT ''")
         conn.commit()
     return conn
 
@@ -91,7 +103,9 @@ def add_todo(
     todo_type: str = "task",
     user: str = "",
     user_id: str = "",
+    start_date: str | None = None,
     deadline: str | None = None,
+    location: str = "",
     content: str = "",
     attachments: list[str] | None = None,
 ) -> str:
@@ -100,8 +114,8 @@ def add_todo(
     todo_id = generate_todo_id(conn)
     conn.execute(
         "INSERT INTO todos (id, type, title, content, created_by, created_by_id, "
-        "created_at, deadline, status, attachments) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+        "created_at, start_date, deadline, location, status, attachments) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
         (
             todo_id,
             todo_type,
@@ -110,7 +124,9 @@ def add_todo(
             user,
             user_id,
             now,
+            start_date,
             deadline,
+            location,
             json.dumps(attachments or []),
         ),
     )
@@ -127,8 +143,16 @@ def list_todos(
     before: str | None = None,
     after: str | None = None,
     overdue: bool = False,
+    today_only: bool = False,
+    upcoming: int | None = None,
 ) -> list[sqlite3.Row]:
-    """List todos with optional filters."""
+    """List todos with optional filters.
+
+    Args:
+        today_only: Show items active today (start_date <= today <= deadline,
+                    or deadline = today, or start_date = today).
+        upcoming: Show items within the next N days from today.
+    """
     conditions: list[str] = []
     params: list[str] = []
 
@@ -142,20 +166,47 @@ def list_todos(
         conditions.append("created_by = ?")
         params.append(user)
     if before:
-        conditions.append("deadline IS NOT NULL AND deadline <= ?")
+        conditions.append("deadline IS NOT NULL AND date(deadline) <= ?")
         params.append(before)
     if after:
         conditions.append("created_at >= ?")
         params.append(after)
     if overdue:
-        today = date.today().isoformat()
-        conditions.append("deadline IS NOT NULL AND deadline < ? AND status = 'open'")
-        params.append(today)
+        today_str = date.today().isoformat()
+        conditions.append("deadline IS NOT NULL AND date(deadline) < ? AND status = 'open'")
+        params.append(today_str)
+    if today_only:
+        today_str = date.today().isoformat()
+        conditions.append(
+            "("
+            "(start_date IS NOT NULL AND deadline IS NOT NULL AND date(start_date) <= ? AND date(deadline) >= ?)"
+            " OR (start_date IS NULL AND deadline IS NOT NULL AND date(deadline) = ?)"
+            " OR (deadline IS NULL AND start_date IS NOT NULL AND date(start_date) = ?)"
+            ")"
+        )
+        params.extend([today_str, today_str, today_str, today_str])
+    if upcoming is not None:
+        from datetime import timedelta
+        today_str = date.today().isoformat()
+        end_str = (date.today() + timedelta(days=upcoming)).isoformat()
+        conditions.append(
+            "("
+            "(start_date IS NOT NULL AND deadline IS NOT NULL AND date(start_date) <= ? AND date(deadline) >= ?)"
+            " OR (start_date IS NULL AND deadline IS NOT NULL AND date(deadline) >= ? AND date(deadline) <= ?)"
+            " OR (deadline IS NULL AND start_date IS NOT NULL AND date(start_date) >= ? AND date(start_date) <= ?)"
+            " OR (start_date IS NOT NULL AND deadline IS NOT NULL AND date(start_date) >= ? AND date(start_date) <= ?)"
+            ")"
+        )
+        params.extend([end_str, today_str, today_str, end_str, today_str, end_str, today_str, end_str])
 
     sql = "SELECT * FROM todos"
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY CASE WHEN deadline IS NOT NULL THEN 0 ELSE 1 END, deadline ASC, created_at DESC"
+    sql += (
+        " ORDER BY "
+        "CASE WHEN start_date IS NOT NULL THEN 0 WHEN deadline IS NOT NULL THEN 0 ELSE 1 END, "
+        "COALESCE(start_date, deadline) ASC, created_at DESC"
+    )
 
     return conn.execute(sql, params).fetchall()
 
@@ -187,7 +238,7 @@ def update_todo(conn: sqlite3.Connection, todo_id: str, **fields: str) -> bool:
     if row is None:
         return False
 
-    allowed = {"title", "type", "deadline", "content", "status"}
+    allowed = {"title", "type", "start_date", "deadline", "location", "content", "status"}
     updates: list[str] = []
     params: list[str] = []
     for key, value in fields.items():
@@ -268,8 +319,16 @@ def copy_to_attachments(workspace: Path, source: Path) -> str:
 def format_todo_short(row: sqlite3.Row) -> str:
     """One-line format for list view."""
     parts = [f"[{row['id']}]", f"[{row['type']}]", row["title"]]
-    if row["deadline"]:
-        parts.append(f"(due: {row['deadline']})")
+    start = row["start_date"]
+    deadline = row["deadline"]
+    if start and deadline:
+        parts.append(f"({start}~{deadline})")
+    elif deadline:
+        parts.append(f"(due: {deadline})")
+    elif start:
+        parts.append(f"(start: {start})")
+    if row["location"]:
+        parts.append(f"📍{row['location']}")
     parts.append(f"@{row['created_by']}" if row["created_by"] else "")
     if row["status"] == "done":
         parts.append(f"✅ {row['done_at'][:10]}" if row["done_at"] else "✅")
@@ -284,9 +343,18 @@ def format_todo_detail(row: sqlite3.Row) -> str:
         f"- **Title:** {row['title']}",
         f"- **Created by:** {row['created_by'] or '—'}",
         f"- **Created at:** {row['created_at']}",
-        f"- **Deadline:** {row['deadline'] or '—'}",
-        f"- **Status:** {row['status']}",
     ]
+    start = row["start_date"]
+    deadline = row["deadline"]
+    if start and deadline:
+        lines.append(f"- **Date:** {start} ~ {deadline}")
+    else:
+        if start:
+            lines.append(f"- **Start:** {start}")
+        lines.append(f"- **Deadline:** {deadline or '—'}")
+    if row["location"]:
+        lines.append(f"- **Location:** {row['location']}")
+    lines.append(f"- **Status:** {row['status']}")
     if row["status"] == "done" and row["done_at"]:
         lines.append(f"- **Done at:** {row['done_at']}")
 
