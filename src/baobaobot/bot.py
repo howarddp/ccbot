@@ -1858,9 +1858,9 @@ async def _upload_with_heartbeat(
         chat_id=chat_id,
         text=f"📤 Uploading {fpath.name} ({size_kb:.0f} KB)...",
         message_thread_id=thread_id,
-        connect_timeout=10,
-        write_timeout=10,
-        read_timeout=10,
+        connect_timeout=20,
+        write_timeout=20,
+        read_timeout=30,
     )
     msg_id = status_msg.message_id
 
@@ -2489,11 +2489,11 @@ async def post_shutdown(application: Application) -> None:
 
 def create_bot(agent_ctx: AgentContext) -> Application:
     request = HTTPXRequest(
-        connection_pool_size=16,
-        connect_timeout=10.0,
+        connection_pool_size=32,
+        connect_timeout=20.0,
         read_timeout=30.0,
         write_timeout=30.0,
-        pool_timeout=10.0,
+        pool_timeout=15.0,
     )
     application = (
         Application.builder()

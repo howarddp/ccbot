@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Status polling interval
-STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
+STATUS_POLL_INTERVAL = 1.5  # seconds - balanced for high-latency API (rate limiting at send layer)
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
