@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload Files</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #f5f5f5;
+         padding: 20px; max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 1.4em; margin-bottom: 16px; color: #333; }
+  .drop-zone { border: 2px dashed #ccc; border-radius: 12px; padding: 40px 20px;
+               text-align: center; color: #888; cursor: pointer; transition: .2s;
+               background: #fff; margin-bottom: 16px; }
+  .drop-zone.drag { border-color: #4a9eff; background: #f0f7ff; color: #4a9eff; }
+  .drop-zone input { display: none; }
+  .file-list { margin-bottom: 16px; }
+  .file-item { display: flex; justify-content: space-between; align-items: center;
+               padding: 8px 12px; background: #fff; border-radius: 8px;
+               margin-bottom: 6px; font-size: 0.9em; }
+  .file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; margin-right: 8px; }
+  .file-item .size { color: #888; font-size: 0.85em; white-space: nowrap; }
+  .file-item .remove { color: #e55; cursor: pointer; margin-left: 8px;
+                       font-size: 1.1em; padding: 0 4px; }
+  textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px;
+             font-size: 1em; resize: vertical; min-height: 60px; margin-bottom: 16px; }
+  button { width: 100%; padding: 14px; background: #4a9eff; color: #fff; border: none;
+           border-radius: 8px; font-size: 1.1em; cursor: pointer; }
+  button:disabled { background: #ccc; }
+  .progress { display: none; margin-top: 12px; }
+  .progress-bar { height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #4a9eff; width: 0%; transition: width .3s; }
+  .status { text-align: center; margin-top: 12px; color: #888; }
+  .done { color: #4caf50; font-size: 1.2em; text-align: center; margin-top: 20px; }
+  .expired { color: #e55; font-size: 1.2em; text-align: center; margin-top: 40px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>Upload Files</h1>
+  <div class="drop-zone" id="dropZone">
+    <p>Tap to select or drag files here</p>
+    <input type="file" id="fileInput" multiple>
+  </div>
+  <div class="file-list" id="fileList"></div>
+  <textarea id="description" placeholder="Description (optional)"></textarea>
+  <button id="uploadBtn" disabled>Upload</button>
+  <div class="progress" id="progress">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="status" id="statusText">Uploading...</div>
+  </div>
+</div>
+<script>
+const token = location.pathname.split('/')[2];
+const dz = document.getElementById('dropZone');
+const fi = document.getElementById('fileInput');
+const fl = document.getElementById('fileList');
+const btn = document.getElementById('uploadBtn');
+let files = [];
+
+function formatSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+function render() {
+  fl.innerHTML = '';
+  files.forEach((f, i) => {
+    const d = document.createElement('div');
+    d.className = 'file-item';
+    d.innerHTML = `<span class="name">${f.name}</span><span class="size">${formatSize(f.size)}</span><span class="remove" data-i="${i}">&times;</span>`;
+    fl.appendChild(d);
+  });
+  btn.disabled = files.length === 0;
+}
+
+function addFiles(newFiles) {
+  for (const f of newFiles) files.push(f);
+  render();
+}
+
+dz.addEventListener('click', () => fi.click());
+fi.addEventListener('change', () => { addFiles(fi.files); fi.value = ''; });
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); addFiles(e.dataTransfer.files); });
+fl.addEventListener('click', e => {
+  if (e.target.classList.contains('remove')) { files.splice(+e.target.dataset.i, 1); render(); }
+});
+
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  const pg = document.getElementById('progress');
+  const pf = document.getElementById('progressFill');
+  const st = document.getElementById('statusText');
+  pg.style.display = 'block';
+
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  fd.append('description', document.getElementById('description').value);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `/u/${token}/upload`);
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) pf.style.width = (e.loaded/e.total*100)+'%';
+  };
+  xhr.onload = () => {
+    if (xhr.status === 200) {
+      document.getElementById('app').innerHTML = '<div class="done">Upload complete!</div>';
+    } else {
+      st.textContent = 'Upload failed: ' + xhr.statusText;
+      btn.disabled = false;
+    }
+  };
+  xhr.onerror = () => { st.textContent = 'Network error'; btn.disabled = false; };
+  xhr.send(fd);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<style>
+:root {
+  --bg: #f5f5f7;
+  --card: #fff;
+  --border: #e5e5e7;
+  --text: #1d1d1f;
+  --text2: #86868b;
+  --accent: #007aff;
+  --hover: #f0f0f2;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+       background: var(--bg); color: var(--text); line-height: 1.5; }
+
+/* Header */
+.header { background: var(--card); border-bottom: 1px solid var(--border);
+           padding: 12px 16px; position: sticky; top: 0; z-index: 100; }
+.header-top { display: flex; align-items: center; gap: 10px; }
+.header h1 { font-size: 1.2em; font-weight: 600; flex: 1; min-width: 0;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar { display: flex; gap: 6px; }
+.toolbar button { background: none; border: 1px solid var(--border); border-radius: 6px;
+                  padding: 6px 10px; cursor: pointer; font-size: 14px; color: var(--text2);
+                  transition: .15s; }
+.toolbar button:hover, .toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Breadcrumb */
+.breadcrumb { display: flex; align-items: center; gap: 4px; padding: 8px 16px;
+              font-size: 0.85em; overflow-x: auto; white-space: nowrap;
+              scrollbar-width: none; }
+.breadcrumb::-webkit-scrollbar { display: none; }
+.breadcrumb a { color: var(--accent); text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { color: var(--text2); }
+.breadcrumb .current { color: var(--text); font-weight: 500; }
+
+/* Search */
+.search-bar { padding: 8px 16px 4px; }
+.search-bar input { width: 100%; padding: 8px 12px; border: 1px solid var(--border);
+                    border-radius: 8px; font-size: 0.95em; background: var(--bg);
+                    outline: none; transition: .15s; }
+.search-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,122,255,.15); }
+
+/* Sort bar */
+.sort-bar { display: flex; align-items: center; padding: 6px 16px; font-size: 0.8em; color: var(--text2); gap: 12px; }
+.sort-bar span { cursor: pointer; user-select: none; }
+.sort-bar span:hover { color: var(--accent); }
+.sort-bar span.active { color: var(--accent); font-weight: 600; }
+.sort-bar .count { margin-left: auto; }
+
+/* File list */
+.file-list { padding: 4px 12px 80px; }
+
+/* List view */
+.file-list.list .item { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                        border-radius: 8px; cursor: pointer; transition: .1s; text-decoration: none; color: inherit; }
+.file-list.list .item:hover { background: var(--hover); }
+.file-list.list .icon { font-size: 1.6em; width: 36px; text-align: center; flex-shrink: 0; }
+.file-list.list .info { flex: 1; min-width: 0; }
+.file-list.list .name { font-size: 0.95em; font-weight: 500; overflow: hidden;
+                        text-overflow: ellipsis; white-space: nowrap; }
+.file-list.list .meta { font-size: 0.8em; color: var(--text2); display: flex; gap: 8px; }
+.file-list.list .thumb { display: none; }
+
+/* Grid view */
+.file-list.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.file-list.grid .item { display: flex; flex-direction: column; align-items: center; padding: 14px 8px 10px;
+                        border-radius: var(--radius); cursor: pointer; transition: .1s;
+                        text-decoration: none; color: inherit; background: var(--card);
+                        box-shadow: var(--shadow); }
+.file-list.grid .item:hover { box-shadow: 0 2px 8px rgba(0,0,0,.12); transform: translateY(-1px); }
+.file-list.grid .icon { font-size: 2.4em; margin-bottom: 6px; }
+.file-list.grid .info { text-align: center; width: 100%; }
+.file-list.grid .name { font-size: 0.85em; font-weight: 500; overflow: hidden;
+                        text-overflow: ellipsis; white-space: nowrap; }
+.file-list.grid .meta { font-size: 0.75em; color: var(--text2); justify-content: center; display: flex; gap: 6px; }
+.file-list.grid .thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px;
+                         margin-bottom: 6px; background: var(--bg); }
+.file-list.grid .thumb + .icon { display: none; }
+.file-list.grid .item:not(.has-thumb) .thumb { display: none; }
+
+/* Empty state */
+.empty { text-align: center; padding: 60px 20px; color: var(--text2); }
+.empty .emoji { font-size: 3em; margin-bottom: 12px; }
+
+/* Preview modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85);
+                 z-index: 200; flex-direction: column; }
+.modal-overlay.open { display: flex; }
+.modal-header { display: flex; align-items: center; padding: 12px 16px; color: #fff; gap: 12px; flex-shrink: 0; }
+.modal-header .title { flex: 1; font-size: 0.95em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-header button { background: rgba(255,255,255,.15); border: none; color: #fff;
+                       border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 14px; }
+.modal-header button:hover { background: rgba(255,255,255,.3); }
+.modal-body { flex: 1; display: flex; align-items: center; justify-content: center;
+              overflow: auto; padding: 16px; min-height: 0; }
+.modal-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.modal-body video, .modal-body audio { max-width: 100%; max-height: 100%; }
+.modal-body .text-preview { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px;
+                            font-family: "SF Mono", Menlo, monospace; font-size: 0.85em;
+                            white-space: pre-wrap; word-break: break-all; overflow: auto;
+                            max-width: 100%; max-height: 100%; width: 100%; }
+.modal-body iframe { width: 100%; height: 100%; border: none; border-radius: 4px; background: #fff; }
+.modal-body .loading { color: #fff; font-size: 1.1em; }
+
+/* Nav arrows */
+.modal-nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.2);
+             border: none; color: #fff; font-size: 1.8em; padding: 12px 16px; cursor: pointer;
+             border-radius: 8px; z-index: 210; }
+.modal-nav:hover { background: rgba(255,255,255,.35); }
+.modal-nav.prev { left: 12px; }
+.modal-nav.next { right: 12px; }
+
+/* RWD */
+@media (max-width: 767px) {
+  .file-list.grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+  .file-list.grid .item { padding: 10px 6px 8px; }
+  .file-list.grid .icon { font-size: 2em; }
+  .modal-nav { padding: 8px 12px; font-size: 1.4em; }
+  .modal-nav.prev { left: 4px; }
+  .modal-nav.next { right: 4px; }
+}
+@media (min-width: 768px) {
+  .header { padding: 14px 24px; }
+  .breadcrumb { padding: 8px 24px; }
+  .search-bar { padding: 8px 24px 4px; }
+  .sort-bar { padding: 6px 24px; }
+  .file-list { padding: 4px 20px 80px; }
+  .file-list.grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-top">
+    <h1 id="title"></h1>
+    <div class="toolbar">
+      <button id="searchToggle" title="Search">🔍</button>
+      <button id="viewList" title="List view">☰</button>
+      <button id="viewGrid" title="Grid view">⊞</button>
+    </div>
+  </div>
+</div>
+<div class="breadcrumb" id="breadcrumb"></div>
+<div class="search-bar" id="searchBar" style="display:none">
+  <input type="text" id="searchInput" placeholder="Filter files...">
+</div>
+<div class="sort-bar" id="sortBar">
+  <span data-sort="name" class="active">Name ↕</span>
+  <span data-sort="size">Size</span>
+  <span data-sort="mtime">Date</span>
+  <span class="count" id="itemCount"></span>
+</div>
+<div class="file-list list" id="fileList"></div>
+
+<!-- Preview modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal-header">
+    <span class="title" id="modalTitle"></span>
+    <button id="modalDownload">⬇ Download</button>
+    <button id="modalClose">✕</button>
+  </div>
+  <div class="modal-body" id="modalBody"></div>
+  <button class="modal-nav prev" id="modalPrev">‹</button>
+  <button class="modal-nav next" id="modalNext">›</button>
+</div>
+
+<script>
+// Data injected by server
+const DATA = /*__DATA__*/{"title":"","token":"","path":"","items":[]}/*__END__*/;
+
+const ICONS = {
+  dir: '📁', default: '📄',
+  image: '🖼', video: '🎬', audio: '🎵', pdf: '📕',
+  code: '💻', text: '📝', archive: '📦', spreadsheet: '📊',
+  doc: '📘', presentation: '📙',
+};
+
+const EXT_MAP = {
+  jpg:'image', jpeg:'image', png:'image', gif:'image', webp:'image', svg:'image', bmp:'image', ico:'image',
+  mp4:'video', webm:'video', mov:'video', avi:'video', mkv:'video',
+  mp3:'audio', wav:'audio', ogg:'audio', flac:'audio', aac:'audio', m4a:'audio',
+  pdf:'pdf',
+  txt:'text', md:'text', log:'text', csv:'text', tsv:'text', ini:'text', cfg:'text', conf:'text', yaml:'text', yml:'text', toml:'text',
+  js:'code', ts:'code', py:'code', rb:'code', go:'code', rs:'code', java:'code', c:'code', cpp:'code', h:'code',
+  html:'code', css:'code', json:'code', xml:'code', sql:'code', sh:'code', bash:'code', zsh:'code',
+  zip:'archive', tar:'archive', gz:'archive', '7z':'archive', rar:'archive', bz2:'archive',
+  xls:'spreadsheet', xlsx:'spreadsheet',
+  doc:'doc', docx:'doc',
+  ppt:'presentation', pptx:'presentation',
+};
+
+const PREVIEW_TYPES = new Set(['image','video','audio','pdf','text','code']);
+
+function getFileType(name, isDir) {
+  if (isDir) return 'dir';
+  const ext = name.split('.').pop().toLowerCase();
+  return EXT_MAP[ext] || 'default';
+}
+
+function getIcon(type) { return ICONS[type] || ICONS.default; }
+
+function formatSize(b) {
+  if (b == null || b < 0) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(1) + ' GB';
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = Date.now();
+  const diff = (now - d.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+  return d.toLocaleDateString('zh-TW', {month:'short', day:'numeric'});
+}
+
+function itemUrl(item) {
+  const base = `/p/${encodeURIComponent(DATA.token)}`;
+  const p = DATA.path ? DATA.path + '/' + item.name : item.name;
+  return `${base}/${p.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function fileUrl(item) {
+  // Use /p/ path — _handle_preview serves files too
+  return itemUrl(item);
+}
+
+// State
+let viewMode = localStorage.getItem('fm_view') || (window.innerWidth >= 768 ? 'grid' : 'list');
+let sortKey = 'name';
+let sortAsc = true;
+let searchQuery = '';
+let currentPreviewIndex = -1;
+let previewableItems = [];
+
+// Render
+function getFilteredItems() {
+  let items = DATA.items.slice();
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    items = items.filter(i => i.name.toLowerCase().includes(q));
+  }
+  items.sort((a, b) => {
+    // Dirs always first
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    let cmp = 0;
+    if (sortKey === 'name') cmp = a.name.localeCompare(b.name, 'zh-TW', {numeric: true});
+    else if (sortKey === 'size') cmp = (a.size||0) - (b.size||0);
+    else if (sortKey === 'mtime') cmp = (a.mtime||0) - (b.mtime||0);
+    return sortAsc ? cmp : -cmp;
+  });
+  return items;
+}
+
+function render() {
+  const items = getFilteredItems();
+  const fl = document.getElementById('fileList');
+  fl.className = 'file-list ' + viewMode;
+
+  if (items.length === 0) {
+    fl.innerHTML = '<div class="empty"><div class="emoji">📭</div><div>No files found</div></div>';
+    document.getElementById('itemCount').textContent = '';
+    return;
+  }
+
+  const dirs = items.filter(i => i.is_dir).length;
+  const files = items.length - dirs;
+  const parts = [];
+  if (dirs) parts.push(dirs + ' folder' + (dirs > 1 ? 's' : ''));
+  if (files) parts.push(files + ' file' + (files > 1 ? 's' : ''));
+  document.getElementById('itemCount').textContent = parts.join(', ');
+
+  previewableItems = items.filter(i => !i.is_dir && PREVIEW_TYPES.has(getFileType(i.name, false)));
+
+  fl.innerHTML = items.map((item, idx) => {
+    const type = getFileType(item.name, item.is_dir);
+    const icon = getIcon(type);
+    const isImage = type === 'image';
+    const canPreview = !item.is_dir && PREVIEW_TYPES.has(type);
+    const url = itemUrl(item);
+    const thumbHtml = (isImage && viewMode === 'grid')
+      ? `<img class="thumb" loading="lazy" src="${url}" alt="">`
+      : '';
+    const hasThumbClass = (isImage && viewMode === 'grid') ? ' has-thumb' : '';
+
+    return `<a class="item${hasThumbClass}" href="${url}" data-idx="${idx}" data-type="${type}"
+               ${canPreview ? 'data-preview="1"' : ''}>
+      ${thumbHtml}
+      <span class="icon">${icon}</span>
+      <span class="info">
+        <div class="name">${escHtml(item.name)}${item.is_dir ? '/' : ''}</div>
+        <div class="meta">
+          ${!item.is_dir && item.size != null ? `<span>${formatSize(item.size)}</span>` : ''}
+          ${item.mtime ? `<span>${formatTime(item.mtime)}</span>` : ''}
+          ${item.is_dir && item.count != null ? `<span>${item.count} items</span>` : ''}
+        </div>
+      </span>
+    </a>`;
+  }).join('');
+
+  // Attach click handlers for preview
+  fl.querySelectorAll('[data-preview="1"]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      const idx = parseInt(el.dataset.idx);
+      const item = items[idx];
+      const pIdx = previewableItems.indexOf(item);
+      if (pIdx >= 0) openPreview(pIdx);
+    });
+  });
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Breadcrumb
+function renderBreadcrumb() {
+  const bc = document.getElementById('breadcrumb');
+  const parts = DATA.path ? DATA.path.split('/') : [];
+  let html = `<a href="/p/${encodeURIComponent(DATA.token)}/">Home</a>`;
+  let cumPath = '';
+  parts.forEach((part, i) => {
+    cumPath += (cumPath ? '/' : '') + part;
+    const encoded = cumPath.split('/').map(encodeURIComponent).join('/');
+    if (i < parts.length - 1) {
+      html += `<span class="sep">›</span><a href="/p/${encodeURIComponent(DATA.token)}/${encoded}">${escHtml(part)}</a>`;
+    } else {
+      html += `<span class="sep">›</span><span class="current">${escHtml(part)}</span>`;
+    }
+  });
+  bc.innerHTML = html;
+}
+
+// Preview
+function openPreview(pIdx) {
+  currentPreviewIndex = pIdx;
+  const item = previewableItems[pIdx];
+  if (!item) return;
+
+  const modal = document.getElementById('modal');
+  const body = document.getElementById('modalBody');
+  const title = document.getElementById('modalTitle');
+  const type = getFileType(item.name, false);
+  const url = fileUrl(item);
+
+  title.textContent = item.name;
+  document.getElementById('modalDownload').onclick = () => { window.open(url, '_blank'); };
+  body.innerHTML = '<div class="loading">Loading...</div>';
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  updateNavButtons();
+
+  if (type === 'image') {
+    const img = new Image();
+    img.onload = () => { body.innerHTML = ''; body.appendChild(img); };
+    img.onerror = () => { body.innerHTML = '<div class="loading">Failed to load image</div>'; };
+    img.src = url;
+  } else if (type === 'video') {
+    body.innerHTML = `<video controls autoplay src="${url}"></video>`;
+  } else if (type === 'audio') {
+    body.innerHTML = `<audio controls autoplay src="${url}" style="width:90%;max-width:500px;"></audio>`;
+  } else if (type === 'pdf') {
+    body.innerHTML = `<iframe src="${url}"></iframe>`;
+  } else if (type === 'text' || type === 'code') {
+    fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error(r.statusText);
+        return r.text();
+      })
+      .then(text => {
+        const maxLen = 100000;
+        const truncated = text.length > maxLen ? text.slice(0, maxLen) + '\n\n... (truncated)' : text;
+        body.innerHTML = `<pre class="text-preview">${escHtml(truncated)}</pre>`;
+      })
+      .catch(() => { body.innerHTML = '<div class="loading">Failed to load file</div>'; });
+  }
+}
+
+function closePreview() {
+  document.getElementById('modal').classList.remove('open');
+  document.body.style.overflow = '';
+  const body = document.getElementById('modalBody');
+  body.querySelectorAll('video, audio').forEach(el => { el.pause(); el.src = ''; });
+  body.innerHTML = '';
+}
+
+function navPreview(dir) {
+  const next = currentPreviewIndex + dir;
+  if (next >= 0 && next < previewableItems.length) openPreview(next);
+}
+
+function updateNavButtons() {
+  document.getElementById('modalPrev').style.display = currentPreviewIndex > 0 ? '' : 'none';
+  document.getElementById('modalNext').style.display = currentPreviewIndex < previewableItems.length - 1 ? '' : 'none';
+}
+
+// Events
+document.getElementById('viewList').addEventListener('click', () => {
+  viewMode = 'list'; localStorage.setItem('fm_view', 'list'); updateViewButtons(); render();
+});
+document.getElementById('viewGrid').addEventListener('click', () => {
+  viewMode = 'grid'; localStorage.setItem('fm_view', 'grid'); updateViewButtons(); render();
+});
+function updateViewButtons() {
+  document.getElementById('viewList').classList.toggle('active', viewMode === 'list');
+  document.getElementById('viewGrid').classList.toggle('active', viewMode === 'grid');
+}
+
+document.getElementById('searchToggle').addEventListener('click', () => {
+  const bar = document.getElementById('searchBar');
+  const visible = bar.style.display !== 'none';
+  bar.style.display = visible ? 'none' : '';
+  if (!visible) document.getElementById('searchInput').focus();
+  else { searchQuery = ''; document.getElementById('searchInput').value = ''; render(); }
+});
+document.getElementById('searchInput').addEventListener('input', e => {
+  searchQuery = e.target.value; render();
+});
+
+document.querySelectorAll('.sort-bar span[data-sort]').forEach(el => {
+  el.addEventListener('click', () => {
+    const key = el.dataset.sort;
+    if (sortKey === key) sortAsc = !sortAsc;
+    else { sortKey = key; sortAsc = true; }
+    document.querySelectorAll('.sort-bar span[data-sort]').forEach(s => s.classList.remove('active'));
+    el.classList.add('active');
+    const arrow = sortAsc ? ' ↑' : ' ↓';
+    el.textContent = key.charAt(0).toUpperCase() + key.slice(1) + arrow;
+    render();
+  });
+});
+
+document.getElementById('modalClose').addEventListener('click', closePreview);
+document.getElementById('modalPrev').addEventListener('click', () => navPreview(-1));
+document.getElementById('modalNext').addEventListener('click', () => navPreview(1));
+document.getElementById('modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal') || e.target === document.getElementById('modalBody')) closePreview();
+});
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('modal').classList.contains('open')) return;
+  if (e.key === 'Escape') closePreview();
+  if (e.key === 'ArrowLeft') navPreview(-1);
+  if (e.key === 'ArrowRight') navPreview(1);
+});
+
+// Touch swipe for preview
+let touchStartX = 0;
+document.getElementById('modal').addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
+document.getElementById('modal').addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  if (Math.abs(dx) > 60) navPreview(dx > 0 ? -1 : 1);
+});
+
+// Init
+document.getElementById('title').textContent = DATA.title || 'Files';
+updateViewButtons();
+renderBreadcrumb();
+render();
+</script>
+</body>
+</html>

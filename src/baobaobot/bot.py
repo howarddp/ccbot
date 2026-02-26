@@ -2363,11 +2363,12 @@ async def post_init(application: Application) -> None:
 
             async def _on_upload(upload_dir: Path, filenames: list[str], description: str) -> None:
                 """Notify the tmux window whose workspace received the upload."""
-                files_list = "\n".join(f"- {upload_dir / fn}" for fn in filenames)
-                desc_line = f"\n說明：{description}" if description else ""
+                # Build single-line notification — newlines in send_keys cause tmux
+                # literal-mode issues (text truncation, Enter not delivered).
+                files_part = ", ".join(f"{upload_dir / fn}" for fn in filenames)
+                desc_part = f" (說明：{description})" if description else ""
                 notify_text = (
-                    f"[File Upload] 使用者上傳了 {len(filenames)} 個檔案：\n"
-                    f"{files_list}{desc_line}"
+                    f"[File Upload] 使用者上傳了 {len(filenames)} 個檔案：{files_part}{desc_part}"
                 )
                 logger.info(notify_text)
                 # Determine which workspace the upload belongs to (upload_dir is {workspace}/tmp/uploads/...)

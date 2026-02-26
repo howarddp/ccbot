@@ -113,6 +113,9 @@ def main() -> None:
             sys.exit(1)
 
         rel_path = str(abs_path.relative_to(root))
+        # "." (root dir itself) is unreliable in URLs — browsers strip trailing dots
+        if rel_path == ".":
+            rel_path = ""
 
         # Workspace-aware token: server resolves against this specific workspace
         if abs_path.is_dir():
