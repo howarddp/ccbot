@@ -790,6 +790,7 @@ def _sync_todos(conn: sqlite3.Connection) -> int:
 
     # Clear old todo entries and re-index
     conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
+    conn.execute("DELETE FROM paragraphs WHERE path = ?", (virtual_path,))
 
     line_num = 0
     for r in rows:
@@ -815,6 +816,20 @@ def _sync_todos(conn: sqlite3.Connection) -> int:
                         (virtual_path, r["id"], line_num, _pad_cjk_ascii(stripped), now),
                     )
 
+        # Write to paragraphs table for vector search
+        para_text = title_line
+        if r["content"]:
+            para_text += f"\n{r['content']}"
+        content_hash = hashlib.md5(
+            _normalize_for_hash(para_text).encode()
+        ).hexdigest()
+        conn.execute(
+            "INSERT INTO paragraphs "
+            "(path, source, date, heading, content, line_start, line_end, content_hash) "
+            "VALUES (?, 'todo', ?, '', ?, 0, 0, ?)",
+            (virtual_path, r["id"], para_text, content_hash),
+        )
+
     conn.execute(
         "INSERT OR REPLACE INTO file_meta (path, content_hash, synced_at, tags) "
         "VALUES (?, ?, ?, '[]')",
@@ -836,6 +851,7 @@ def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
         ).fetchone()
         if meta:
             conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
+            conn.execute("DELETE FROM paragraphs WHERE path = ?", (virtual_path,))
             conn.execute("DELETE FROM file_meta WHERE path = ?", (virtual_path,))
             return 1
         return 0
@@ -858,6 +874,7 @@ def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
 
     # Clear old cron entries and re-index
     conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
+    conn.execute("DELETE FROM paragraphs WHERE path = ?", (virtual_path,))
 
     line_num = 0
     for job in jobs:
@@ -881,6 +898,20 @@ def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
                 "VALUES (?, 'cron', ?, ?, ?, ?)",
                 (virtual_path, job_id, line_num, _pad_cjk_ascii(message), now),
             )
+
+        # Write to paragraphs table for vector search
+        para_text = title_line
+        if message:
+            para_text += f"\n{message}"
+        content_hash = hashlib.md5(
+            _normalize_for_hash(para_text).encode()
+        ).hexdigest()
+        conn.execute(
+            "INSERT INTO paragraphs "
+            "(path, source, date, heading, content, line_start, line_end, content_hash) "
+            "VALUES (?, 'cron', ?, '', ?, 0, 0, ?)",
+            (virtual_path, job_id, para_text, content_hash),
+        )
 
     conn.execute(
         "INSERT OR REPLACE INTO file_meta (path, content_hash, synced_at, tags) "
