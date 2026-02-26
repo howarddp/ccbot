@@ -20,14 +20,14 @@ Enable "Maps Static API" in your [Google Cloud Console](https://console.cloud.go
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Basic Map (center + zoom)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/staticmap?center=25.0339,121.5645&zoom=15&size=600x400&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/map.png
@@ -47,7 +47,7 @@ curl -s "https://maps.googleapis.com/maps/api/staticmap?center=$(python3 -c 'imp
 ### Single marker
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/staticmap?center=25.0339,121.5645&zoom=15&size=600x400&markers=color:red%7Clabel:A%7C25.0339,121.5645&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/map.png
@@ -56,7 +56,7 @@ curl -s "https://maps.googleapis.com/maps/api/staticmap?center=25.0339,121.5645&
 ### Multiple markers (e.g., show search results on map)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/staticmap?size=600x400&markers=color:red%7Clabel:A%7C25.0339,121.5645&markers=color:blue%7Clabel:B%7C25.0478,121.5170&markers=color:green%7Clabel:C%7C25.0329,121.5654&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/map.png
@@ -73,7 +73,7 @@ Labels: single uppercase letter (A-Z) or digit (0-9)
 ## Map with Path (draw a route)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/staticmap?size=600x400&path=color:0x0000ff80%7Cweight:5%7C25.0339,121.5645%7C25.0478,121.5170%7C25.0329,121.5654&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/map.png

@@ -20,7 +20,7 @@ Enable "Distance Matrix API" in your [Google Cloud Console](https://console.clou
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
@@ -29,7 +29,7 @@ GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 
 The most common use case: "which of these places is closest?"
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北車站"))')&destinations=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北101|西門町|中正紀念堂"))')&mode=driving&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '"From: \(.origin_addresses[0])\n" + ([range(.rows[0].elements | length)] | map("  → \(.destination_addresses[.]) : \(.rows[0].elements[.].distance.text), \(.rows[0].elements[.].duration.text)") | join("\n"))' 2>/dev/null || \
@@ -39,7 +39,7 @@ curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$(pyth
 ### Using coordinates
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=25.0478,121.5170&destinations=25.0339,121.5645%7C25.0422,121.5079%7C25.0324,121.5198&mode=driving&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '.rows[0].elements[] | "\(.distance.text) — \(.duration.text)"'
@@ -81,7 +81,7 @@ curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$(pyth
 Full N×M comparison:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北車站|台北101"))')&destinations=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("桃園機場|台中車站"))')&mode=driving&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq '.'
@@ -90,7 +90,7 @@ curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$(pyth
 ## With Departure Time (traffic estimates)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北車站"))')&destinations=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("桃園機場"))')&mode=driving&departure_time=now&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '.rows[0].elements[0] | "📏 \(.distance.text)\n⏱️ \(.duration.text)\n🚗 With traffic: \(.duration_in_traffic.text // "N/A")"'
@@ -116,7 +116,7 @@ After a google-places search, compare which result is closest:
 ```bash
 # 1. Get place coordinates from Places API results
 # 2. Use Distance Matrix to compare
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/distancematrix/json?origins=25.0339,121.5645&destinations=PLACE1_LAT,PLACE1_LNG%7CPLACE2_LAT,PLACE2_LNG%7CPLACE3_LAT,PLACE3_LNG&mode=walking&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '.rows[0].elements | to_entries | sort_by(.value.duration.value) | .[] | "#\(.key+1): \(.value.distance.text) — \(.value.duration.text)"'

@@ -38,6 +38,7 @@ _WORKSPACE_TEMPLATE_FILES: list[tuple[str, str]] = []
 
 # Scripts deployed to shared bin/
 _BIN_SCRIPTS = [
+    "_load_env",
     "_memory_common.py",
     "_todo_common.py",
     "memory-search",
@@ -85,6 +86,7 @@ _SKILL_NAMES = [
     "exchange-rate",
     "web-search",
     "web-read",
+    "google-flights",
 ]
 
 

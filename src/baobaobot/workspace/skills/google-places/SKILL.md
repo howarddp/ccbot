@@ -22,8 +22,8 @@ Enable "Places API (New)" in your [Google Cloud Console](https://console.cloud.g
 All commands below assume the key is loaded. Run this first:
 
 ```bash
-GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}}"
-[ -z "$GMAP_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
+source "{{BIN_DIR}}/_load_env"
+[ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Text Search
@@ -31,10 +31,10 @@ GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google
 Search places by text query. The most common operation.
 
 ```bash
-GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://places.googleapis.com/v1/places:searchText" \
-  -H "X-Goog-Api-Key: $GMAP_KEY" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
   -H "X-Goog-FieldMask: places.id,places.displayName,places.rating,places.userRatingCount,places.formattedAddress,places.priceLevel,places.currentOpeningHours.openNow,places.websiteUri,places.googleMapsUri" \
   -H "Content-Type: application/json" \
   -d '{
@@ -48,7 +48,7 @@ curl -s -X POST "https://places.googleapis.com/v1/places:searchText" \
 
 ```bash
 curl -s -X POST "https://places.googleapis.com/v1/places:searchText" \
-  -H "X-Goog-Api-Key: $GMAP_KEY" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
   -H "X-Goog-FieldMask: places.id,places.displayName,places.rating,places.userRatingCount,places.formattedAddress,places.currentOpeningHours.openNow,places.googleMapsUri" \
   -H "Content-Type: application/json" \
   -d '{
@@ -65,7 +65,7 @@ curl -s -X POST "https://places.googleapis.com/v1/places:searchText" \
 
 ```bash
 curl -s -X POST "https://places.googleapis.com/v1/places:searchText" \
-  -H "X-Goog-Api-Key: $GMAP_KEY" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
   -H "X-Goog-FieldMask: places.id,places.displayName,places.rating,places.formattedAddress,places.currentOpeningHours.openNow,places.googleMapsUri" \
   -H "Content-Type: application/json" \
   -d '{
@@ -81,10 +81,10 @@ curl -s -X POST "https://places.googleapis.com/v1/places:searchText" \
 Search by location + radius + place type. Use when user shares coordinates or asks "what's nearby".
 
 ```bash
-GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://places.googleapis.com/v1/places:searchNearby" \
-  -H "X-Goog-Api-Key: $GMAP_KEY" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
   -H "X-Goog-FieldMask: places.id,places.displayName,places.rating,places.userRatingCount,places.formattedAddress,places.currentOpeningHours.openNow,places.googleMapsUri" \
   -H "Content-Type: application/json" \
   -d '{
@@ -115,11 +115,11 @@ Full list: https://developers.google.com/maps/documentation/places/web-service/p
 Get full details for a specific place by its ID (from search results).
 
 ```bash
-GMAP_KEY="${GOOGLE_MAPS_API_KEY:-${GOOGLE_PLACES_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}}"
+source "{{BIN_DIR}}/_load_env"
 PLACE_ID="places/ChIJ..."
 
 curl -s "https://places.googleapis.com/v1/$PLACE_ID" \
-  -H "X-Goog-Api-Key: $GMAP_KEY" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
   -H "X-Goog-FieldMask: displayName,rating,userRatingCount,formattedAddress,nationalPhoneNumber,websiteUri,googleMapsUri,currentOpeningHours,priceLevel,editorialSummary,reviews" \
   | jq -r '"📍 \(.displayName.text)\n⭐ \(.rating) (\(.userRatingCount) reviews)\n📞 \(.nationalPhoneNumber // "N/A")\n🌐 \(.websiteUri // "N/A")\n📋 \(.editorialSummary.text // "N/A")\n\nReviews:\n" + ([.reviews[]? | "  ⭐\(.rating) \(.authorAttribution.displayName): \(.text.text[:100])"] | join("\n"))'
 ```
@@ -147,7 +147,7 @@ Control which fields to return (affects billing). Always specify to save costs.
 
 ## Notes
 
-- Requires `GOOGLE_MAPS_API_KEY` (or legacy `GOOGLE_PLACES_API_KEY`) — env var (priority) or `~/.config/google-maps/api_key` (fallback)
+- Requires `GOOGLE_MAPS_API_KEY` — loaded from `.env` via `_load_env`
 - Enable "Places API (New)" in your Google Cloud project
 - Free tier: $200/month credit (typically enough for personal use)
 - Text Search: ~$0.032/request, Nearby Search: ~$0.032/request, Place Details: varies by fields

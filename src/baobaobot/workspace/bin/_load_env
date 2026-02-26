@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Load environment variables from baobaobot .env file.
+# Usage: source "{{BIN_DIR}}/_load_env"  (in SKILL.md)
+#        source "$(dirname "$0")/_load_env"  (in bin scripts)
+#
+# Resolution order for .env location:
+#   1. $BAOBAOBOT_DIR/.env
+#   2. ~/.config/baobaobot/dir (pointer file) -> $DIR/.env
+#   3. ~/.baobaobot/.env
+
+_baobaobot_load_env() {
+    local config_dir=""
+
+    # 1. BAOBAOBOT_DIR env var
+    if [ -n "$BAOBAOBOT_DIR" ]; then
+        config_dir="$BAOBAOBOT_DIR"
+    fi
+
+    # 2. Pointer file
+    if [ -z "$config_dir" ] && [ -f "$HOME/.config/baobaobot/dir" ]; then
+        config_dir="$(cat "$HOME/.config/baobaobot/dir")"
+    fi
+
+    # 3. Default
+    if [ -z "$config_dir" ]; then
+        config_dir="$HOME/.baobaobot"
+    fi
+
+    local env_file="$config_dir/.env"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    # Export each KEY=VALUE line (skip comments and blank lines)
+    # Compatible with both bash and zsh
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty lines and comments
+        case "$line" in
+            ""|\#*|\ *\#*) continue ;;
+        esac
+        # Only process lines with =
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        local key="${line%%=*}"
+        local val="${line#*=}"
+        # Don't override existing env vars
+        eval "local existing=\${$key:-}"
+        if [ -z "$existing" ]; then
+            export "$key=$val"
+        fi
+    done < "$env_file"
+}
+
+_baobaobot_load_env

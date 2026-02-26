@@ -20,14 +20,14 @@ Enable "Air Quality API" in your [Google Cloud Console](https://console.cloud.go
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Current Air Quality (basic)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://airquality.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_MAPS_API_KEY" \
   -H "Content-Type: application/json" \
@@ -40,7 +40,7 @@ curl -s -X POST "https://airquality.googleapis.com/v1/currentConditions:lookup?k
 ## With Detailed Pollutant Data
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://airquality.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_MAPS_API_KEY" \
   -H "Content-Type: application/json" \
@@ -59,7 +59,7 @@ curl -s -X POST "https://airquality.googleapis.com/v1/currentConditions:lookup?k
 ## By Address (combine with geocoding)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # Step 1: Geocode address
 COORDS=$(curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北車站"))')&key=$GOOGLE_MAPS_API_KEY" \
@@ -80,7 +80,7 @@ curl -s -X POST "https://airquality.googleapis.com/v1/currentConditions:lookup?k
 ## Compare Air Quality Across Locations
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 for loc in "25.0339,121.5645:台北" "25.1327,121.7402:基隆" "24.1478,120.6736:台中"; do
   COORDS="${loc%%:*}"
@@ -99,7 +99,7 @@ done
 ## Air Quality History (hourly)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://airquality.googleapis.com/v1/history:lookup?key=$GOOGLE_MAPS_API_KEY" \
   -H "Content-Type: application/json" \

@@ -20,14 +20,14 @@ Enable "Geocoding API" in your [Google Cloud Console](https://console.cloud.goog
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Forward Geocoding (Address → Coordinates)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北101"))')&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '.results[0] | "📍 \(.formatted_address)\n🌐 \(.geometry.location.lat), \(.geometry.location.lng)"'
@@ -43,7 +43,7 @@ curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=Taipei+101&la
 ## Reverse Geocoding (Coordinates → Address)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/geocode/json?latlng=25.0339,121.5645&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '.results[0] | "📍 \(.formatted_address)\n🏷️ \([.address_components[] | .long_name] | join(", "))"'
@@ -54,7 +54,7 @@ curl -s "https://maps.googleapis.com/maps/api/geocode/json?latlng=25.0339,121.56
 Useful for feeding into google-directions or google-places:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 for place in "台北車站" "台北101" "西門町"; do
   result=$(curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$place'))")&language=zh-TW&key=$GOOGLE_MAPS_API_KEY")
@@ -65,7 +65,7 @@ done
 ## Get Detailed Address Components
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北市信義區市府路1號"))')&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '.results[0] | "📍 \(.formatted_address)\n🌐 \(.geometry.location.lat), \(.geometry.location.lng)\n🏷️ Type: \(.types | join(", "))\n\nComponents:" + ([.address_components[] | "  \(.types[0]): \(.long_name)"] | join("\n"))'

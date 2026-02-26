@@ -20,14 +20,14 @@ Enable "Routes API" in your [Google Cloud Console](https://console.cloud.google.
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Basic Directions (driving)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
@@ -44,7 +44,7 @@ curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
 ## Transit Directions (public transport)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
@@ -61,7 +61,7 @@ curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
 ## Walking Directions
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
@@ -95,7 +95,7 @@ curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
 Route through multiple stops in order:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \

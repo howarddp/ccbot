@@ -20,14 +20,14 @@ Enable "Time Zone API" in your [Google Cloud Console](https://console.cloud.goog
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Get Timezone by Coordinates
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/timezone/json?location=25.0339,121.5645&timestamp=$(date +%s)&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '"🕐 \(.timeZoneId)\n📍 \(.timeZoneName)\n⏱️ UTC offset: \(.rawOffset / 3600)h\n☀️ DST offset: \(.dstOffset / 3600)h"'
@@ -38,7 +38,7 @@ curl -s "https://maps.googleapis.com/maps/api/timezone/json?location=25.0339,121
 Combine with google-geocoding to look up by address:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # Step 1: Geocode the address
 COORDS=$(curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("東京タワー"))')&key=$GOOGLE_MAPS_API_KEY" \
@@ -52,7 +52,7 @@ curl -s "https://maps.googleapis.com/maps/api/timezone/json?location=$COORDS&tim
 ## Get Local Time at a Location
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 RESULT=$(curl -s "https://maps.googleapis.com/maps/api/timezone/json?location=40.7128,-74.0060&timestamp=$(date +%s)&key=$GOOGLE_MAPS_API_KEY")
 TOTAL_OFFSET=$(echo "$RESULT" | jq '.rawOffset + .dstOffset')
@@ -64,7 +64,7 @@ echo "🕐 $TZ_ID — $LOCAL_TIME"
 ## Compare Timezones Between Locations
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 TIMESTAMP=$(date +%s)
 
 for loc in "25.0339,121.5645:台北" "35.6762,139.6503:東京" "40.7128,-74.0060:紐約" "51.5074,-0.1278:倫敦"; do
@@ -82,7 +82,7 @@ done
 Use a specific timestamp to check DST at a future/past date:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # Check timezone in July (summer, DST active in northern hemisphere)
 JULY_TS=$(date -j -f "%Y-%m-%d" "2026-07-15" "+%s" 2>/dev/null || date -d "2026-07-15" "+%s")

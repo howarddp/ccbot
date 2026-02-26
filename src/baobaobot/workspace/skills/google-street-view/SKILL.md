@@ -20,14 +20,14 @@ Enable "Street View Static API" in your [Google Cloud Console](https://console.c
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Basic Street View (by coordinates)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/streetview?size=600x400&location=25.0339,121.5645&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/streetview.png
@@ -38,7 +38,7 @@ Then reply with `[SEND_FILE:tmp/streetview.png]` to send it to the user.
 ## By Address
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/streetview?size=600x400&location=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北101"))')&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/streetview.png
@@ -49,7 +49,7 @@ curl -s "https://maps.googleapis.com/maps/api/streetview?size=600x400&location=$
 ### Heading (horizontal rotation)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # heading: 0=North, 90=East, 180=South, 270=West
 curl -s "https://maps.googleapis.com/maps/api/streetview?size=600x400&location=25.0339,121.5645&heading=180&key=$GOOGLE_MAPS_API_KEY" \
@@ -75,7 +75,7 @@ curl -s "https://maps.googleapis.com/maps/api/streetview?size=600x400&location=2
 ## High-Resolution
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/streetview?size=600x400&location=25.0339,121.5645&key=$GOOGLE_MAPS_API_KEY" \
   -o tmp/streetview.png
@@ -88,7 +88,7 @@ Max size: 640x640 pixels.
 Not all locations have street view coverage. Use the metadata endpoint to check first:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://maps.googleapis.com/maps/api/streetview/metadata?location=25.0339,121.5645&key=$GOOGLE_MAPS_API_KEY" \
   | jq -r '"Status: \(.status)\nPano ID: \(.pano_id // "N/A")\nDate: \(.date // "N/A")\nLocation: \(.location.lat), \(.location.lng)"'

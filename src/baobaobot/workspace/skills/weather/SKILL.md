@@ -29,14 +29,14 @@ Enable "Weather API" in your [Google Cloud Console](https://console.cloud.google
 ## Load API Key
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 [ -z "$GOOGLE_MAPS_API_KEY" ] && echo "❌ GOOGLE_MAPS_API_KEY not set" && exit 1
 ```
 
 ## Current Conditions
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # Taipei (25.0330, 121.5654)
 curl -s "https://weather.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654" \
@@ -48,7 +48,7 @@ curl -s "https://weather.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_
 Use google-geocoding to convert a place name to coordinates, then query weather:
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # Step 1: Geocode the place name
 COORDS=$(curl -s "https://maps.googleapis.com/maps/api/geocode/json?address=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("台北"))')&key=$GOOGLE_MAPS_API_KEY" \
@@ -64,7 +64,7 @@ curl -s "https://weather.googleapis.com/v1/currentConditions:lookup?key=$GOOGLE_
 ## Daily Forecast (up to 10 days)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # 3-day forecast for Taipei
 curl -s "https://weather.googleapis.com/v1/forecast/days:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654&days=3" \
@@ -74,7 +74,7 @@ curl -s "https://weather.googleapis.com/v1/forecast/days:lookup?key=$GOOGLE_MAPS
 ## Hourly Forecast (up to 240 hours)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 # Next 12 hours
 curl -s "https://weather.googleapis.com/v1/forecast/hours:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654&hours=12" \
@@ -84,7 +84,7 @@ curl -s "https://weather.googleapis.com/v1/forecast/hours:lookup?key=$GOOGLE_MAP
 ## Historical Weather (past 24 hours)
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://weather.googleapis.com/v1/history/hours:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654&hours=24" \
   | jq -r '.historyHours[] | "🕐 \(.interval.startTime): \(.temperature.degrees)°C | 💧 \(.relativeHumidity)%"'
@@ -93,7 +93,7 @@ curl -s "https://weather.googleapis.com/v1/history/hours:lookup?key=$GOOGLE_MAPS
 ## Weather Alerts
 
 ```bash
-GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(cat ~/.config/google-maps/api_key 2>/dev/null)}"
+source "{{BIN_DIR}}/_load_env"
 
 curl -s "https://weather.googleapis.com/v1/publicAlerts:lookup?key=$GOOGLE_MAPS_API_KEY&location.latitude=25.0330&location.longitude=121.5654" \
   | jq -r '.alerts[]? | "⚠️ \(.eventType)\n📋 \(.description.text)\n⏰ \(.interval.startTime) → \(.interval.endTime)\n"'
