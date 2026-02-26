@@ -36,6 +36,7 @@ Key functions: create_bot(), handle_new_message().
 import asyncio
 import io
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -130,7 +131,13 @@ from .handlers.status_polling import (
     status_poll_loop,
 )
 from .screenshot import text_to_image
-from .session_monitor import NewMessage, SessionMonitor, _SEND_FILE_RE
+from .session_monitor import (
+    NewMessage,
+    SessionMonitor,
+    _SEND_FILE_RE,
+    _SHARE_LINK_RE,
+    _UPLOAD_LINK_RE,
+)
 from .terminal_parser import extract_bash_output
 from .handlers.important_handler import handle_important_edit_message
 from .handlers.workspace_resolver import resolve_workspace_for_window
@@ -2124,6 +2131,76 @@ async def _deliver_message(
             role=msg.role,
             tool_name=msg.tool_name,
             file_paths=[],
+            share_links=msg.share_links,
+            upload_links=msg.upload_links,
+        )
+        if not msg.text:
+            return
+
+    # Replace [SHARE_LINK:path] and [UPLOAD_LINK] markers with actual URLs
+    if msg.share_links or msg.upload_links:
+        public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+        text = msg.text
+        if public_url:
+            from .share_server import _resolve_relative, generate_token
+
+            # Use the window's CWD as the workspace root for this session
+            ws_cwd = agent_ctx.session_manager.get_window_state(wid).cwd
+            ws_root = Path(ws_cwd) if ws_cwd else None
+            # Fallback to agent config workspace dirs
+            ws_roots = [Path(r) for r in (agent_ctx.config.iter_workspace_dirs() or [agent_ctx.config.agent_dir])]
+            if ws_root and ws_root.is_dir():
+                # Register this workspace with the share server dynamically
+                if agent_ctx.share_server:
+                    agent_ctx.share_server.add_workspace(ws_root)
+
+            # Replace [SHARE_LINK:path] with generated file/dir URL
+            for path_str in msg.share_links:
+                p = Path(path_str).resolve()
+                # Determine which workspace this file belongs to
+                result = _resolve_relative([ws_root] if ws_root else [], p)
+                if result is None:
+                    result = _resolve_relative(ws_roots, p)
+                if result is None:
+                    url = f"(file outside workspace: {path_str})"
+                elif p.is_dir():
+                    root, rel = result
+                    token = generate_token(f"p:{root}:{rel}")
+                    url = f"{public_url}/p/{token}/{rel}"
+                elif p.is_file():
+                    root, rel = result
+                    token = generate_token(f"f:{root}:{rel}")
+                    url = f"{public_url}/f/{token}/{rel}"
+                else:
+                    url = f"(file not found: {path_str})"
+                text = text.replace(f"[SHARE_LINK:{path_str}]", url, 1)
+            # Replace [UPLOAD_LINK] or [UPLOAD_LINK:ttl] with upload URL
+            # Token encodes workspace so uploads go to the correct workspace
+            upload_ws = ws_root if ws_root else (ws_roots[0] if ws_roots else None)
+            for ttl_str in msg.upload_links:
+                from .share_server import parse_ttl
+
+                ttl = parse_ttl(ttl_str) if ttl_str else 1800
+                token_path = f"upload:{upload_ws}" if upload_ws else "upload"
+                token = generate_token(token_path, ttl=ttl)
+                url = f"{public_url}/u/{token}"
+                marker = f"[UPLOAD_LINK:{ttl_str}]" if ttl_str else "[UPLOAD_LINK]"
+                text = text.replace(marker, url, 1)
+        else:
+            # Tunnel not running — strip markers and add notice
+            text = _SHARE_LINK_RE.sub("(share server unavailable)", text)
+            text = _UPLOAD_LINK_RE.sub("(share server unavailable)", text)
+        msg = NewMessage(
+            session_id=msg.session_id,
+            text=text,
+            is_complete=msg.is_complete,
+            content_type=msg.content_type,
+            tool_use_id=msg.tool_use_id,
+            role=msg.role,
+            tool_name=msg.tool_name,
+            file_paths=msg.file_paths,
+            share_links=[],
+            upload_links=[],
         )
         if not msg.text:
             return
@@ -2165,6 +2242,21 @@ async def _deliver_message(
 
 
 # --- App lifecycle ---
+
+
+def _write_runtime_env(agent_ctx: AgentContext, public_url: str) -> None:
+    """Write dynamic runtime env vars to .runtime_env for bin scripts."""
+    runtime_file = agent_ctx.config.config_dir / ".runtime_env"
+    try:
+        lines = [f"SHARE_PUBLIC_URL={public_url}"]
+        # Also persist the secret so bin/share-link can use it
+        share_secret = os.environ.get("SHARE_SECRET", "")
+        if share_secret:
+            lines.append(f"SHARE_SECRET={share_secret}")
+        runtime_file.write_text("\n".join(lines) + "\n")
+        logger.debug("Wrote runtime env to %s", runtime_file)
+    except OSError:
+        logger.warning("Failed to write runtime env file: %s", runtime_file)
 
 
 async def _send_restart_complete(bot: Bot, agent_ctx: AgentContext) -> None:
@@ -2238,6 +2330,87 @@ async def post_init(application: Application) -> None:
         await agent_ctx.cron_service.start()
         logger.info("Cron service started")
 
+    # Start share server + tunnel (only once across all agents — skip if already running)
+    # Use a module-level flag (not env var, which may persist from parent process)
+    # Clear stale env var from previous process on first init
+    if not getattr(post_init, "_share_init_done", False):
+        os.environ.pop("SHARE_PUBLIC_URL", None)
+        post_init._share_init_done = True  # type: ignore[attr-defined]
+
+    if getattr(post_init, "_share_started", False):
+        # Register this agent's workspaces with the existing share server
+        existing_server = getattr(post_init, "_share_server", None)
+        if existing_server:
+            for ws_dir in agent_ctx.config.iter_workspace_dirs():
+                existing_server.add_workspace(ws_dir)
+            agent_ctx.share_server = existing_server
+        logger.info("Share server already started by another agent, registered workspaces")
+    else:
+        try:
+            from .share_server import ShareServer
+            from .tunnel import TunnelManager
+
+            _SHARE_PORT = 8787
+
+            # Collect ALL workspace roots from this agent's config
+            workspace_roots = agent_ctx.config.iter_workspace_dirs()
+            if not workspace_roots:
+                workspace_roots = [agent_ctx.config.agent_dir]
+            # Also add agent_dir itself as a root
+            agent_dir = Path(agent_ctx.config.agent_dir)
+            if agent_dir not in workspace_roots:
+                workspace_roots.append(agent_dir)
+
+            async def _on_upload(upload_dir: Path, filenames: list[str], description: str) -> None:
+                """Notify the tmux window whose workspace received the upload."""
+                files_list = "\n".join(f"- {upload_dir / fn}" for fn in filenames)
+                desc_line = f"\n說明：{description}" if description else ""
+                notify_text = (
+                    f"[File Upload] 使用者上傳了 {len(filenames)} 個檔案：\n"
+                    f"{files_list}{desc_line}"
+                )
+                logger.info(notify_text)
+                # Determine which workspace the upload belongs to (upload_dir is {workspace}/tmp/uploads/...)
+                upload_ws = str(upload_dir.resolve())
+                try:
+                    windows = await agent_ctx.tmux_manager.list_windows()
+                    for w in windows:
+                        # Use tmux pane CWD (works across all agents) instead of session_manager state
+                        if w.cwd and upload_ws.startswith(w.cwd):
+                            await agent_ctx.tmux_manager.send_keys(w.window_id, notify_text)
+                            logger.info("Upload notification sent to window %s (%s)", w.window_id, w.cwd)
+                except Exception:
+                    logger.exception("Failed to notify tmux about upload")
+
+            share_server = ShareServer(
+                port=_SHARE_PORT,
+                workspace_roots=workspace_roots,
+                on_upload=_on_upload,
+            )
+            await share_server.start()
+            agent_ctx.share_server = share_server
+
+            def _on_url_change(new_url: str) -> None:
+                os.environ["SHARE_PUBLIC_URL"] = new_url
+                _write_runtime_env(agent_ctx, new_url)
+                logger.info("Tunnel URL updated: %s", new_url)
+
+            tunnel = TunnelManager(
+                local_port=_SHARE_PORT,
+                on_url_change=_on_url_change,
+            )
+            public_url = await tunnel.start()
+            agent_ctx.tunnel_manager = tunnel
+
+            # Set env var + write runtime file so bin/share-link can read it
+            os.environ["SHARE_PUBLIC_URL"] = public_url
+            _write_runtime_env(agent_ctx, public_url)
+            post_init._share_started = True  # type: ignore[attr-defined]
+            post_init._share_server = share_server  # type: ignore[attr-defined]
+            logger.info("Share server + tunnel ready: %s", public_url)
+        except Exception:
+            logger.exception("Failed to start share server / tunnel (non-fatal)")
+
     monitor = SessionMonitor(
         tmux_manager=agent_ctx.tmux_manager,
         session_manager=agent_ctx.session_manager,
@@ -2297,6 +2470,17 @@ async def post_shutdown(application: Application) -> None:
     if agent_ctx.session_monitor:
         agent_ctx.session_monitor.stop()
         logger.info("Session monitor stopped")
+
+    # Stop tunnel + share server
+    if agent_ctx.tunnel_manager:
+        await agent_ctx.tunnel_manager.stop()
+        logger.info("Tunnel stopped")
+    if agent_ctx.share_server:
+        await agent_ctx.share_server.stop()
+        logger.info("Share server stopped")
+        # Clean up runtime env file
+        runtime_file = agent_ctx.config.config_dir / ".runtime_env"
+        runtime_file.unlink(missing_ok=True)
 
 
 def create_bot(agent_ctx: AgentContext) -> Application:

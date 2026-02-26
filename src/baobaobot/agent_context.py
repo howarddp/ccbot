@@ -18,7 +18,9 @@ if TYPE_CHECKING:
     from .session import SessionManager
     from .session_monitor import SessionMonitor
     from .settings import AgentConfig
+    from .share_server import ShareServer
     from .tmux_manager import TmuxManager
+    from .tunnel import TunnelManager
 
 
 @dataclass
@@ -66,6 +68,8 @@ class AgentContext:
     router: Router
     session_monitor: SessionMonitor | None = None
     cron_service: CronService | None = None
+    share_server: ShareServer | None = None
+    tunnel_manager: TunnelManager | None = None
 
     # Per-agent handler state (isolated per agent for multi-agent support)
     queue_state: MessageQueueState = field(default_factory=MessageQueueState)

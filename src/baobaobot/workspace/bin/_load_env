@@ -53,4 +53,36 @@ _baobaobot_load_env() {
     done < "$env_file"
 }
 
+_baobaobot_load_runtime() {
+    # Load runtime env vars (e.g. SHARE_PUBLIC_URL set dynamically by bot)
+    local config_dir=""
+    if [ -n "$BAOBAOBOT_DIR" ]; then
+        config_dir="$BAOBAOBOT_DIR"
+    elif [ -f "$HOME/.config/baobaobot/dir" ]; then
+        config_dir="$(cat "$HOME/.config/baobaobot/dir")"
+    else
+        config_dir="$HOME/.baobaobot"
+    fi
+
+    local runtime_file="$config_dir/.runtime_env"
+    if [ ! -f "$runtime_file" ]; then
+        return 0
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ""|\#*|\ *\#*) continue ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        local key="${line%%=*}"
+        local val="${line#*=}"
+        # Runtime vars always override (they're dynamic)
+        export "$key=$val"
+    done < "$runtime_file"
+}
+
 _baobaobot_load_env
+_baobaobot_load_runtime

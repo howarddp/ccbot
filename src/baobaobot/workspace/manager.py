@@ -56,6 +56,7 @@ _BIN_SCRIPTS = [
     "todo-export",
     "web-search",
     "web-read",
+    "share-link",
 ]
 
 # Skills deployed to each per-topic workspace
@@ -87,6 +88,7 @@ _SKILL_NAMES = [
     "web-search",
     "web-read",
     "google-flights",
+    "share-link",
 ]
 
 
