@@ -18,6 +18,7 @@ import base64
 import hashlib
 import hmac
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -52,6 +53,30 @@ def _generate_token(path: str, ttl: int, secret: str, name: str = "") -> str:
     if name_part:
         return f"{sig}-{expires}-{name_part}"
     return f"{sig}-{expires}"
+
+
+def _get_tmux_window_name() -> str:
+    """Read the current tmux window name and extract the topic name part.
+
+    Window names follow the format '{prefix}/{topic_name}' (e.g. 'baobaobot/test').
+    Uses $TMUX_PANE to target the correct window when multiple windows exist.
+    """
+    if not os.environ.get("TMUX"):
+        return ""
+    try:
+        # Use TMUX_PANE to target the correct window (not the client's current window)
+        pane = os.environ.get("TMUX_PANE", "")
+        cmd = ["tmux", "display-message", "-p", "#{window_name}"]
+        if pane:
+            cmd = ["tmux", "display-message", "-t", pane, "-p", "#{window_name}"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        name = result.stdout.strip() if result.returncode == 0 else ""
+        # Extract topic name: 'baobaobot/test' → 'test'
+        if "/" in name:
+            name = name.rsplit("/", 1)[1]
+        return name
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
 
 
 def _find_workspace_root(abs_path: Path) -> Path | None:
@@ -106,7 +131,7 @@ def main() -> None:
         # Fall back to CWD itself as workspace root
         ws_root = Path.cwd().resolve()
 
-    name = args.name
+    name = args.name or _get_tmux_window_name()
 
     if args.upload:
         # Workspace-aware upload token: uploads go to THIS workspace
