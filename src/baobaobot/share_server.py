@@ -234,6 +234,29 @@ class ShareServer:
             self._workspace_roots.append(ws)
             logger.info("Registered workspace root: %s", ws)
 
+    # -- Shared file response --
+
+    @staticmethod
+    def _file_response(file_path: Path) -> web.FileResponse:
+        """Build a FileResponse with appropriate headers for any file type."""
+        content_type, _ = mimetypes.guess_type(str(file_path))
+        if not content_type:
+            content_type = "application/octet-stream"
+
+        _INLINE_TYPES = ("image/", "application/pdf")
+        disposition = "inline" if content_type.startswith(_INLINE_TYPES) else "attachment"
+        safe_filename = urllib.parse.quote(file_path.name, safe="")
+
+        headers = {
+            "Content-Type": content_type,
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{safe_filename}",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if content_type.startswith("text/html"):
+            headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:;"
+
+        return web.FileResponse(file_path, headers=headers)
+
     # -- File download/preview --
 
     async def _handle_file(self, request: web.Request) -> web.StreamResponse:
@@ -251,27 +274,7 @@ class ShareServer:
         if not file_path:
             raise web.HTTPNotFound()
 
-        content_type, _ = mimetypes.guess_type(str(file_path))
-        if not content_type:
-            content_type = "application/octet-stream"
-
-        # Inline display for images and PDFs; HTML and others as attachment
-        _INLINE_TYPES = ("image/", "application/pdf")
-        disposition = "inline" if content_type.startswith(_INLINE_TYPES) else "attachment"
-
-        # RFC 6266 safe filename encoding
-        safe_filename = urllib.parse.quote(file_path.name, safe="")
-
-        headers = {
-            "Content-Type": content_type,
-            "Content-Disposition": f"{disposition}; filename*=UTF-8''{safe_filename}",
-            "X-Content-Type-Options": "nosniff",
-        }
-        # Add CSP for HTML files (served as attachment but belt-and-suspenders)
-        if content_type.startswith("text/html"):
-            headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:;"
-
-        return web.FileResponse(file_path, headers=headers)
+        return self._file_response(file_path)
 
     # -- Directory preview --
 
@@ -315,20 +318,7 @@ class ShareServer:
             # Path might be a file under a shared directory — serve it directly
             file_path = self._find_file(path, workspace)
             if file_path:
-                content_type, _ = mimetypes.guess_type(str(file_path))
-                if not content_type:
-                    content_type = "application/octet-stream"
-                _INLINE_TYPES = ("image/", "application/pdf")
-                disposition = "inline" if content_type.startswith(_INLINE_TYPES) else "attachment"
-                safe_filename = urllib.parse.quote(file_path.name, safe="")
-                headers = {
-                    "Content-Type": content_type,
-                    "Content-Disposition": f"{disposition}; filename*=UTF-8''{safe_filename}",
-                    "X-Content-Type-Options": "nosniff",
-                }
-                if content_type.startswith("text/html"):
-                    headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:;"
-                return web.FileResponse(file_path, headers=headers)
+                return self._file_response(file_path)
             raise web.HTTPNotFound()
 
         # If index.html exists, serve it with restrictive CSP
@@ -358,11 +348,15 @@ class ShareServer:
             except OSError:
                 items_data.append({"name": item.name, "is_dir": item.is_dir(), "size": None, "mtime": None})
 
+        # Display name from query param (topic/group name)
+        source_name = request.query.get("name", "")
+
         data = {
             "title": Path(path).name or "Files",
             "token": token,
             "path": path,
             "items": items_data,
+            "source": source_name,
         }
         page_html = _DIRECTORY_HTML.replace(
             '/*__DATA__*/{"title":"","token":"","path":"","items":[]}/*__END__*/',
@@ -387,7 +381,13 @@ class ShareServer:
         if workspace is None and not verify_token(token, "upload"):
             return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
 
-        return web.Response(text=_UPLOAD_HTML, content_type="text/html")
+        # Inject source name from query param
+        source_name = request.query.get("name", "")
+        page_html = _UPLOAD_HTML.replace(
+            "/*__SOURCE__*/''/*__END__*/",
+            json.dumps(source_name, ensure_ascii=False),
+        )
+        return web.Response(text=page_html, content_type="text/html")
 
     # -- Upload handler --
 
