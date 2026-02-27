@@ -684,8 +684,28 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, "❌ Cannot resolve workspace path.")
         return
 
-    # Determine file object and filename
+    # ── Media group batching: check BEFORE any API calls ──
+    # Voice messages are never part of a media group, so skip them.
     msg = update.message
+    if not msg.voice and msg.media_group_id:
+        _add_to_media_group(
+            context.bot_data,
+            msg.media_group_id,
+            {"msg": msg, "tmp_dir": tmp_dir},
+            caption=msg.caption or "",
+            user_id=user.id,
+            session_key=rk.session_key,
+            thread_id=thread_id,
+            wid=wid,
+            ctx=ctx,
+            users_dir=ctx.config.users_dir,
+            user=user,
+            bot=context.bot,
+            chat_id=msg.chat_id,
+        )
+        return
+
+    # Determine file object and filename
     file_obj = None
     original_name: str | None = None
 
@@ -878,6 +898,244 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(
             update.message, f"❌ File saved but failed to send to Claude: {message}"
         )
+
+
+def _add_to_media_group(
+    bot_data: dict,
+    mg_id: str,
+    file_info: dict,
+    *,
+    caption: str,
+    user_id: int,
+    session_key: int,
+    thread_id: int | None,
+    wid: str,
+    ctx: "AgentContext",
+    users_dir: Path,
+    user: User,
+    bot: Bot,
+    chat_id: int,
+) -> None:
+    """Collect a file into the media-group buffer and (re)start the flush timer."""
+    groups: dict = bot_data.setdefault("_media_groups", {})
+    if mg_id in groups:
+        buf = groups[mg_id]
+        buf["files"].append(file_info)
+        if caption and not buf["caption"]:
+            buf["caption"] = caption
+        # Cancel previous timer so we wait for more files
+        timer = buf.get("timer_task")
+        if timer and not timer.done():
+            timer.cancel()
+    else:
+        buf = {
+            "files": [file_info],
+            "caption": caption,
+            "user_id": user_id,
+            "session_key": session_key,
+            "thread_id": thread_id,
+            "window_id": wid,
+            "bot": bot,
+            "chat_id": chat_id,
+        }
+        groups[mg_id] = buf
+
+    # (Re)start 1.5s timer — only needs to cover Telegram update delivery gap (~0.5-1s)
+    buf["timer_task"] = asyncio.create_task(
+        _process_media_group_after_delay(
+            bot_data, mg_id, ctx=ctx, users_dir=users_dir, user=user,
+        )
+    )
+
+
+async def _process_media_group_after_delay(
+    bot_data: dict,
+    mg_id: str,
+    *,
+    ctx: "AgentContext",
+    users_dir: Path,
+    user: User,
+) -> None:
+    """Wait for the media group to settle, then download and handle the batch."""
+    await asyncio.sleep(1.5)  # Only covers Telegram update delivery gap (~0.5-1s)
+    groups: dict = bot_data.get("_media_groups", {})
+    buf = groups.pop(mg_id, None)
+    if not buf:
+        return
+
+    raw_files: list[dict] = buf["files"]  # Each has msg, tmp_dir
+    caption: str = buf["caption"]
+    wid: str = buf["window_id"]
+    thread_id = buf["thread_id"]
+    bot: Bot = buf["bot"]
+    chat_id: int = buf["chat_id"]
+
+    # --- get_file + download for all messages now (after batch is complete) ---
+    files: list[dict] = []
+    for rf in raw_files:
+        msg: Message = rf["msg"]
+        tmp_dir: Path = rf["tmp_dir"]
+        try:
+            file_obj = None
+            original_name: str | None = None
+            if msg.document:
+                file_obj = await msg.document.get_file()
+                original_name = msg.document.file_name
+            elif msg.photo:
+                file_obj = await msg.photo[-1].get_file()
+            elif msg.video:
+                file_obj = await msg.video.get_file()
+                original_name = msg.video.file_name
+            elif msg.audio:
+                file_obj = await msg.audio.get_file()
+                original_name = msg.audio.file_name
+            if file_obj is None:
+                continue
+            # Generate filename
+            now = datetime.now()
+            ts = now.strftime("%Y%m%d_%H%M%S")
+            if original_name:
+                filename = f"{ts}_{original_name}"
+            else:
+                ext = ".jpg"
+                if file_obj.file_path:
+                    fp = Path(file_obj.file_path)
+                    if fp.suffix:
+                        ext = fp.suffix
+                if msg.video and ext == ".jpg":
+                    ext = ".mp4"
+                filename = f"file_{ts}{ext}"
+            dest = tmp_dir / filename
+            await file_obj.download_to_drive(str(dest))
+            logger.info(
+                "Media group download: %s (mg_id=%s)", dest, mg_id
+            )
+            files.append({"path": str(dest), "filename": filename})
+        except Exception as exc:
+            logger.warning(
+                "Media group file failed (mg_id=%s): %s", mg_id, exc
+            )
+    if not files:
+        try:
+            await bot.send_message(
+                chat_id,
+                "❌ All file downloads failed.",
+                message_thread_id=thread_id,
+            )
+        except Exception:
+            pass
+        return
+
+    # --- caption contains memory trigger → batch memory attachment ---
+    if caption and any(t in caption.lower() for t in _MEMORY_TRIGGERS):
+        desc = caption
+        for t in _MEMORY_TRIGGERS:
+            idx = desc.lower().find(t)
+            if idx >= 0:
+                desc = (desc[:idx] + desc[idx + len(t) :]).strip()
+                break
+        lines = [f"[Memory Attachment] {f['path']}" for f in files]
+        if desc:
+            lines.append(f"User description: {desc}")
+        raw_text = "\n".join(lines)
+        text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
+        success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
+        names = ", ".join(f["filename"] for f in files)
+        try:
+            if success:
+                await bot.send_message(
+                    chat_id, f"💾 Sent {len(files)} files for memory analysis",
+                    message_thread_id=thread_id,
+                )
+            else:
+                await bot.send_message(
+                    chat_id,
+                    f"❌ Files saved but failed to send to Claude: {message}",
+                    message_thread_id=thread_id,
+                )
+        except Exception:
+            pass
+        return
+
+    # --- has caption (non-memory) → send batch directly to Claude ---
+    if caption:
+        lines = [f"[Received File] {f['path']}" for f in files]
+        lines.append(caption)
+        raw_text = "\n".join(lines)
+        text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
+        success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
+        names = ", ".join(f["filename"] for f in files)
+        try:
+            if success:
+                await bot.send_message(
+                    chat_id, f"📎 Sent {len(files)} files: {names}",
+                    message_thread_id=thread_id,
+                )
+            else:
+                await bot.send_message(
+                    chat_id,
+                    f"❌ Failed to send to Claude: {message}",
+                    message_thread_id=thread_id,
+                )
+        except Exception:
+            pass
+        return
+
+    # --- no caption → show single inline keyboard for the group ---
+    group_key = (
+        f"{buf['user_id']}_{buf['session_key']}"
+        f"_{int(datetime.now(tz=timezone.utc).timestamp())}"
+    )
+    pending: dict = bot_data.setdefault("_pending_files", {})
+    pending[group_key] = {
+        "paths": [f["path"] for f in files],
+        "filenames": [f["filename"] for f in files],
+        "path": files[0]["path"],
+        "filename": files[0]["filename"],
+        "user_id": buf["user_id"],
+        "session_key": buf["session_key"],
+        "thread_id": thread_id,
+        "window_id": wid,
+        "is_group": True,
+    }
+    names = ", ".join(f["filename"] for f in files)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📖 Read & Analyze",
+                    callback_data=f"{CB_FILE_READ}{group_key}",
+                ),
+                InlineKeyboardButton(
+                    "✏️ Describe It",
+                    callback_data=f"{CB_FILE_DESC}{group_key}",
+                ),
+                InlineKeyboardButton(
+                    "❌ Cancel",
+                    callback_data=f"{CB_FILE_CANCEL}{group_key}",
+                ),
+            ]
+        ]
+    )
+    try:
+        await bot.send_message(
+            chat_id,
+            f"📎 {len(files)} file{'s' if len(files) != 1 else ''} received: *{names}*\nWhat would you like to do?",
+            message_thread_id=thread_id,
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+    except Exception:
+        # Fallback without Markdown
+        try:
+            await bot.send_message(
+                chat_id,
+                f"📎 {len(files)} file{'s' if len(files) != 1 else ''} received: {names}\nWhat would you like to do?",
+                message_thread_id=thread_id,
+                reply_markup=keyboard,
+            )
+        except Exception:
+            logger.warning("Failed to send media group keyboard for mg_id=%s", mg_id)
 
 
 def _cancel_bash_capture(bot_data: dict, user_id: int, session_key: int) -> None:
@@ -1106,10 +1364,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 and info.get("waiting_description")
             ):
                 pending.pop(fk)
-                dest = info["path"]
-                fname = info["filename"]
                 wid = info["window_id"]
-                raw_text = f"[Received File] {dest}\n{text}"
+                if info.get("is_group"):
+                    lines = [f"[Received File] {p}" for p in info["paths"]]
+                    lines.append(text)
+                    raw_text = "\n".join(lines)
+                    display = ", ".join(info["filenames"])
+                else:
+                    dest = info["path"]
+                    display = info["filename"]
+                    raw_text = f"[Received File] {dest}\n{text}"
                 text_to_send = _ensure_user_and_prefix(
                     ctx.config.users_dir, user, raw_text
                 )
@@ -1118,7 +1382,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     wid, text_to_send
                 )
                 if success:
-                    await safe_reply(update.message, f"📎 Sent: {fname}")
+                    await safe_reply(update.message, f"📎 Sent: {display}")
                 else:
                     await safe_reply(
                         update.message,
@@ -1385,18 +1649,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("File no longer pending", show_alert=True)
             return
         wid = info["window_id"]
-        dest = info["path"]
-        fname = info["filename"]
-        raw_text = (
-            f"[Received File] {dest}\n"
-            "Please read and analyze this file. "
-            "Provide a brief summary of its content."
-        )
+        if info.get("is_group"):
+            paths = info["paths"]
+            fnames = info["filenames"]
+            lines = [f"[Received File] {p}" for p in paths]
+            lines.append(
+                "Please read and analyze these files. "
+                "Provide a brief summary of their content."
+            )
+            display = ", ".join(fnames)
+        else:
+            dest = info["path"]
+            fname = info["filename"]
+            lines = [
+                f"[Received File] {dest}",
+                "Please read and analyze this file. "
+                "Provide a brief summary of its content.",
+            ]
+            display = fname
+        raw_text = "\n".join(lines)
         text_to_send = _ensure_user_and_prefix(ctx.config.users_dir, user, raw_text)
         success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
         if success:
             try:
-                await query.edit_message_text(f"📖 Sent to AI for analysis: {fname}")
+                await query.edit_message_text(f"📖 Sent to AI for analysis: {display}")
             except Exception:
                 pass
         else:
@@ -1404,7 +1680,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await query.edit_message_text(f"❌ Failed to send to Claude: {message}")
             except Exception:
                 pass
-        await query.answer()
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
     # File action: Describe It (wait for user text)
     elif data.startswith(CB_FILE_DESC):
@@ -1412,16 +1691,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         pending = context.bot_data.get("_pending_files", {})
         info = pending.get(file_key)
         if not info:
-            await query.answer("File no longer pending", show_alert=True)
+            try:
+                await query.answer("File no longer pending", show_alert=True)
+            except Exception:
+                pass
             return
         info["waiting_description"] = True
+        prompt = (
+            "✏️ Please describe what you'd like to do with these files:"
+            if info.get("is_group")
+            else "✏️ Please describe what you'd like to do with this file:"
+        )
         try:
-            await query.edit_message_text(
-                "✏️ Please describe what you'd like to do with this file:"
-            )
+            await query.edit_message_text(prompt)
         except Exception:
             pass
-        await query.answer()
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
     # File action: Cancel
     elif data.startswith(CB_FILE_CANCEL):
@@ -1432,7 +1720,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text("❌ Cancelled.")
         except Exception:
             pass
-        await query.answer()
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
     # Voice transcript: Send confirmed
     elif data.startswith(CB_VOICE_SEND):
