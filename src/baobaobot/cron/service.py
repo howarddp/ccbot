@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
 import uuid
 from datetime import date, timedelta
@@ -60,6 +61,9 @@ _TMP_VOICE_MAX_AGE_S = 7 * 86400
 
 # Other tmp files older than 30 days
 _TMP_DEFAULT_MAX_AGE_S = 30 * 86400
+
+# Share link temp directories older than 1 day
+_TMP_SHARELINK_MAX_AGE_S = 86400
 
 # Idle threshold: JSONL must not have been written to in the last N seconds
 _IDLE_THRESHOLD_S = 60
@@ -673,6 +677,17 @@ class CronService:
                     deleted += 1
             except OSError as e:
                 logger.warning("Failed to delete %s: %s", f, e)
+
+        # Clean sharelink-* directories (1-day TTL)
+        for d in tmp_dir.iterdir():
+            if not d.is_dir() or not d.name.startswith("sharelink-"):
+                continue
+            try:
+                if (now - d.stat().st_mtime) > _TMP_SHARELINK_MAX_AGE_S:
+                    shutil.rmtree(d)
+                    deleted += 1
+            except OSError as e:
+                logger.warning("Failed to delete %s: %s", d, e)
 
         if deleted:
             logger.info(

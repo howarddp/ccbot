@@ -10,6 +10,7 @@ import pytest
 from baobaobot.cron.service import (
     CronService,
     _TMP_DEFAULT_MAX_AGE_S,
+    _TMP_SHARELINK_MAX_AGE_S,
     _TMP_VOICE_MAX_AGE_S,
 )
 
@@ -100,6 +101,41 @@ class TestRunTmpCleanup:
         # tmp dir doesn't even exist
         deleted = service._run_tmp_cleanup(ws_dir)
         assert deleted == 0
+
+    def test_sharelink_dir_deleted_after_1_day(self, service: CronService, ws_dir: Path):
+        tmp_dir = ws_dir / "tmp"
+        share_dir = tmp_dir / "sharelink-20260227-mixed"
+        _create_file(share_dir / "file1.txt", _TMP_SHARELINK_MAX_AGE_S + 3600)
+        old_time = time.time() - _TMP_SHARELINK_MAX_AGE_S - 3600
+        os.utime(share_dir, (old_time, old_time))
+
+        deleted = service._run_tmp_cleanup(ws_dir)
+
+        assert deleted == 1
+        assert not share_dir.exists()
+
+    def test_sharelink_dir_kept_within_1_day(self, service: CronService, ws_dir: Path):
+        tmp_dir = ws_dir / "tmp"
+        share_dir = tmp_dir / "sharelink-20260227-recent"
+        _create_file(share_dir / "file1.txt", 3600)
+
+        deleted = service._run_tmp_cleanup(ws_dir)
+
+        assert deleted == 0
+        assert share_dir.is_dir()
+
+    def test_non_sharelink_subdir_not_deleted(self, service: CronService, ws_dir: Path):
+        """Regular subdirs (not sharelink-*) should still be skipped."""
+        tmp_dir = ws_dir / "tmp"
+        subdir = tmp_dir / "uploads"
+        _create_file(subdir / "file.txt", _TMP_SHARELINK_MAX_AGE_S + 3600)
+        old_time = time.time() - _TMP_SHARELINK_MAX_AGE_S - 3600
+        os.utime(subdir, (old_time, old_time))
+
+        deleted = service._run_tmp_cleanup(ws_dir)
+
+        assert deleted == 0
+        assert subdir.is_dir()
 
     def test_mixed_files(self, service: CronService, ws_dir: Path):
         """Old voice + old tmp + recent voice + recent tmp."""

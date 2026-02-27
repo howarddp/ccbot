@@ -166,6 +166,7 @@ When you need to send a file to the user, use this marker in your reply:
 - Path must be absolute and the file must exist within the workspace directory
 - Markers are auto-detected and sent to the user via Telegram
 - Multiple `[SEND_FILE:...]` markers can be included in a single message
+- For sharing with preview/download links, or sending multiple files at once, use the `share-link` skill
 - Files sent by users via Telegram are saved to `tmp/`, and you'll receive a file path notification
 
 ## TODO Management
