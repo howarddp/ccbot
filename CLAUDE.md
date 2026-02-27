@@ -161,7 +161,11 @@ If the scheduled task produces meaningful results (e.g., a summary was written),
 
 ## File Sending
 
-When you need to send a file to the user, use this marker in your reply:
+There are two ways to send files to users:
+
+### Method 1: Direct Upload (`[SEND_FILE]`)
+
+Upload files directly to Telegram (max 50MB per file):
 
 ```
 [SEND_FILE:/absolute/path/to/file]
@@ -170,6 +174,45 @@ When you need to send a file to the user, use this marker in your reply:
 - Path must be absolute and the file must exist within the workspace directory
 - Markers are auto-detected and sent to the user via Telegram
 - Multiple `[SEND_FILE:...]` markers can be included in a single message
+- Best for: single small files (images, documents)
+
+### Method 2: Share Link (`[SHARE_LINK]`)
+
+Generate a signed URL via Cloudflare Tunnel (supports preview & download):
+
+```
+[SHARE_LINK:/absolute/path/to/file]
+[SHARE_LINK:/absolute/path/to/directory/]
+```
+
+- File link: opens inline preview for images/PDF/HTML, or triggers download for other types
+- Directory link: shows a browsable file listing with preview, search, and download for each file
+- Links expire after 30 minutes by default
+- Best for: large files, or when preview in browser is preferred
+
+### Sending Multiple Files
+
+When you need to send **multiple files at once**, collect them into a temporary directory and share it as a directory link. Files may be scattered across different locations (memory/, tmp/, users/, projects/, etc.):
+
+1. Create a temporary directory: `mkdir -p tmp/share-{descriptive-name}/`
+2. Copy (not move) files from their various locations into it:
+   ```bash
+   cp memory/attachments/2026-02/photo.jpg tmp/share-files/
+   cp tmp/report.pdf tmp/share-files/
+   cp users/howard/notes.txt tmp/share-files/
+   ```
+3. Use `[SHARE_LINK:/absolute/path/to/tmp/share-{descriptive-name}/]` to share the whole directory
+4. The user gets a single link with a browsable page: file list, previews, and individual download buttons
+5. Clean up the temp directory after the link expires (optional)
+
+This is better than multiple `[SEND_FILE]` markers because:
+- User gets one clean link instead of multiple uploads flooding the chat
+- The directory page has preview thumbnails, search, and grid/list view
+- No Telegram upload size limits (served via HTTP)
+- Files from any location can be combined into one browsable page
+
+### Incoming Files
+
 - Files sent by users via Telegram are saved to `tmp/`, and you'll receive a file path notification
 
 ## Memory Save

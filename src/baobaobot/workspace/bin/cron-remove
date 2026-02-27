@@ -9,46 +9,9 @@ Examples:
 """
 
 import argparse
-import json
-import os
 import sys
-import tempfile
-from pathlib import Path
 
-
-def resolve_workspace():
-    """Find workspace dir: cwd or parent with cron/ or memory/ dir."""
-    cwd = Path.cwd()
-    for d in [cwd, *cwd.parents]:
-        if (d / "cron").is_dir() or (d / "memory").is_dir() or (d / "MEMORY.md").is_file():
-            return d
-    print(
-        "Cannot determine workspace. Use --workspace or run from a workspace dir.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-
-def atomic_write_json(path, data, indent=2):
-    """Write JSON atomically via temp file + rename."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(data, indent=indent, ensure_ascii=False)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(path.parent), suffix=".tmp", prefix=f".{path.name}."
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+from _cron_common import connect_db, remove_job, resolve_workspace
 
 
 def main():
@@ -57,31 +20,21 @@ def main():
     parser.add_argument("--workspace", default=None, help="Workspace path")
     args = parser.parse_args()
 
-    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
+    workspace = resolve_workspace(args.workspace)
     if not workspace.exists():
         print(f"Workspace not found: {workspace}", file=sys.stderr)
         sys.exit(1)
 
-    path = workspace / "cron" / "jobs.json"
-    if not path.is_file():
-        print(f"No cron jobs found (jobs.json does not exist).", file=sys.stderr)
-        sys.exit(1)
-
+    conn = connect_db(workspace)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"Error reading jobs.json: {e}", file=sys.stderr)
-        sys.exit(1)
+        removed = remove_job(conn, args.job_id)
+    finally:
+        conn.close()
 
-    jobs = data.get("jobs", [])
-    original_count = len(jobs)
-    data["jobs"] = [j for j in jobs if j.get("id") != args.job_id]
-
-    if len(data["jobs"]) == original_count:
+    if not removed:
         print(f"Job not found: {args.job_id}", file=sys.stderr)
         sys.exit(1)
 
-    atomic_write_json(path, data)
     print(f"✅ Job removed: {args.job_id}")
 
 

@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Show cron job execution history.
+
+Usage:
+    cron-history [--job-id ID] [--days N] [--status ok|error] [--limit N] [--workspace PATH]
+
+Examples:
+    cron-history
+    cron-history --job-id a1b2c3d4
+    cron-history --days 7 --status error
+"""
+
+import argparse
+import sys
+
+from _cron_common import connect_db, format_ts, list_history, resolve_workspace
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Show cron execution history")
+    parser.add_argument("--job-id", default=None, help="Filter by job ID")
+    parser.add_argument("--days", type=int, default=None, help="Show last N days only")
+    parser.add_argument("--status", default=None, choices=["ok", "error"], help="Filter by status")
+    parser.add_argument("--limit", type=int, default=50, help="Max rows (default: 50)")
+    parser.add_argument("--workspace", default=None, help="Workspace path")
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    if not workspace.exists():
+        print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    conn = connect_db(workspace)
+    try:
+        rows = list_history(
+            conn,
+            job_id=args.job_id,
+            days=args.days,
+            status=args.status,
+            limit=args.limit,
+        )
+    finally:
+        conn.close()
+
+    if not rows:
+        print("No history records found.")
+        sys.exit(0)
+
+    print(f"📜 Cron history ({len(rows)} record(s)):\n")
+    for row in rows:
+        status_icon = "✅" if row["status"] == "ok" else "❌" if row["status"] == "error" else "⏳"
+        started = format_ts(row["started_at"])
+        duration = f"{row['duration_s']:.1f}s" if row["duration_s"] else "-"
+
+        print(f"  {status_icon} [{row['job_id']}] {started}  ({duration})")
+        if row["error"]:
+            print(f"     Error: {row['error']}")
+
+
+if __name__ == "__main__":
+    main()

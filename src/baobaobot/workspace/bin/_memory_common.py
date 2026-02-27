@@ -839,13 +839,19 @@ def _sync_todos(conn: sqlite3.Connection) -> int:
 
 
 def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
-    """Sync cron jobs into the memories table as source='cron'."""
+    """Sync cron jobs into the memories table as source='cron'.
+
+    Reads from the cron_jobs table in memory.db (same connection).
+    """
     virtual_path = "__cron__"
     now = datetime.now().isoformat()
 
-    jobs_file = workspace / "cron" / "jobs.json"
-    if not jobs_file.is_file():
-        # Clean up if jobs.json was removed
+    # Check if cron_jobs table exists in this DB
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cron_jobs'"
+    ).fetchone()
+    if not has_table:
+        # No cron_jobs table — clean up stale index if any
         meta = conn.execute(
             "SELECT path FROM file_meta WHERE path = ?", (virtual_path,)
         ).fetchone()
@@ -856,32 +862,32 @@ def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
             return 1
         return 0
 
-    # Change detection via file hash
-    current_hash = hashlib.md5(jobs_file.read_bytes()).hexdigest()
+    # Read jobs from cron_jobs table
+    rows = conn.execute(
+        "SELECT id, name, message, enabled FROM cron_jobs ORDER BY created_at"
+    ).fetchall()
+
+    # Change detection: hash of all job fields
+    combined = "|".join(
+        f"{r['id']}:{r['name']}:{r['message']}:{r['enabled']}" for r in rows
+    )
+    current_hash = hashlib.md5(combined.encode()).hexdigest()
     meta = conn.execute(
         "SELECT content_hash FROM file_meta WHERE path = ?", (virtual_path,)
     ).fetchone()
     if meta and meta["content_hash"] == current_hash:
         return 0
 
-    # Parse jobs
-    try:
-        data = json.loads(jobs_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return 0
-
-    jobs = data.get("jobs", [])
-
     # Clear old cron entries and re-index
     conn.execute("DELETE FROM memories WHERE path = ?", (virtual_path,))
     conn.execute("DELETE FROM paragraphs WHERE path = ?", (virtual_path,))
 
     line_num = 0
-    for job in jobs:
-        job_id = job.get("id", "?")
-        name = job.get("name", "")
-        message = job.get("message", "")
-        enabled = job.get("enabled", True)
+    for r in rows:
+        job_id = r["id"]
+        name = r["name"]
+        message = r["message"]
+        enabled = r["enabled"]
         status = "enabled" if enabled else "paused"
 
         line_num += 1
@@ -903,14 +909,14 @@ def _sync_cron(conn: sqlite3.Connection, workspace: Path) -> int:
         para_text = title_line
         if message:
             para_text += f"\n{message}"
-        content_hash = hashlib.md5(
+        content_hash_p = hashlib.md5(
             _normalize_for_hash(para_text).encode()
         ).hexdigest()
         conn.execute(
             "INSERT INTO paragraphs "
             "(path, source, date, heading, content, line_start, line_end, content_hash) "
             "VALUES (?, 'cron', ?, '', ?, 0, 0, ?)",
-            (virtual_path, job_id, para_text, content_hash),
+            (virtual_path, job_id, para_text, content_hash_p),
         )
 
     conn.execute(

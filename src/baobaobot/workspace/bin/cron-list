@@ -12,49 +12,8 @@ Examples:
 import argparse
 import json
 import sys
-from datetime import datetime
-from pathlib import Path
 
-
-def resolve_workspace():
-    """Find workspace dir: cwd or parent with cron/ or memory/ dir."""
-    cwd = Path.cwd()
-    for d in [cwd, *cwd.parents]:
-        if (d / "cron").is_dir() or (d / "memory").is_dir() or (d / "MEMORY.md").is_file():
-            return d
-    print(
-        "Cannot determine workspace. Use --workspace or run from a workspace dir.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-
-def format_schedule(schedule):
-    """Format schedule dict for display."""
-    kind = schedule.get("kind", "")
-    if kind == "cron":
-        tz = schedule.get("tz", "")
-        tz_part = f" ({tz})" if tz else ""
-        return f"{schedule.get('expr', '')}{tz_part}"
-    elif kind == "every":
-        secs = schedule.get("every_seconds", 0)
-        if secs >= 86400 and secs % 86400 == 0:
-            return f"every {secs // 86400}d"
-        if secs >= 3600 and secs % 3600 == 0:
-            return f"every {secs // 3600}h"
-        if secs >= 60 and secs % 60 == 0:
-            return f"every {secs // 60}m"
-        return f"every {secs}s"
-    elif kind == "at":
-        return f"at {schedule.get('at', '')}"
-    return f"unknown({kind})"
-
-
-def format_ts(ts):
-    """Format Unix timestamp for display."""
-    if ts is None:
-        return "-"
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+from _cron_common import cols_to_schedule, connect_db, format_schedule, format_ts, resolve_workspace
 
 
 def main():
@@ -63,50 +22,64 @@ def main():
     parser.add_argument("--workspace", default=None, help="Workspace path")
     args = parser.parse_args()
 
-    workspace = Path(args.workspace) if args.workspace else resolve_workspace()
+    workspace = resolve_workspace(args.workspace)
     if not workspace.exists():
         print(f"Workspace not found: {workspace}", file=sys.stderr)
         sys.exit(1)
 
-    path = workspace / "cron" / "jobs.json"
-    if not path.is_file():
-        if args.as_json:
-            print("[]")
-        else:
-            print("No cron jobs found.")
-        sys.exit(0)
-
+    conn = connect_db(workspace)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"Error reading jobs.json: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    jobs = data.get("jobs", [])
+        rows = conn.execute(
+            "SELECT * FROM cron_jobs ORDER BY created_at"
+        ).fetchall()
+    finally:
+        conn.close()
 
     if args.as_json:
+        jobs = []
+        for row in rows:
+            jobs.append({
+                "id": row["id"],
+                "name": row["name"],
+                "schedule": cols_to_schedule(row),
+                "message": row["message"],
+                "enabled": bool(row["enabled"]),
+                "delete_after_run": bool(row["delete_after_run"]),
+                "system": bool(row["system"]),
+                "creator_user_id": row["creator_user_id"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "state": {
+                    "next_run_at": row["next_run_at"],
+                    "running_at": row["running_at"],
+                    "last_run_at": row["last_run_at"],
+                    "last_status": row["last_status"],
+                    "last_error": row["last_error"],
+                    "last_duration_s": row["last_duration_s"],
+                    "consecutive_errors": row["consecutive_errors"],
+                    "last_summary_offset": row["last_summary_offset"],
+                    "last_summary_jsonl": row["last_summary_jsonl"],
+                },
+            })
         print(json.dumps(jobs, indent=2, ensure_ascii=False))
         sys.exit(0)
 
-    if not jobs:
+    if not rows:
         print("No cron jobs found.")
         sys.exit(0)
 
-    print(f"📋 Cron jobs ({len(jobs)}):\n")
-    for job in jobs:
-        job_id = job.get("id", "?")
-        name = job.get("name", "")
-        enabled = job.get("enabled", True)
-        schedule = job.get("schedule", {})
-        message = job.get("message", "")
-        state = job.get("state", {})
-        next_run = state.get("next_run_at")
-        delete_flag = " [one-shot]" if job.get("delete_after_run") else ""
+    print(f"📋 Cron jobs ({len(rows)}):\n")
+    for row in rows:
+        job_id = row["id"]
+        name = row["name"]
+        enabled = row["enabled"]
+        next_run = row["next_run_at"]
+        delete_flag = " [one-shot]" if row["delete_after_run"] else ""
         status_icon = "🟢" if enabled else "⏸️"
 
         print(f"  {status_icon} [{job_id}] {name}{delete_flag}")
-        print(f"     Schedule: {format_schedule(schedule)}")
-        print(f"     Message:  {message}")
+        print(f"     Schedule: {format_schedule(row)}")
+        print(f"     Message:  {row['message']}")
         print(f"     Next run: {format_ts(next_run)}")
         print()
 

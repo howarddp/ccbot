@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Callable
 
 from ..persona.profile import get_user_display_name
 from .schedule import compute_next_run
-from .store import load_store, save_store, store_mtime
+from .store import cleanup_history, load_store, record_history, save_store, store_mtime
 from .types import CronJob, CronJobState, CronSchedule, CronStoreFile, WorkspaceMeta
 
 if TYPE_CHECKING:
@@ -520,6 +520,22 @@ class CronService:
                 e,
             )
 
+        # Record execution history
+        ws_dir = self._workspace_dirs.get(workspace_name)
+        if ws_dir:
+            try:
+                record_history(
+                    ws_dir,
+                    job_id=job.id,
+                    started_at=now,
+                    finished_at=time.time(),
+                    status=job.state.last_status,
+                    error=job.state.last_error,
+                    duration_s=job.state.last_duration_s,
+                )
+            except Exception:
+                logger.warning("Failed to record history for job %s", job.id, exc_info=True)
+
         # Compute next run (disable at-jobs after execution)
         if job.schedule.kind == "at":
             job.enabled = False
@@ -689,6 +705,18 @@ class CronService:
             except OSError as e:
                 logger.warning("Failed to delete %s: %s", d, e)
 
+        # Clean up old cron history records (>90 days)
+        try:
+            history_deleted = cleanup_history(ws_dir, days=90)
+            if history_deleted:
+                logger.info(
+                    "Cron history cleanup: removed %d old record(s) in %s",
+                    history_deleted,
+                    ws_dir,
+                )
+        except Exception:
+            logger.warning("Failed to clean up cron history in %s", ws_dir, exc_info=True)
+
         if deleted:
             logger.info(
                 "Tmp cleanup: deleted %d expired file(s) in %s", deleted, ws_dir
@@ -770,13 +798,9 @@ class CronService:
             ws_name = ws_dir.name.removeprefix("workspace_")
             if ws_name in self._stores:
                 continue
-            cron_file = ws_dir / "cron" / "jobs.json"
-            if cron_file.is_file():
-                store = load_store(ws_dir)
-                self._mtimes[ws_name] = store_mtime(ws_dir)
-            else:
-                # Workspace without cron store — create empty store
-                store = CronStoreFile()
+            # Load from DB (auto-migrates from jobs.json if needed)
+            store = load_store(ws_dir)
+            self._mtimes[ws_name] = store_mtime(ws_dir)
             self._stores[ws_name] = store
             self._workspace_dirs[ws_name] = ws_dir
 
