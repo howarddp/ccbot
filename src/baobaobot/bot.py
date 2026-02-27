@@ -1811,11 +1811,16 @@ async def _send_files_background(
     chat_id: int,
     thread_id: int | None,
     files: list[Path],
+    *,
+    session_manager: "SessionManager | None" = None,
+    wid: str = "",
 ) -> None:
     """Send files to Telegram in background (fire-and-forget).
 
     Runs as an asyncio task so it doesn't block the session monitor.
     Sends periodic heartbeat messages while uploading.
+    If session_manager and wid are provided, notifies Claude on failure
+    so it can retry with an alternative method (e.g. share-link).
     """
     for fpath in files:
         try:
@@ -1838,6 +1843,13 @@ async def _send_files_background(
             # Brief delay so httpx connection pool can recover after upload failure
             await asyncio.sleep(2)
             await _notify_send_error(bot, chat_id, thread_id, fpath.name, e)
+            # Notify Claude so it can retry with share-link
+            if session_manager and wid:
+                hint = (
+                    f"[System] Failed to send file {fpath.name} to Telegram: {e}. "
+                    f"Use the share-link skill to send {fpath} as a download link instead."
+                )
+                await session_manager.send_to_window(wid, hint)
 
 
 _UPLOAD_TIMEOUT = 120
@@ -2119,7 +2131,14 @@ async def _deliver_message(
         # Fire-and-forget: send files in background to avoid blocking monitor
         if validated_files:
             asyncio.create_task(
-                _send_files_background(bot, chat_id, thread_id, validated_files)
+                _send_files_background(
+                    bot,
+                    chat_id,
+                    thread_id,
+                    validated_files,
+                    session_manager=sm,
+                    wid=wid,
+                )
             )
         # Strip [SEND_FILE:...] markers from the text
         msg = NewMessage(

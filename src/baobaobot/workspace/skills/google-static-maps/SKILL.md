@@ -70,7 +70,9 @@ Available colors: `black`, `brown`, `green`, `purple`, `yellow`, `blue`, `gray`,
 
 Labels: single uppercase letter (A-Z) or digit (0-9)
 
-## Map with Path (draw a route)
+## Map with Path (straight lines between points)
+
+**Note**: This draws STRAIGHT LINES between coordinates, not actual road routes. For real driving routes, use the "Show directions route on map" section below.
 
 ```bash
 source "{{BIN_DIR}}/_load_env"
@@ -122,9 +124,47 @@ curl -s "https://maps.googleapis.com/maps/api/staticmap?size=600x400&scale=2&mar
   -o tmp/places_map.png
 ```
 
-### Show directions route on map
+### Show directions route on map (IMPORTANT: use encoded polyline)
 
-After a google-directions call, draw the route path through waypoints.
+**IMPORTANT**: When drawing routes on a map, you MUST use the encoded polyline from the Directions API. Do NOT just connect waypoints with straight lines — that produces incorrect routes.
+
+**Step 1**: Get the encoded polyline from google-directions skill (include `routes.polyline.encodedPolyline` in FieldMask).
+
+**Step 2**: URL-encode the polyline and use it with `path=enc:ENCODED_POLYLINE`:
+
+```bash
+source "{{BIN_DIR}}/_load_env"
+
+# Example: Get directions and draw the actual road route on a map
+# 1. Get route with polyline
+ROUTE_JSON=$(curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
+  -H "X-Goog-FieldMask: routes.polyline.encodedPolyline,routes.localizedValues,routes.description" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "origin": {"address": "台北車站"},
+    "destination": {"address": "桃園機場"},
+    "travelMode": "DRIVE",
+    "languageCode": "zh-TW"
+  }')
+
+# 2. Extract polyline
+POLYLINE=$(echo "$ROUTE_JSON" | jq -r '.routes[0].polyline.encodedPolyline')
+
+# 3. URL-encode the polyline (it contains special chars like backslashes)
+ENCODED_POLYLINE=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read().strip()))" <<< "$POLYLINE")
+
+# 4. Draw on static map with markers at origin/destination
+curl -s "https://maps.googleapis.com/maps/api/staticmap?size=600x400&scale=2&path=color:0x4285F4FF%7Cweight:4%7Cenc:${ENCODED_POLYLINE}&markers=color:green%7Clabel:A%7C25.0478,121.5170&markers=color:red%7Clabel:B%7C25.0770,121.2325&language=zh-TW&key=$GOOGLE_MAPS_API_KEY" \
+  -o tmp/route_map.png
+```
+
+**Multi-stop route**: For routes with intermediates, the polyline from the Directions API already includes all waypoints, so you only need one `path=enc:` parameter.
+
+**Tips**:
+- The `enc:` prefix tells Static Maps API to decode the polyline into actual road coordinates
+- Always URL-encode the polyline string since it may contain `+`, `/`, `\` etc.
+- Combine with markers to label origin (`green`), destination (`red`), and waypoints (`blue`)
 
 ## Parameters Reference
 
@@ -136,7 +176,7 @@ After a google-directions call, draw the route path through waypoints.
 | `scale` | Resolution multiplier (1 or 2) | `2` |
 | `maptype` | Map style | `roadmap`, `satellite`, `terrain`, `hybrid` |
 | `markers` | Pin markers on map | `color:red\|label:A\|lat,lng` |
-| `path` | Draw lines on map | `color:0x0000ff\|weight:5\|lat,lng\|lat,lng` |
+| `path` | Draw lines on map | `color:0x0000ff\|weight:5\|lat,lng\|lat,lng` or `color:0x4285F4\|weight:4\|enc:POLYLINE` |
 | `language` | Map label language | `zh-TW` |
 
 ## Zoom Level Guide

@@ -223,6 +223,35 @@ curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
 | `"avoidFerries": true` | Avoid ferries |
 | `"avoidIndoor": true` | Avoid indoor routes |
 
+## Get Route Polyline (for drawing on Static Maps)
+
+**IMPORTANT**: When displaying routes on a map, always use the encoded polyline from the Directions API. Do NOT draw straight lines between waypoints — that shows incorrect routes.
+
+```bash
+source "{{BIN_DIR}}/_load_env"
+
+# Get route info + encoded polyline
+ROUTE_JSON=$(curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
+  -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
+  -H "X-Goog-FieldMask: routes.polyline.encodedPolyline,routes.localizedValues,routes.description" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "origin": {"address": "台北車站"},
+    "destination": {"address": "桃園機場"},
+    "travelMode": "DRIVE",
+    "languageCode": "zh-TW"
+  }')
+
+# Extract the encoded polyline string
+POLYLINE=$(echo "$ROUTE_JSON" | jq -r '.routes[0].polyline.encodedPolyline')
+
+# Display route info
+echo "$ROUTE_JSON" | jq -r '.routes[0] | "🚗 \(.description // "route")\n⏱️ \(.localizedValues.duration.text)\n📏 \(.localizedValues.distance.text)"'
+
+# Use $POLYLINE with google-static-maps skill to draw the actual road route on a map
+# See: path=enc:$POLYLINE in google-static-maps skill
+```
+
 ## FieldMask Reference
 
 | Field | Description |
@@ -231,6 +260,7 @@ curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
 | `routes.distanceMeters` | Total distance in meters |
 | `routes.localizedValues` | Human-readable duration/distance (e.g. "14 分鐘", "6.6 公里") |
 | `routes.description` | Route summary (road names) |
+| `routes.polyline.encodedPolyline` | **Encoded polyline string for drawing route on Static Maps** |
 | `routes.legs` | Per-segment info (for multi-stop routes) |
 | `routes.legs.steps` | Step-by-step navigation |
 | `routes.legs.steps.transitDetails` | Transit line info (for TRANSIT mode) |
