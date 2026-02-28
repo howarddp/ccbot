@@ -105,6 +105,17 @@ def generate_token(
 
 def verify_token(token: str, path: str, secret: str = "") -> bool:
     """Verify a token is valid and not expired."""
+    return check_token(token, path, secret) == "ok"
+
+
+def check_token(token: str, path: str, secret: str = "") -> str:
+    """Check a token and return its status.
+
+    Returns:
+        "ok"      — valid and not expired
+        "expired" — signature matches but TTL exceeded
+        "invalid" — signature mismatch or malformed token
+    """
     if not secret:
         secret = _load_secret()
     try:
@@ -113,12 +124,14 @@ def verify_token(token: str, path: str, secret: str = "") -> bool:
         expires = int(parts[1])
         name_part = parts[2] if len(parts) > 2 else ""
     except (ValueError, AttributeError, IndexError):
-        return False
-    if time.time() > expires:
-        return False
+        return "invalid"
     msg = f"{path}:{expires}:{name_part}"
     expected = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:_SIG_LENGTH]
-    return hmac.compare_digest(sig, expected)
+    if not hmac.compare_digest(sig, expected):
+        return "invalid"
+    if time.time() > expires:
+        return "expired"
+    return "ok"
 
 
 def extract_token_name(token: str) -> str:
@@ -174,12 +187,20 @@ def _safe_resolve(base: Path, rel_path: str) -> Path | None:
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _UPLOAD_HTML = (_TEMPLATES_DIR / "upload.html").read_text(encoding="utf-8")
 _EXPIRED_HTML = (_TEMPLATES_DIR / "expired.html").read_text(encoding="utf-8")
+_INVALID_HTML = (_TEMPLATES_DIR / "invalid.html").read_text(encoding="utf-8")
 _DIRECTORY_HTML = (_TEMPLATES_DIR / "directory.html").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
 # HTTP Handlers
 # ---------------------------------------------------------------------------
+
+
+def _deny_response(reason: str) -> web.Response:
+    """Return an appropriate error page based on token check result."""
+    if reason == "expired":
+        return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
+    return web.Response(text=_INVALID_HTML, content_type="text/html", status=403)
 
 
 class ShareServer:
@@ -239,28 +260,36 @@ class ShareServer:
 
     def _verify_with_workspace(
         self, token: str, prefix: str, rel_path: str
-    ) -> Path | None:
+    ) -> tuple[Path | None, str]:
         """Try to verify token against each registered workspace root.
 
         Token payload format: '{prefix}:{workspace_abs}:{rel_path}'
-        Returns the matched workspace Path, or None if no match.
+        Returns (workspace_path, status) where status is "ok", "expired", or "invalid".
         """
+        worst = "invalid"
         for root in self._workspace_roots:
             token_path = f"{prefix}:{root}:{rel_path}"
-            if verify_token(token, token_path):
-                return root
-        return None
+            status = check_token(token, token_path)
+            if status == "ok":
+                return root, "ok"
+            if status == "expired":
+                worst = "expired"
+        return None, worst
 
-    def _verify_upload_workspace(self, token: str) -> Path | None:
+    def _verify_upload_workspace(self, token: str) -> tuple[Path | None, str]:
         """Try to verify upload token against each registered workspace root.
 
         Token payload format: 'upload:{workspace_abs}'
-        Returns the matched workspace Path, or None if no match.
+        Returns (workspace_path, status) where status is "ok", "expired", or "invalid".
         """
+        worst = "invalid"
         for root in self._workspace_roots:
-            if verify_token(token, f"upload:{root}"):
-                return root
-        return None
+            status = check_token(token, f"upload:{root}")
+            if status == "ok":
+                return root, "ok"
+            if status == "expired":
+                worst = "expired"
+        return None, worst
 
     def add_workspace(self, workspace: Path) -> None:
         """Register a workspace root dynamically (e.g., when a new topic is created)."""
@@ -299,11 +328,14 @@ class ShareServer:
         path = request.match_info["path"]
 
         # Try workspace-aware verification first
-        workspace = self._verify_with_workspace(token, "f", path)
+        workspace, ws_status = self._verify_with_workspace(token, "f", path)
         if workspace is None:
             # Fall back to legacy format (no workspace)
-            if not verify_token(token, f"f:{path}"):
-                return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
+            legacy = check_token(token, f"f:{path}")
+            if legacy != "ok":
+                # Use the more specific reason (expired > invalid)
+                reason = ws_status if ws_status == "expired" else legacy
+                return _deny_response(reason)
 
         file_path = self._find_file(path, workspace)
         if not file_path:
@@ -318,35 +350,49 @@ class ShareServer:
         path = request.match_info.get("path", "")
 
         # 1. Exact path verification
-        workspace = self._verify_with_workspace(token, "p", path)
+        workspace, worst_status = self._verify_with_workspace(token, "p", path)
 
         # 2. Parent path backtracking: directory token grants access to sub-paths
         if workspace is None:
             parent = path
             while "/" in parent:
                 parent = parent.rsplit("/", 1)[0]
-                workspace = self._verify_with_workspace(token, "p", parent)
+                workspace, st = self._verify_with_workspace(token, "p", parent)
+                if st == "expired":
+                    worst_status = "expired"
                 if workspace:
                     break
             # Also check root (empty path) as parent — handles files/dirs at workspace root
             if workspace is None and path:
-                workspace = self._verify_with_workspace(token, "p", "")
+                workspace, st = self._verify_with_workspace(token, "p", "")
+                if st == "expired":
+                    worst_status = "expired"
 
         # 3. Legacy fallback (no workspace in token) with parent backtracking
         if workspace is None:
-            if not verify_token(token, f"p:{path}"):
+            legacy = check_token(token, f"p:{path}")
+            if legacy == "expired":
+                worst_status = "expired"
+            if legacy != "ok":
                 parent = path
                 verified = False
                 while "/" in parent:
                     parent = parent.rsplit("/", 1)[0]
-                    if verify_token(token, f"p:{parent}"):
+                    st = check_token(token, f"p:{parent}")
+                    if st == "expired":
+                        worst_status = "expired"
+                    if st == "ok":
                         verified = True
                         break
                 # Also check root (empty path) as parent
-                if not verified and path and verify_token(token, "p:"):
-                    verified = True
+                if not verified and path:
+                    st = check_token(token, "p:")
+                    if st == "expired":
+                        worst_status = "expired"
+                    if st == "ok":
+                        verified = True
                 if not verified:
-                    return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
+                    return _deny_response(worst_status)
 
         dir_path = self._find_dir(path, workspace)
         if not dir_path:
@@ -412,9 +458,12 @@ class ShareServer:
         token = request.match_info["token"]
 
         # Verify: workspace-aware or legacy
-        workspace = self._verify_upload_workspace(token)
-        if workspace is None and not verify_token(token, "upload"):
-            return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
+        workspace, ws_status = self._verify_upload_workspace(token)
+        if workspace is None:
+            legacy = check_token(token, "upload")
+            if legacy != "ok":
+                reason = ws_status if ws_status == "expired" else legacy
+                return _deny_response(reason)
 
         # Display name embedded in token
         source_name = extract_token_name(token)
@@ -430,10 +479,12 @@ class ShareServer:
         token = request.match_info["token"]
 
         # Verify and determine target workspace
-        workspace = self._verify_upload_workspace(token)
+        workspace, ws_status = self._verify_upload_workspace(token)
         if workspace is None:
-            if not verify_token(token, "upload"):
-                return web.Response(text=_EXPIRED_HTML, content_type="text/html", status=410)
+            legacy = check_token(token, "upload")
+            if legacy != "ok":
+                reason = ws_status if ws_status == "expired" else legacy
+                return _deny_response(reason)
             # Legacy token: use first workspace root as fallback
             workspace = self._workspace_roots[0] if self._workspace_roots else None
         if workspace is None:

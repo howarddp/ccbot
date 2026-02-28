@@ -212,5 +212,7 @@ async def _topic_closed_handler(
         await clear_topic_state(
             user.id, tid, context.bot, context.user_data, agent_ctx=ctx
         )
-    else:
-        logger.debug("Topic closed: no binding (user=%d, thread=%d)", user.id, tid)
+
+    # Clean up topic metadata regardless of binding existence
+    ctx.session_manager.remove_topic_name(tid)
+    ctx.session_manager.remove_group_chat_id(user.id, tid)

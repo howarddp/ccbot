@@ -378,7 +378,7 @@ async def screenshot_command(
         await safe_reply(update.message, "❌ Failed to capture pane content.")
         return
 
-    png_bytes = await text_to_image(text, with_ansi=True)
+    png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
     keyboard = _build_screenshot_keyboard(wid)
     await update.message.reply_document(
         document=io.BytesIO(png_bytes),
@@ -1594,7 +1594,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Failed to capture pane", show_alert=True)
             return
 
-        png_bytes = await text_to_image(text, with_ansi=True)
+        png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
         keyboard = _build_screenshot_keyboard(window_id)
         try:
             await query.edit_message_media(
@@ -2042,7 +2042,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await asyncio.sleep(0.5)
         text = await ctx.tmux_manager.capture_pane(w.window_id, with_ansi=True)
         if text:
-            png_bytes = await text_to_image(text, with_ansi=True)
+            png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
             keyboard = _build_screenshot_keyboard(window_id)
             try:
                 await query.edit_message_media(
@@ -2478,6 +2478,8 @@ async def _deliver_message(
                     url = f"(file outside workspace: {path_str})"
                 elif p.is_dir():
                     root, rel = result
+                    if rel == ".":
+                        rel = ""
                     token = generate_token(f"p:{root}:{rel}", name=display_name)
                     url = f"{public_url}/p/{token}/{rel}"
                 elif p.is_file():
@@ -2801,8 +2803,9 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     request = HTTPXRequest(
         connection_pool_size=32,
         connect_timeout=20.0,
-        read_timeout=30.0,
+        read_timeout=60.0,
         write_timeout=30.0,
+        media_write_timeout=60.0,
         pool_timeout=15.0,
     )
     application = (

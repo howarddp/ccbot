@@ -687,6 +687,8 @@ def main() -> None:
                     )
                     # Shut down partially initialized app before retrying
                     try:
+                        if app.running:
+                            await app.stop()
                         await app.shutdown()
                     except Exception:
                         pass

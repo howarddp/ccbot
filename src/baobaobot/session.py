@@ -504,6 +504,11 @@ class SessionManager:
             self.topic_names[thread_id] = name
             self._save_state()
 
+    def remove_topic_name(self, thread_id: int) -> None:
+        """Remove a persisted topic name."""
+        if self.topic_names.pop(thread_id, None) is not None:
+            self._save_state()
+
     # --- Display name management ---
 
     def get_display_name(self, window_id: str) -> str:
@@ -987,6 +992,12 @@ class SessionManager:
                 user_id,
                 thread_id,
             )
+
+    def remove_group_chat_id(self, user_id: int, thread_id: int) -> None:
+        """Remove the stored group chat ID for a user's thread."""
+        key = f"{user_id}:{thread_id}"
+        if self.group_chat_ids.pop(key, None) is not None:
+            self._save_state()
 
     def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
         """Resolve the chat_id for sending messages.
