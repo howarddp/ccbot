@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .session_monitor import SessionMonitor
     from .settings import AgentConfig
     from .share_server import ShareServer
+    from .system_scheduler import SystemScheduler
     from .tmux_manager import TmuxManager
     from .tunnel import TunnelManager
 
@@ -68,6 +69,7 @@ class AgentContext:
     router: Router
     session_monitor: SessionMonitor | None = None
     cron_service: CronService | None = None
+    system_scheduler: SystemScheduler | None = None
     share_server: ShareServer | None = None
     tunnel_manager: TunnelManager | None = None
 

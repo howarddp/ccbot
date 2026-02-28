@@ -1,7 +1,10 @@
-"""CronService — manages all workspace cron jobs.
+"""CronService — manages user-defined workspace cron jobs.
 
 Scans workspaces on startup, runs a single asyncio timer loop,
 and dispatches due jobs to tmux windows via session_manager.
+
+System tasks (hourly summary, consolidation, heartbeat) are handled
+by SystemScheduler, not CronService.
 """
 
 from __future__ import annotations
@@ -38,9 +41,6 @@ _MAX_TICK_INTERVAL = 60.0
 # Minimum sleep between ticks
 _MIN_TICK_INTERVAL = 5.0
 
-# System job name for hourly summaries
-_SYSTEM_SUMMARY_JOB_NAME = "_system:hourly_summary"
-
 # System job name for weekly memory consolidation
 _SYSTEM_CONSOLIDATION_JOB_NAME = "_system:weekly_consolidation"
 
@@ -64,32 +64,6 @@ _TMP_DEFAULT_MAX_AGE_S = 30 * 86400
 
 # Share link temp directories older than 1 day
 _TMP_SHARELINK_MAX_AGE_S = 86400
-
-# Idle threshold: JSONL must not have been written to in the last N seconds
-_IDLE_THRESHOLD_S = 60
-
-# Summary prompt sent to Claude Code (use .format(locale=...) before sending)
-_SUMMARY_PROMPT = """\
-[NO_NOTIFY] [System] Auto-summary check: Review recent conversation and classify:
-
-1. SKIP — no summary needed if:
-   - Only casual chat or greetings
-   - Simple factual Q&A (e.g., "what time is it")
-   - Repeated/continuing work already captured in previous summaries
-   - You were idle or only ran routine commands
-
-2. RECORD — write to memory/summaries/YYYY-MM-DD_HH00.md (e.g. 2026-02-19_1400.md) if:
-   - User made a decision or expressed a preference
-   - A task was completed or a problem was solved
-   - Important files were shared or created
-   - New project context or requirements emerged
-   - Anything you'd want to remember in a future session
-
-Format: bullet points, under 10 lines, [Name] prefix per item.
-Write in the user's preferred language (system locale: {locale}).
-If nothing worth recording, reply only: "[NO_NOTIFY] No summary needed."
-If you recorded a summary, reply WITHOUT [NO_NOTIFY] so the user is notified.
-"""
 
 # Consolidation prompt sent to Claude Code
 _CONSOLIDATION_PROMPT = """\
@@ -191,11 +165,8 @@ class CronService:
                     job.state.consecutive_errors += 1
                 # Catch up missed runs
                 if job.state.next_run_at and job.state.next_run_at < now:
-                    # System jobs: just reschedule, don't catch up
-                    if job.system and job.name in (
-                        _SYSTEM_SUMMARY_JOB_NAME,
-                        _SYSTEM_CONSOLIDATION_JOB_NAME,
-                    ):
+                    # System consolidation: just reschedule on startup, don't catch up
+                    if job.system and job.name == _SYSTEM_CONSOLIDATION_JOB_NAME:
                         job.state.next_run_at = compute_next_run(
                             job.schedule, time.time(), self._cron_default_tz
                         )
@@ -400,16 +371,6 @@ class CronService:
                     if (now - job.state.last_run_at) < backoff:
                         continue
 
-                # System summary jobs: check for new activity + idle
-                if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
-                    if not self._should_run_summary(ws_name, job):
-                        # Skip but reschedule for next interval
-                        job.state.next_run_at = compute_next_run(
-                            job.schedule, time.time(), self._cron_default_tz
-                        )
-                        job.state.last_status = "skipped"
-                        continue
-
                 # System consolidation jobs: check for old daily memories
                 if job.system and job.name == _SYSTEM_CONSOLIDATION_JOB_NAME:
                     if not self._should_run_consolidation(ws_name):
@@ -492,10 +453,6 @@ class CronService:
             job.state.last_error = ""
             job.state.last_duration_s = round(duration, 1)
             job.state.consecutive_errors = 0
-            # Update summary offset after successful system summary
-            if job.system and job.name == _SYSTEM_SUMMARY_JOB_NAME:
-                self._update_summary_offset(workspace_name, job)
-
             logger.info(
                 "Cron job %s '%s' executed (%.1fs) → %s",
                 job.id,
@@ -548,74 +505,6 @@ class CronService:
                 logger.warning("Cron job %s: no next run computed, disabling", job.id)
                 job.enabled = False
                 job.state.last_error = "invalid schedule"
-
-    # --- System summary checks ---
-
-    def get_jsonl_path_for_window(self, window_id: str) -> Path | None:
-        """Find the JSONL transcript file for a window's current session."""
-        state = self._session_manager.get_window_state(window_id)
-        if not state.session_id:
-            return None
-
-        # Look up the session file from Claude's projects directory
-        projects_dir = Path.home() / ".claude" / "projects"
-        if not projects_dir.exists():
-            return None
-
-        for project_dir in projects_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            jsonl_file = project_dir / f"{state.session_id}.jsonl"
-            if jsonl_file.exists():
-                return jsonl_file
-        return None
-
-    def _should_run_summary(self, workspace_name: str, job: CronJob) -> bool:
-        """Check if a system summary job should run: has new conversation + idle."""
-        window_id = self._resolve_window(workspace_name)
-        if not window_id:
-            return False
-
-        jsonl_path = self.get_jsonl_path_for_window(window_id)
-        if not jsonl_path or not jsonl_path.exists():
-            return False
-
-        try:
-            st = jsonl_path.stat()
-            file_size = st.st_size
-            file_mtime = st.st_mtime
-        except OSError:
-            return False
-
-        # Reset offset if JSONL path changed (session changed, e.g. after /clear)
-        jsonl_str = str(jsonl_path)
-        if job.state.last_summary_jsonl and job.state.last_summary_jsonl != jsonl_str:
-            job.state.last_summary_offset = 0
-            job.state.last_summary_jsonl = jsonl_str
-
-        # No new content since last summary
-        if file_size <= job.state.last_summary_offset:
-            return False
-
-        # Claude is still active (JSONL modified recently)
-        if (time.time() - file_mtime) < _IDLE_THRESHOLD_S:
-            return False
-
-        return True
-
-    def _update_summary_offset(self, workspace_name: str, job: CronJob) -> None:
-        """Record the current JSONL size and path as the last summary state."""
-        window_id = self._resolve_window(workspace_name)
-        if not window_id:
-            return
-        jsonl_path = self.get_jsonl_path_for_window(window_id)
-        if not jsonl_path or not jsonl_path.exists():
-            return
-        try:
-            job.state.last_summary_offset = jsonl_path.stat().st_size
-            job.state.last_summary_jsonl = str(jsonl_path)
-        except OSError:
-            pass
 
     # --- Consolidation checks ---
 
@@ -813,26 +702,13 @@ class CronService:
         for ws_name, store in self._stores.items():
             changed = False
 
-            # Hourly summary job
-            has_summary = any(j.name == _SYSTEM_SUMMARY_JOB_NAME for j in store.jobs)
-            if not has_summary:
-                schedule = CronSchedule(kind="every", every_seconds=3600)
-                next_run = compute_next_run(schedule, now, self._cron_default_tz)
-                job = CronJob(
-                    id=uuid.uuid4().hex[:8],
-                    name=_SYSTEM_SUMMARY_JOB_NAME,
-                    schedule=schedule,
-                    message=_SUMMARY_PROMPT.format(locale=self._locale),
-                    enabled=True,
-                    system=True,
-                    created_at=now,
-                    updated_at=now,
-                    state=CronJobState(next_run_at=next_run),
-                )
-                store.jobs.append(job)
+            # Remove legacy hourly summary jobs (now handled by SystemScheduler)
+            legacy = [j for j in store.jobs if j.name == "_system:hourly_summary"]
+            for j in legacy:
+                store.jobs.remove(j)
                 changed = True
                 logger.info(
-                    "Created system summary job %s in workspace %s", job.id, ws_name
+                    "Removed legacy summary job %s from workspace %s", j.id, ws_name
                 )
 
             # Weekly consolidation job
@@ -947,69 +823,6 @@ class CronService:
     def _wake_timer(self) -> None:
         """Signal the timer loop to re-evaluate schedule immediately."""
         self._wake_event.set()
-
-    async def trigger_summary(self, workspace_name: str) -> bool:
-        """Trigger an immediate summary for a workspace (e.g. before /clear).
-
-        Ignores job.enabled — /clear should summarize even if hourly is disabled.
-        Returns True if summary was sent, False if skipped.
-        """
-        store = self._stores.get(workspace_name)
-        if not store:
-            return False
-
-        job = None
-        for j in store.jobs:
-            if j.name == _SYSTEM_SUMMARY_JOB_NAME:
-                job = j
-                break
-
-        if not job:
-            return False
-
-        # Check if there's actually new content (but skip idle check)
-        window_id = self._resolve_window(workspace_name)
-        if not window_id:
-            return False
-
-        jsonl_path = self.get_jsonl_path_for_window(window_id)
-        if not jsonl_path or not jsonl_path.exists():
-            return False
-
-        try:
-            file_size = jsonl_path.stat().st_size
-        except OSError:
-            return False
-
-        # Reset offset if JSONL path changed (session changed)
-        jsonl_str = str(jsonl_path)
-        if job.state.last_summary_jsonl and job.state.last_summary_jsonl != jsonl_str:
-            job.state.last_summary_offset = 0
-            job.state.last_summary_jsonl = jsonl_str
-
-        if file_size <= job.state.last_summary_offset:
-            return False  # No new content
-
-        await self._execute_job(workspace_name, job, window_id=window_id)
-        self._save(workspace_name)
-        return True
-
-    async def wait_for_idle(self, window_id: str, timeout: int = 60) -> None:
-        """Wait until the JSONL file for a window is idle (no writes for 5s).
-
-        Used by /clear intercept to wait for summary completion.
-        """
-        jsonl_path = self.get_jsonl_path_for_window(window_id)
-        if not jsonl_path or not jsonl_path.exists():
-            return
-        for _ in range(timeout):
-            await asyncio.sleep(1)
-            try:
-                mtime = jsonl_path.stat().st_mtime
-                if (time.time() - mtime) >= 5:
-                    return
-            except OSError:
-                return
 
     @property
     def is_running(self) -> bool:

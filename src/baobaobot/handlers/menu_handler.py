@@ -2,7 +2,7 @@
 
 Provides inline keyboard menus that group related bot actions:
   - /agent: Claude Code operations (Esc, Clear, Compact, Status)
-  - /system: System management (History, Screenshot, Restart, Rebuild, Cron, Verbosity, Files)
+  - /system: System management (History, Screenshot, Restart, Rebuild, Cron, Verbosity, Files, Summary)
   - /config: Personal settings (Agent Soul, Profile)
 """
 
@@ -113,6 +113,10 @@ def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "📂 Files",
                     callback_data=f"{CB_MENU_SYSTEM}ls:{wid}"[:64],
+                ),
+                InlineKeyboardButton(
+                    "📝 Summary",
+                    callback_data=f"{CB_MENU_SYSTEM}summary:{wid}"[:64],
                 ),
             ],
         ]
@@ -297,6 +301,8 @@ async def _dispatch_system(
         await _handle_verbosity(query, update, context)
     elif action == "ls":
         await _handle_ls(query, update, context)
+    elif action == "summary":
+        await _handle_summary(query, ctx, wid)
     else:
         await query.answer("Unknown action")
 
@@ -517,6 +523,49 @@ async def _handle_rebuild(
             query.message,
             "✅ CLAUDE.md rebuilt. Send /clear to apply new settings.",
         )
+
+
+async def _handle_summary(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Trigger summary for workspace via SystemScheduler."""
+    try:
+        await query.answer()
+    except Exception:
+        pass  # stale callback query — continue anyway
+
+    if not ctx.system_scheduler:
+        if query.message:
+            await safe_reply(query.message, "❌ System scheduler not available.")
+        return
+
+    display = ctx.session_manager.get_display_name(wid)
+    agent_prefix = f"{ctx.config.name}/"
+    ws_name = display.removeprefix(agent_prefix)
+
+    if query.message:
+        await safe_reply(query.message, f"📝 [{display}] Running summary...")
+
+    try:
+        ran = await asyncio.wait_for(
+            ctx.system_scheduler.trigger_summary(ws_name), timeout=120
+        )
+    except asyncio.TimeoutError:
+        if query.message:
+            await safe_reply(query.message, f"⏰ [{display}] Summary timed out.")
+        return
+    except Exception as e:
+        if query.message:
+            await safe_reply(query.message, f"❌ [{display}] Summary failed: {e}")
+        return
+
+    if query.message:
+        if ran:
+            await safe_reply(query.message, f"✅ [{display}] Summary done.")
+        else:
+            await safe_reply(query.message, f"ℹ️ [{display}] No new content to summarize.")
 
 
 async def _handle_cron(

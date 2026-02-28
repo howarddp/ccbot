@@ -442,6 +442,51 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
+async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trigger summary for the current workspace via SystemScheduler."""
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    ctx = _ctx(context)
+    rk = _resolve_rk(update, context)
+    if rk is None:
+        await safe_reply(update.message, f"❌ {ctx.router.rejection_message()}")
+        return
+    wid = ctx.router.get_window(rk, ctx)
+    if not wid:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    if not ctx.system_scheduler:
+        await safe_reply(update.message, "❌ System scheduler not available.")
+        return
+
+    display = ctx.session_manager.get_display_name(wid)
+    agent_prefix = f"{ctx.config.name}/"
+    ws_name = display.removeprefix(agent_prefix)
+
+    await safe_reply(update.message, f"📝 [{display}] Running summary...")
+
+    try:
+        ran = await asyncio.wait_for(
+            ctx.system_scheduler.trigger_summary(ws_name), timeout=120
+        )
+    except asyncio.TimeoutError:
+        await safe_reply(update.message, f"⏰ [{display}] Summary timed out.")
+        return
+    except Exception as e:
+        await safe_reply(update.message, f"❌ [{display}] Summary failed: {e}")
+        return
+
+    if ran:
+        await safe_reply(update.message, f"✅ [{display}] Summary done.")
+    else:
+        await safe_reply(update.message, f"ℹ️ [{display}] No new content to summarize.")
+
+
 # --- Workspace commands ---
 
 
@@ -727,20 +772,6 @@ async def forward_command_handler(
         return
 
     display = ctx.session_manager.get_display_name(wid)
-
-    # Intercept /clear: trigger summary before clearing
-    if cc_slash.strip().lower() == "/clear" and ctx.cron_service:
-        logger.info("Triggering pre-clear summary for window %s", display)
-        await safe_reply(update.message, f"📋 [{display}] Summarizing before clear...")
-        # Strip agent prefix for cron workspace lookup
-        agent_prefix = f"{ctx.config.name}/"
-        cron_ws_name = display.removeprefix(agent_prefix)
-        try:
-            summarized = await ctx.cron_service.trigger_summary(cron_ws_name)
-            if summarized:
-                await ctx.cron_service.wait_for_idle(wid)
-        except Exception as e:
-            logger.warning("Pre-clear summary failed: %s", e)
 
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
@@ -2903,6 +2934,38 @@ async def post_init(application: Application) -> None:
         if refreshed:
             logger.info("Refreshed skills for %d workspace(s) on startup", refreshed)
 
+    # Create and start system scheduler (summary via claude -p)
+    from .system_scheduler import SystemScheduler
+    from .handlers.message_sender import safe_send
+
+    async def _on_summary_notify(
+        user_id: int, chat_id: int, thread_id: int, text: str
+    ) -> None:
+        try:
+            await safe_send(
+                application.bot,
+                chat_id=chat_id,
+                text=text,
+                message_thread_id=thread_id or None,
+            )
+        except Exception as e:
+            logger.warning(
+                "SystemScheduler notify failed (user=%d chat=%d thread=%d): %s",
+                user_id, chat_id, thread_id, e,
+            )
+
+    system_sched = SystemScheduler(
+        session_manager=agent_ctx.session_manager,
+        iter_workspace_dirs=agent_ctx.config.iter_workspace_dirs,
+        locale=agent_ctx.config.locale,
+        agent_name=agent_ctx.config.name,
+        admin_user_ids=list(agent_ctx.config.allowed_users),
+        on_notify=_on_summary_notify,
+    )
+    agent_ctx.system_scheduler = system_sched
+    await system_sched.start()
+    logger.info("System scheduler started")
+
     # Start cron service
     if agent_ctx.cron_service:
         await agent_ctx.cron_service.start()
@@ -3046,6 +3109,11 @@ async def post_shutdown(application: Application) -> None:
         await agent_ctx.cron_service.stop()
         logger.info("Cron service stopped")
 
+    # Stop system scheduler
+    if agent_ctx.system_scheduler:
+        await agent_ctx.system_scheduler.stop()
+        logger.info("System scheduler stopped")
+
     if agent_ctx.session_monitor:
         agent_ctx.session_monitor.stop()
         logger.info("Session monitor stopped")
@@ -3102,6 +3170,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("verbosity", verbosity_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
+    application.add_handler(CommandHandler("summary", summary_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Register mode-specific lifecycle handlers (e.g. topic created/closed for forum)
     agent_ctx.router.register_lifecycle_handlers(application)
