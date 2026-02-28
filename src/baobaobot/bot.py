@@ -246,6 +246,16 @@ CC_COMMANDS: dict[str, str] = {
     "compact": "↗ Compact conversation context",
 }
 
+# CLI-only commands that produce terminal output but no JSONL entries.
+# After forwarding these, we capture the tmux pane to relay the result.
+CC_CLI_ONLY_COMMANDS: set[str] = {
+    "cost",
+    "status",
+    "login",
+    "version",
+    "doctor",
+}
+
 
 def _is_user_allowed(context: ContextTypes.DEFAULT_TYPE, user_id: int | None) -> bool:
     return user_id is not None and _ctx(context).config.is_user_allowed(user_id)
@@ -738,7 +748,55 @@ async def forward_command_handler(
     await _send_typing(update.message.chat)
     success, message = await ctx.session_manager.send_to_window(wid, cc_slash)
     if success:
-        await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
+        # Extract the command name (e.g. "/model" → "model", "/model sonnet" → "model")
+        cmd_name = cc_slash.strip().lstrip("/").split()[0].lower()
+
+        if cmd_name in CC_CLI_ONLY_COMMANDS:
+            # CLI-only commands produce terminal output, not JSONL entries.
+            # Wait briefly for the output to render, then capture the pane.
+            await asyncio.sleep(1.5)
+            pane_text = await ctx.tmux_manager.capture_pane(wid)
+            if pane_text:
+                lines = pane_text.strip().splitlines()
+                # Find the line where the command was typed (prompt + /cmd)
+                cmd_line_idx = -1
+                for i, ln in enumerate(lines):
+                    stripped = ln.strip()
+                    if stripped.endswith(cc_slash) and (
+                        stripped.startswith("❯") or stripped.startswith(">")
+                    ):
+                        cmd_line_idx = i
+                        break
+                # Take only lines after the command
+                if cmd_line_idx >= 0:
+                    lines = lines[cmd_line_idx + 1 :]
+                # Filter noise: separator lines, empty, prompt lines
+                output_lines = []
+                for ln in lines:
+                    stripped = ln.strip()
+                    if not stripped:
+                        continue
+                    # Skip separator lines (all ─ or ═ or ━)
+                    if all(c in "─═━─" for c in stripped):
+                        continue
+                    # Skip prompt lines
+                    if stripped.startswith("❯") or stripped.startswith(">"):
+                        continue
+                    # Skip Claude response markers
+                    if stripped.startswith("⏺"):
+                        continue
+                    output_lines.append(ln)
+                output = (
+                    "\n".join(output_lines[-15:]) if output_lines else "(no output)"
+                )
+                await safe_reply(
+                    update.message,
+                    f"⚡ [{display}] /{cmd_name}\n\n```\n{output}\n```",
+                )
+            else:
+                await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
+        else:
+            await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
         # so we can detect the new session after first message
         if cc_slash.strip().lower() == "/clear":
