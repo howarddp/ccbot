@@ -6,8 +6,10 @@ Provides inline keyboard menus that group related bot actions:
   - /config: Personal settings (Agent Soul, Profile)
 """
 
+import asyncio
 import io
 import logging
+import os
 from pathlib import Path
 
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -407,7 +409,7 @@ async def _handle_screenshot(
     wid: str,
 ) -> None:
     """Capture and send terminal screenshot."""
-    from ..screenshot import text_to_image
+    from ..screenshot import cleanup_file_after, make_screenshot_url, text_to_image
 
     await query.answer()
 
@@ -417,7 +419,7 @@ async def _handle_screenshot(
             await safe_reply(query.message, "❌ Failed to capture pane content.")
         return
 
-    png_bytes = await text_to_image(text, with_ansi=True)
+    png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
 
     # Build screenshot keyboard (same as bot.py _build_screenshot_keyboard)
     def btn(label: str, key_id: str) -> InlineKeyboardButton:
@@ -441,11 +443,25 @@ async def _handle_screenshot(
     )
 
     if query.message:
-        await query.message.reply_document(
-            document=io.BytesIO(png_bytes),
-            filename="screenshot.png",
-            reply_markup=keyboard,
+        url, tmp_path = await make_screenshot_url(
+            png_bytes,
+            agent_dir=Path(ctx.config.agent_dir),
+            public_url=os.environ.get("SHARE_PUBLIC_URL", ""),
+            share_server_running=ctx.share_server is not None,
         )
+        if url and tmp_path:
+            asyncio.create_task(cleanup_file_after(tmp_path))
+            await query.message.reply_document(
+                document=url,
+                filename="screenshot.png",
+                reply_markup=keyboard,
+            )
+        else:
+            await query.message.reply_document(
+                document=io.BytesIO(png_bytes),
+                filename="screenshot.png",
+                reply_markup=keyboard,
+            )
 
 
 async def _handle_restart(query: CallbackQuery, ctx: AgentContext, wid: str) -> None:

@@ -37,6 +37,8 @@ import asyncio
 import io
 import logging
 import os
+import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -130,7 +132,7 @@ from .handlers.status_polling import (
     signal_shutdown,
     status_poll_loop,
 )
-from .screenshot import text_to_image
+from .screenshot import cleanup_file_after, make_screenshot_url, text_to_image
 from .session_monitor import (
     NewMessage,
     SessionMonitor,
@@ -380,11 +382,25 @@ async def screenshot_command(
 
     png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
     keyboard = _build_screenshot_keyboard(wid)
-    await update.message.reply_document(
-        document=io.BytesIO(png_bytes),
-        filename="screenshot.png",
-        reply_markup=keyboard,
+    url, tmp_path = await make_screenshot_url(
+        png_bytes,
+        agent_dir=Path(ctx.config.agent_dir),
+        public_url=os.environ.get("SHARE_PUBLIC_URL", ""),
+        share_server_running=ctx.share_server is not None,
     )
+    if url and tmp_path:
+        asyncio.create_task(cleanup_file_after(tmp_path))
+        await update.message.reply_document(
+            document=url,
+            filename="screenshot.png",
+            reply_markup=keyboard,
+        )
+    else:
+        await update.message.reply_document(
+            document=io.BytesIO(png_bytes),
+            filename="screenshot.png",
+            reply_markup=keyboard,
+        )
 
 
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -552,6 +568,123 @@ def _build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def _file_share_url(fpath: Path, agent_ctx: "AgentContext", ttl: int = 300) -> str | None:
+    """Generate a share URL for a workspace file (bypasses ISP upload throttling).
+
+    Checks if the file is within a registered workspace root and the share
+    server is running. Returns a URL string or None.
+    """
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not agent_ctx.share_server:
+        return None
+    try:
+        from .share_server import generate_token
+
+        agent_dir = Path(agent_ctx.config.agent_dir)
+        ws_dirs = [Path(d) for d in (agent_ctx.config.iter_workspace_dirs() or [])]
+        roots = ws_dirs + [agent_dir]
+        fpath_resolved = fpath.resolve()
+        for root in roots:
+            root_resolved = root.resolve()
+            try:
+                rel = str(fpath_resolved.relative_to(root_resolved))
+                token = generate_token(f"f:{root_resolved}:{rel}", ttl=ttl)
+                encoded_rel = urllib.parse.quote(rel, safe="/")
+                return f"{public_url}/f/{token}/{encoded_rel}"
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
+
+
+async def _send_file_via_url(
+    bot: "Bot",
+    chat_id: int,
+    thread_id: int | None,
+    fpath: Path,
+    suffix: str,
+    url: str,
+    *,
+    caption: str | None = None,
+) -> None:
+    """Send a file to Telegram via URL (Telegram fetches it — no ISP upload throttle)."""
+    kw: dict[str, object] = {"chat_id": chat_id}
+    if thread_id is not None:
+        kw["message_thread_id"] = thread_id
+    if caption:
+        kw["caption"] = caption
+    if suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        await bot.send_photo(photo=url, **kw)
+    else:
+        await bot.send_document(document=url, filename=fpath.name, **kw)
+
+
+def _ascii_safe_share_url(
+    fpath: Path, agent_ctx: "AgentContext"
+) -> tuple[str | None, Path | None]:
+    """Get a share URL that Telegram can fetch.
+
+    Telegram's download servers cannot handle percent-encoded non-ASCII characters
+    in URL paths. For non-ASCII filenames, creates a temporary ASCII-named symlink
+    and generates a URL pointing to that symlink (all-ASCII URL path).
+
+    Returns (url, symlink_to_cleanup) where symlink_to_cleanup should be deleted
+    after Telegram has fetched the file (or None if not needed).
+    """
+    if fpath.name.isascii():
+        return _file_share_url(fpath, agent_ctx), None
+
+    # Non-ASCII filename: create a temp symlink with an ASCII name
+    suffix = fpath.suffix if fpath.suffix.isascii() else ""
+    temp_name = f"_share_{uuid.uuid4().hex[:12]}{suffix}"
+    temp_path = fpath.parent / temp_name
+    try:
+        os.symlink(fpath, temp_path)
+
+        # Generate URL for the symlink path WITHOUT following the symlink.
+        # _file_share_url() calls fpath.resolve() which follows symlinks back
+        # to the Chinese filename, producing a percent-encoded URL that Telegram
+        # cannot fetch. Instead, use os.path.abspath() which gives the symlink's
+        # own absolute path (all ASCII).
+        public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+        if not public_url or not agent_ctx.share_server:
+            temp_path.unlink(missing_ok=True)
+            return None, None
+
+        from .share_server import generate_token
+
+        temp_abs = Path(os.path.abspath(temp_path))
+        agent_dir = Path(agent_ctx.config.agent_dir)
+        ws_dirs = [Path(d) for d in (agent_ctx.config.iter_workspace_dirs() or [])]
+        roots = ws_dirs + [agent_dir]
+        url = None
+        for root in roots:
+            root_resolved = root.resolve()
+            try:
+                rel = str(temp_abs.relative_to(root_resolved))
+                token = generate_token(f"f:{root_resolved}:{rel}", ttl=300)
+                encoded_rel = urllib.parse.quote(rel, safe="/")
+                url = f"{public_url}/f/{token}/{encoded_rel}"
+                break
+            except ValueError:
+                continue
+
+        if not url:
+            logger.warning("Failed to find workspace root for symlink %s", temp_path)
+            temp_path.unlink(missing_ok=True)
+            return None, None
+        logger.debug("ASCII symlink URL for %s → symlink: %s", fpath.name, temp_path.name)
+        return url, temp_path
+    except Exception as exc:
+        logger.warning("Failed to create ASCII symlink for %s: %s", fpath.name, exc)
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None, None
 
 
 async def forward_command_handler(
@@ -1596,10 +1729,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
         keyboard = _build_screenshot_keyboard(window_id)
+        url, tmp_path = await make_screenshot_url(
+            png_bytes,
+            agent_dir=Path(ctx.config.agent_dir),
+            public_url=os.environ.get("SHARE_PUBLIC_URL", ""),
+            share_server_running=ctx.share_server is not None,
+        )
+        if url and tmp_path:
+            asyncio.create_task(cleanup_file_after(tmp_path))
         try:
             await query.edit_message_media(
                 media=InputMediaDocument(
-                    media=io.BytesIO(png_bytes), filename="screenshot.png"
+                    media=url or io.BytesIO(png_bytes), filename="screenshot.png"
                 ),
                 reply_markup=keyboard,
             )
@@ -2044,10 +2185,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if text:
             png_bytes = await text_to_image(text, font_size=12, with_ansi=True)
             keyboard = _build_screenshot_keyboard(window_id)
+            url, tmp_path = await make_screenshot_url(
+                png_bytes,
+                agent_dir=Path(ctx.config.agent_dir),
+                public_url=os.environ.get("SHARE_PUBLIC_URL", ""),
+                share_server_running=ctx.share_server is not None,
+            )
+            if url and tmp_path:
+                asyncio.create_task(cleanup_file_after(tmp_path))
             try:
                 await query.edit_message_media(
                     media=InputMediaDocument(
-                        media=io.BytesIO(png_bytes),
+                        media=url or io.BytesIO(png_bytes),
                         filename="screenshot.png",
                     ),
                     reply_markup=keyboard,
@@ -2097,6 +2246,10 @@ async def handle_new_message(
         await _deliver_message(msg, bot, agent_ctx, user_id, wid, thread_id=thread_id)
 
 
+_URL_SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".zip"}
+_SHARE_LINK_SIZE_THRESHOLD = 20 * 1024 * 1024  # 20 MB
+
+
 async def _send_files_background(
     bot: Bot,
     chat_id: int,
@@ -2105,26 +2258,77 @@ async def _send_files_background(
     *,
     session_manager: "SessionManager | None" = None,
     wid: str = "",
+    agent_ctx: "AgentContext | None" = None,
 ) -> None:
     """Send files to Telegram in background (fire-and-forget).
 
-    Runs as an asyncio task so it doesn't block the session monitor.
-    Sends periodic heartbeat messages while uploading.
-    If session_manager and wid are provided, notifies Claude on failure
-    so it can retry with an alternative method (e.g. share-link).
+    Routing logic (to work around ISP upload throttling):
+    - file >= 20 MB: send share-link (24h TTL) as text; skip upload entirely
+    - suffix is image / PDF / ZIP and file < 20 MB: try Cloudflare URL; fallback to direct upload
+    - other suffix (e.g. .txt) and file < 20 MB: direct upload (Telegram URL only supports PDF/ZIP)
+    - no share server available: always direct upload
+
+    If session_manager and wid are provided, notifies Claude on failure.
     """
     for fpath in files:
         try:
             suffix = fpath.suffix.lower()
             file_size = fpath.stat().st_size
             logger.info(
-                "SEND_FILE: uploading %s (%d bytes) to chat_id=%s thread=%s",
+                "SEND_FILE: %s (%d bytes) to chat_id=%s thread=%s",
                 fpath.name,
                 file_size,
                 chat_id,
                 thread_id,
             )
-            # Launch upload with periodic heartbeat
+
+            has_share_server = bool(agent_ctx and agent_ctx.share_server)
+
+            # ── Large file (≥ 20 MB): send share-link, skip upload ──────────
+            if file_size >= _SHARE_LINK_SIZE_THRESHOLD and has_share_server:
+                share_url = _file_share_url(fpath, agent_ctx, ttl=86400)  # type: ignore[arg-type]
+                if share_url:
+                    size_mb = file_size / (1024 * 1024)
+                    kw: dict[str, object] = {"chat_id": chat_id, "parse_mode": "HTML"}
+                    if thread_id is not None:
+                        kw["message_thread_id"] = thread_id
+                    await bot.send_message(
+                        text=(
+                            f"📎 <b>{fpath.name}</b> ({size_mb:.1f} MB)\n"
+                            f'<a href="{share_url}">Download link</a> (valid 24h)'
+                        ),
+                        **kw,
+                    )
+                    logger.info("SEND_FILE: sent share-link for large file %s", fpath.name)
+                    continue
+                # share_url is None (file outside workspace?): fall through to upload
+
+            # ── URL-based send for image/PDF/ZIP (bypasses ISP throttle) ────
+            if suffix in _URL_SUPPORTED_SUFFIXES and has_share_server:
+                url, tmp_symlink = _ascii_safe_share_url(fpath, agent_ctx)  # type: ignore[arg-type]
+                if url:
+                    logger.info("SEND_FILE: using share URL for %s", fpath.name)
+                    if tmp_symlink:
+                        asyncio.create_task(cleanup_file_after(tmp_symlink, 300.0))
+                    # When the URL uses an ASCII symlink, Telegram names the file
+                    # after the symlink (e.g. _share_abc123.pdf). Add a caption to
+                    # show the original non-ASCII filename to the user.
+                    caption = fpath.name if tmp_symlink else None
+                    try:
+                        await _send_file_via_url(
+                            bot, chat_id, thread_id, fpath, suffix, url, caption=caption
+                        )
+                        logger.info("Sent file to Telegram: %s", fpath)
+                        continue
+                    except Exception as url_err:
+                        # Cloudflare quick tunnels are sometimes unreachable from
+                        # Telegram's servers — fall back to direct upload.
+                        logger.warning(
+                            "SEND_FILE: URL-based send failed (%s), falling back to direct upload",
+                            url_err,
+                        )
+
+            # ── Direct upload (other types, or URL failed) ───────────────────
             await _upload_with_heartbeat(
                 bot, chat_id, thread_id, fpath, suffix, file_size
             )
@@ -2429,6 +2633,7 @@ async def _deliver_message(
                     validated_files,
                     session_manager=sm,
                     wid=wid,
+                    agent_ctx=agent_ctx,
                 )
             )
         # Strip [SEND_FILE:...] markers from the text

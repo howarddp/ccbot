@@ -14,7 +14,9 @@ import asyncio
 import io
 import logging
 import re
+import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -332,3 +334,43 @@ async def text_to_image(
 
     # Run CPU-intensive image rendering in thread pool
     return await asyncio.to_thread(_render_image)
+
+
+async def make_screenshot_url(
+    png_bytes: bytes,
+    agent_dir: Path,
+    public_url: str,
+    share_server_running: bool,
+) -> tuple[str | None, Path | None]:
+    """Save PNG bytes to a temp file and generate a Cloudflare share URL.
+
+    Returns (url, fpath) if the share server is available, else (None, None).
+    The caller is responsible for scheduling cleanup of fpath.
+    """
+    if not public_url or not share_server_running:
+        return None, None
+    try:
+        from .share_server import generate_token
+
+        screenshots_dir = agent_dir / "tmp" / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        fpath = screenshots_dir / f"screenshot_{ts}.png"
+        fpath.write_bytes(png_bytes)
+        rel = str(fpath.relative_to(agent_dir))
+        token = generate_token(f"f:{agent_dir}:{rel}", ttl=300)
+        encoded_rel = urllib.parse.quote(rel, safe="/")
+        url = f"{public_url}/f/{token}/{encoded_rel}"
+        return url, fpath
+    except Exception as exc:
+        logger.warning("Failed to create screenshot URL: %s", exc)
+        return None, None
+
+
+async def cleanup_file_after(fpath: Path, delay: float = 300.0) -> None:
+    """Delete a file after a delay (for temp screenshot cleanup)."""
+    await asyncio.sleep(delay)
+    try:
+        fpath.unlink(missing_ok=True)
+    except Exception:
+        pass
