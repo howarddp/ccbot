@@ -76,7 +76,7 @@ def _build_agent_keyboard(wid: str) -> InlineKeyboardMarkup:
 
 
 def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
-    """Build /system menu: 7 buttons in 4 rows."""
+    """Build /system menu: 8 buttons in 5 rows."""
     return InlineKeyboardMarkup(
         [
             [
@@ -114,6 +114,12 @@ def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
                     "📂 Files",
                     callback_data=f"{CB_MENU_SYSTEM}ls:{wid}"[:64],
                 ),
+                InlineKeyboardButton(
+                    "🔗 Browse",
+                    callback_data=f"{CB_MENU_SYSTEM}share:{wid}"[:64],
+                ),
+            ],
+            [
                 InlineKeyboardButton(
                     "📝 Summary",
                     callback_data=f"{CB_MENU_SYSTEM}summary:{wid}"[:64],
@@ -301,6 +307,8 @@ async def _dispatch_system(
         await _handle_verbosity(query, update, context)
     elif action == "ls":
         await _handle_ls(query, update, context)
+    elif action == "share":
+        await _handle_share(query, ctx, wid)
     elif action == "summary":
         await _handle_summary(query, ctx, wid)
     else:
@@ -717,6 +725,38 @@ async def _handle_ls(
         ud[LS_ENTRIES_KEY] = entries
 
     await safe_reply(query.message, text, reply_markup=keyboard)
+
+
+async def _handle_share(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Generate a web browse URL for the workspace of the given window."""
+    await query.answer()
+    if not query.message:
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        await safe_reply(query.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(
+            query.message, "❌ Share server unavailable. Use /ls instead."
+        )
+        return
+
+    from ..share_server import generate_token
+
+    ws_root = str(ws_dir.resolve())
+    display_name = ws_dir.name
+    token = generate_token(f"p:{ws_root}:", ttl=600, name=display_name)
+    url = f"{public_url}/p/{token}/"
+
+    await safe_reply(query.message, f"🔗 [Browse {display_name}]({url})")
 
 
 async def _handle_agentsoul(

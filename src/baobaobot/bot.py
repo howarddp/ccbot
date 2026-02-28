@@ -545,6 +545,51 @@ async def ls_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await safe_reply(update.message, text, reply_markup=keyboard)
 
 
+async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a web browse URL for the current topic's workspace directory."""
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    workspace_dir = _resolve_workspace_dir(update, context)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    ctx = _ctx(context)
+    if not public_url or not ctx.share_server:
+        await safe_reply(
+            update.message, "❌ Share server unavailable. Use /ls instead."
+        )
+        return
+
+    ws_root = str(workspace_dir.resolve())
+
+    # Support /share subpath
+    args = (update.message.text or "").split(None, 1)
+    rel = ""
+    if len(args) > 1:
+        target = (workspace_dir / args[1]).resolve()
+        try:
+            target.relative_to(workspace_dir.resolve())
+        except ValueError:
+            target = workspace_dir.resolve()
+        rel = str(target.relative_to(workspace_dir.resolve()))
+
+    from .share_server import generate_token
+
+    display_name = rel if rel else workspace_dir.name
+    token = generate_token(f"p:{ws_root}:{rel}", ttl=600, name=display_name)
+    encoded_rel = urllib.parse.quote(rel, safe="/") if rel else ""
+    path_part = f"/p/{token}/{encoded_rel}" if encoded_rel else f"/p/{token}/"
+    url = f"{public_url}{path_part}"
+
+    await safe_reply(update.message, f"🔗 [Browse {display_name}]({url})")
+
+
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
@@ -3166,6 +3211,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("workspace", workspace_command))
     application.add_handler(CommandHandler("ls", ls_command))
+    application.add_handler(CommandHandler("browse", browse_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("verbosity", verbosity_command))
