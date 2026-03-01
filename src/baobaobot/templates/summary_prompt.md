@@ -84,4 +84,4 @@ If there is nothing new to add to the summary:
 [SILENT]
 
 If you wrote new content to the summary file:
-[NOTIFY]
+[DONE]

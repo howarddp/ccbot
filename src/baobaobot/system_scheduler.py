@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 
 if TYPE_CHECKING:
     from .session import SessionManager
+    from .tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 _TICK_INTERVAL_S = 60.0
 
 # How often to run summary per workspace
-_SUMMARY_INTERVAL_S = 3600
+_SUMMARY_INTERVAL_S = 7200
 
 # Subprocess timeout for claude -p
 _SUBPROCESS_TIMEOUT_S = 300
@@ -72,14 +73,17 @@ def _parse_output(stdout: str) -> tuple[str, str | None]:
     """Parse claude -p stdout.
 
     Returns:
-        ("silent", None) — nothing to report
-        ("notify", content) — content to send to users
+        ("silent", None) — nothing new
+        ("done", None) — summary written
+        ("notify", content) — content to send to users (for future tasks)
     """
     lines = stdout.splitlines()
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped == "[SILENT]":
             return "silent", None
+        if stripped == "[DONE]":
+            return "done", None
         if stripped == "[NOTIFY]":
             content = "\n".join(lines[i + 1:]).strip()
             return "notify", content if content else None
@@ -131,6 +135,7 @@ class SystemScheduler:
         agent_name: str = "",
         admin_user_ids: list[int] | None = None,
         on_notify: OnNotifyCallback,
+        tmux_manager: TmuxManager | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._iter_workspace_dirs = iter_workspace_dirs
@@ -139,6 +144,7 @@ class SystemScheduler:
         self._agent_name = agent_name
         self._admin_user_ids = admin_user_ids or []
         self._on_notify = on_notify
+        self._tmux_manager = tmux_manager
 
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
         self._running = False
@@ -327,8 +333,11 @@ class SystemScheduler:
         # Update state in a single transaction
         self._update_state_after_summary(ws_dir, now, jsonl_path)
 
-        if action == "notify" and content:
-            await self._deliver_notify(workspace_name, window_id, content)
+        # Summary does not notify users — it's a silent housekeeping task.
+        # The on_notify callback is preserved for other system tasks.
+
+        # Send /clear to the tmux window to free context after successful summary
+        await self._send_clear_to_window(workspace_name, window_id)
 
         logger.info(
             "SystemScheduler: summary done for %s → %s", workspace_name, action
@@ -360,6 +369,35 @@ class SystemScheduler:
             raise
 
         return stdout_bytes.decode("utf-8", errors="replace")
+
+    # --- Post-summary actions ---
+
+    async def _send_clear_to_window(
+        self, workspace_name: str, window_id: str
+    ) -> None:
+        """Send /clear to the tmux window after a successful summary."""
+        if not self._tmux_manager:
+            return
+        try:
+            ok = await self._tmux_manager.send_keys(
+                window_id, "/clear", enter=True, literal=True
+            )
+            if ok:
+                logger.info(
+                    "SystemScheduler: sent /clear to window %s (%s)",
+                    window_id, workspace_name,
+                )
+            else:
+                logger.warning(
+                    "SystemScheduler: failed to send /clear to window %s (%s)",
+                    window_id, workspace_name,
+                )
+        except Exception:
+            logger.warning(
+                "SystemScheduler: error sending /clear to window %s (%s)",
+                window_id, workspace_name,
+                exc_info=True,
+            )
 
     # --- Delivery ---
 
