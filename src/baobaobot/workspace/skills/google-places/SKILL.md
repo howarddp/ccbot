@@ -1,6 +1,6 @@
 ---
 name: google-places
-description: "Search nearby places, restaurants, cafes, and more via Google Places API (New) using curl. Use when: user asks about nearby restaurants, cafes, shops, attractions, or wants place details like reviews, ratings, opening hours. Requires GOOGLE_MAPS_API_KEY."
+description: "Search nearby places via Google Places API (New) using curl. Use when: user asks what's nearby, needs to find places by location/type, or wants opening hours and addresses. For place reviews, ratings, or recommendations, use the 'travel' skill instead. Requires GOOGLE_MAPS_API_KEY."
 ---
 
 # Google Places Skill

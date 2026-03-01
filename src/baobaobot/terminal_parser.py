@@ -94,6 +94,11 @@ UI_PATTERNS: list[UIPattern] = [
         top=(re.compile(r"^\s*Select model"),),
         bottom=(re.compile(r"^\s*Enter to confirm"),),
     ),
+    UIPattern(
+        name="SelectionMenu",
+        top=(re.compile(r"^\s*❯\s+\S"),),
+        bottom=(re.compile(r"^\s*Enter to confirm"),),
+    ),
 ]
 
 

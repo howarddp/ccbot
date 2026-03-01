@@ -10,6 +10,7 @@ Key class: WorkspaceManager.
 import logging
 import shutil
 import stat
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,9 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 # Bin scripts bundled with the package
 _BIN_DIR = Path(__file__).parent / "bin"
+
+# Python shebang to replace in bin scripts (use project venv python)
+_SYSTEM_SHEBANG = "#!/usr/bin/env python3"
 
 # Skill templates bundled with the package
 _SKILLS_DIR = Path(__file__).parent / "skills"
@@ -92,6 +96,10 @@ _SKILL_NAMES = [
     "web-read",
     "google-flights",
     "share-link",
+    "travel",
+    "tabelog-reviews",
+    "tripadvisor-reviews",
+    "jalan-reviews",
 ]
 
 
@@ -194,20 +202,51 @@ class WorkspaceManager:
         self._install_skills()
 
     def _install_bin_scripts(self) -> None:
-        """Copy bin/ scripts to shared_dir/bin/ and make them executable."""
+        """Copy bin/ scripts to shared_dir/bin/ and make them executable.
+
+        Python scripts get their shebang rewritten to use the project's
+        venv Python, ensuring they have access to all project dependencies
+        (playwright, trafilatura, etc.) instead of the system Python.
+        """
         self.bin_dir.mkdir(parents=True, exist_ok=True)
+        venv_python = self._find_venv_python()
         for script_name in _BIN_SCRIPTS:
             src = _BIN_DIR / script_name
             dest = self.bin_dir / script_name
             if src.exists():
-                shutil.copy2(src, dest)
+                content = src.read_text(encoding="utf-8")
+                # Rewrite Python shebang to use project venv
+                if venv_python and content.startswith(_SYSTEM_SHEBANG):
+                    content = f"#!{venv_python}" + content[len(_SYSTEM_SHEBANG):]
+                    dest.write_text(content, encoding="utf-8")
+                    logger.debug("Installed script (venv shebang): %s", dest)
+                else:
+                    shutil.copy2(src, dest)
+                    logger.debug("Installed script: %s", dest)
                 # Ensure executable
                 dest.chmod(
                     dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
                 )
-                logger.debug("Installed script: %s", dest)
             else:
                 logger.warning("Script not found: %s", src)
+
+    @staticmethod
+    def _find_venv_python() -> str | None:
+        """Find the project's venv Python interpreter.
+
+        Walks up from the package directory to find pyproject.toml,
+        then checks for .venv/bin/python3.  Returns the .venv path
+        (not fully resolved) so site-packages are found correctly.
+        """
+        pkg_dir = Path(__file__).parent
+        for parent in pkg_dir.parents:
+            venv_python = parent / ".venv" / "bin" / "python3"
+            if venv_python.exists() and (parent / "pyproject.toml").exists():
+                # Return absolute path but don't resolve symlinks,
+                # so the venv's site-packages are found correctly.
+                return str(venv_python.absolute())
+        # Fallback: use the currently running Python
+        return sys.executable if sys.executable else None
 
 
 def refresh_all_skills(shared_dir: Path, workspace_dirs: list[Path]) -> int:

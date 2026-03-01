@@ -250,7 +250,6 @@ CC_COMMANDS: dict[str, str] = {
 # After forwarding these, we capture the tmux pane to relay the result.
 CC_CLI_ONLY_COMMANDS: set[str] = {
     "cost",
-    "status",
     "login",
     "version",
     "doctor",
@@ -3085,6 +3084,7 @@ async def post_init(application: Application) -> None:
             tunnel = TunnelManager(
                 local_port=_SHARE_PORT,
                 on_url_change=_on_url_change,
+                state_file=agent_ctx.config.config_dir / ".tunnel_state.json",
             )
             public_url = await tunnel.start()
             agent_ctx.tunnel_manager = tunnel
@@ -3163,14 +3163,14 @@ async def post_shutdown(application: Application) -> None:
         agent_ctx.session_monitor.stop()
         logger.info("Session monitor stopped")
 
-    # Stop tunnel + share server
+    # Detach tunnel (keep cloudflared alive for next instance) + stop share server
     if agent_ctx.tunnel_manager:
-        await agent_ctx.tunnel_manager.stop()
-        logger.info("Tunnel stopped")
+        await agent_ctx.tunnel_manager.detach()
+        logger.info("Tunnel detached (cloudflared preserved for next instance)")
     if agent_ctx.share_server:
         await agent_ctx.share_server.stop()
         logger.info("Share server stopped")
-        # Clean up runtime env file
+        # Clean up runtime env file (stale URLs shouldn't be used)
         runtime_file = agent_ctx.config.config_dir / ".runtime_env"
         runtime_file.unlink(missing_ok=True)
 
