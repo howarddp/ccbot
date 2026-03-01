@@ -88,7 +88,13 @@ async def verbosity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     thread_id = update.message.message_thread_id or 0
-    current = agent_ctx.session_manager.get_verbosity(user.id, thread_id)
+    # In group mode, use chat_id as verbosity key (matches _deliver_message queue_id)
+    chat = update.effective_chat
+    if agent_ctx.config.mode == "group" and chat:
+        vkey = chat.id
+    else:
+        vkey = user.id
+    current = agent_ctx.session_manager.get_verbosity(vkey, thread_id)
     text = _build_verbosity_text(current)
     keyboard = _build_verbosity_keyboard(current, thread_id)
     await safe_reply(update.message, text, reply_markup=keyboard)
@@ -124,7 +130,13 @@ async def handle_verbosity_callback(
         await query.answer("Invalid level")
         return
 
-    agent_ctx.session_manager.set_verbosity(user.id, thread_id, level)
+    # In group mode, use chat_id as verbosity key (matches _deliver_message queue_id)
+    chat = query.message.chat if query.message else None
+    if agent_ctx.config.mode == "group" and chat:
+        vkey = chat.id
+    else:
+        vkey = user.id
+    agent_ctx.session_manager.set_verbosity(vkey, thread_id, level)
     text = _build_verbosity_text(level)
     keyboard = _build_verbosity_keyboard(level, thread_id)
 

@@ -658,7 +658,13 @@ async def _handle_verbosity(
 
     ctx = _ctx(context)
     thread_id = getattr(query.message, "message_thread_id", None) or 0
-    current = ctx.session_manager.get_verbosity(user.id, thread_id)
+    # In group mode, use chat_id as verbosity key (matches _deliver_message queue_id)
+    chat = update.effective_chat
+    if ctx.config.mode == "group" and chat:
+        vkey = chat.id
+    else:
+        vkey = user.id
+    current = ctx.session_manager.get_verbosity(vkey, thread_id)
 
     levels = {
         "quiet": "🔇 Quiet — only final replies",
