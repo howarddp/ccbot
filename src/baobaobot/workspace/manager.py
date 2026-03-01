@@ -179,22 +179,32 @@ class WorkspaceManager:
         logger.debug("Workspace initialized at %s", self.workspace_dir)
 
     def _install_skills(self) -> None:
-        """Deploy SKILL.md files to workspace/.claude/skills/ with resolved paths.
+        """Deploy skill files to workspace/.claude/skills/ with resolved paths.
 
+        Deploys SKILL.md (with template variable replacement) and any extra
+        files (e.g. .html templates) from each skill directory.
         Always overwrites existing files (like bin scripts, not like templates).
         """
         bin_path = str(self.bin_dir)
         for skill_name in _SKILL_NAMES:
-            src = _SKILLS_DIR / skill_name / "SKILL.md"
+            src_dir = _SKILLS_DIR / skill_name
+            src = src_dir / "SKILL.md"
             if not src.exists():
                 logger.warning("Skill template not found: %s", src)
                 continue
             dest_dir = self.workspace_dir / ".claude" / "skills" / skill_name
             dest_dir.mkdir(parents=True, exist_ok=True)
+            # Deploy SKILL.md with template variable replacement
             content = src.read_text(encoding="utf-8")
             content = content.replace("{{BIN_DIR}}", bin_path)
             dest = dest_dir / "SKILL.md"
             dest.write_text(content, encoding="utf-8")
+            # Deploy extra files (html templates, etc.) without replacement
+            for extra in src_dir.iterdir():
+                if extra.name == "SKILL.md" or extra.is_dir():
+                    continue
+                shutil.copy2(extra, dest_dir / extra.name)
+                logger.debug("Installed skill extra: %s/%s", skill_name, extra.name)
             logger.debug("Installed skill: %s", dest)
 
     def refresh_skills(self) -> None:

@@ -312,7 +312,7 @@ source "{{BIN_DIR}}/_load_env"
 # Optimize waypoint order for each day
 curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
-  -H "X-Goog-FieldMask: routes.optimizedIntermediateWaypointIndex,routes.legs.localizedValues,routes.localizedValues,routes.polyline.encodedPolyline" \
+  -H "X-Goog-FieldMask: routes.optimizedIntermediateWaypointIndex,routes.legs.localizedValues,routes.legs.polyline.encodedPolyline,routes.localizedValues,routes.polyline.encodedPolyline" \
   -H "Content-Type: application/json" \
   -d '{
     "origin": {"address": "START_POINT"},
@@ -328,215 +328,110 @@ curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   }'
 ```
 
-**Step 7 — Generate annotated route maps**
+**Step 7 — Generate interactive route maps**
 
-Generate **one map per day** + **one overall trip map**. All maps MUST have place names labeled directly on the image (not just A/B/C markers).
+Generate **one interactive HTML map per day** + **one overall trip map**. Each map is a self-contained HTML file with:
+- Left panel: route info (places, transport, distance, time) — collapsible
+- Right panel: interactive Leaflet map with zoom/pan
+- RWD: on mobile, panel moves to bottom and is collapsible
+- Actual road routes rendered using encoded polylines from Directions API (per-leg)
 
-**7a. Get route data with polyline and leg details**
+The HTML template is at `.claude/skills/travel/route_map.html`. Inject data via Python and share the result as a link.
+
+**7a. Get route data with per-leg polylines**
 
 ```bash
 source "{{BIN_DIR}}/_load_env"
 
-# Get route for each day
+# IMPORTANT: include routes.legs.polyline for per-leg road paths
 ROUTE_JSON=$(curl -s -X POST "https://routes.googleapis.com/directions/v2:computeRoutes" \
   -H "X-Goog-Api-Key: $GOOGLE_MAPS_API_KEY" \
-  -H "X-Goog-FieldMask: routes.polyline.encodedPolyline,routes.legs.localizedValues,routes.legs.startLocation,routes.legs.endLocation" \
+  -H "X-Goog-FieldMask: routes.polyline.encodedPolyline,routes.legs.polyline.encodedPolyline,routes.legs.localizedValues,routes.legs.startLocation,routes.legs.endLocation" \
   -H "Content-Type: application/json" \
   -d '{
     "origin": {"address": "DAY_START"},
     "destination": {"address": "DAY_END"},
     "intermediates": [{"address": "STOP_1"}, {"address": "STOP_2"}],
-    "travelMode": "TRANSIT",
+    "travelMode": "DRIVE",
     "languageCode": "zh-TW"
   }')
 ```
 
-**7b. Generate map and annotate with Python**
+Extract per-leg polylines: `jq -r '.routes[0].legs[].polyline.encodedPolyline'`
 
-Use this Python script to: (1) download the static map, (2) overlay place names + transport info directly on the image.
+**7b. Generate interactive route map from HTML template**
 
 ```python
-import math, json, urllib.parse, urllib.request, os
-from PIL import Image, ImageDraw, ImageFont
+import json, os
 
-# ---- CONFIG (fill in for each day) ----
-MAP_KEY = os.environ["GOOGLE_MAPS_API_KEY"]
-OUTPUT = "tmp/day1_route.png"
-DAY_LABEL = "Day 1"
+TEMPLATE = ".claude/skills/travel/route_map.html"
+OUTPUT = "tmp/day1_route.html"
 
-# Places: list of (lat, lng, name, marker_color)
-# marker_color: "green" for start, "red" for end, "blue" for intermediate
-places = [
-    (35.0116, 135.7681, "京都車站", "green"),
-    (34.9803, 135.7478, "東寺", "blue"),
-    (34.9671, 135.7727, "伏見稻荷大社", "blue"),
-    (34.9879, 135.7710, "三十三間堂", "red"),
-]
+# --- DATA (fill in from Directions API response) ---
+data = {
+    "title": "Day 1 路線圖",
+    "subtitle": "京都經典路線 — 4 個景點",
+    "places": [
+        {"lat": 34.9858, "lng": 135.7588, "name": "京都車站", "color": "green"},
+        {"lat": 34.9803, "lng": 135.7478, "name": "東寺", "color": "blue"},
+        {"lat": 34.9671, "lng": 135.7727, "name": "伏見稻荷大社", "color": "blue"},
+        {"lat": 34.9879, "lng": 135.7710, "name": "三十三間堂", "color": "red"},
+    ],
+    "legs": [
+        {"transport": "步行", "duration": "15min", "distance": "1.2km",
+         "polyline": "ENCODED_POLYLINE_FROM_LEG_0"},
+        {"transport": "電車", "duration": "22min", "distance": "4.5km",
+         "polyline": "ENCODED_POLYLINE_FROM_LEG_1"},
+        {"transport": "公車", "duration": "12min", "distance": "3.0km",
+         "polyline": "ENCODED_POLYLINE_FROM_LEG_2"},
+    ],
+}
 
-# Leg info between consecutive places (from Directions API)
-legs = [
-    "🚃 10min / 2.5km",
-    "🚃 15min / 4km",
-    "🚌 12min / 3km",
-]
+# Read template and inject data
+with open(TEMPLATE) as f:
+    html = f.read()
 
-# Encoded polyline from Directions API
-polyline_encoded = "PASTE_ENCODED_POLYLINE_HERE"
+html = html.replace("__ROUTE_DATA_JSON__", json.dumps(data, ensure_ascii=False))
+html = html.replace("__TITLE__", data["title"])
 
-# ---- MAP GENERATION ----
-IMG_W, IMG_H, SCALE = 600, 400, 2
-REAL_W, REAL_H = IMG_W * SCALE, IMG_H * SCALE
-
-# Build static map URL with route line + letter markers
-markers_param = ""
-for i, (lat, lng, name, color) in enumerate(places):
-    label = chr(65 + i)  # A, B, C, ...
-    markers_param += f"&markers=color:{color}%7Clabel:{label}%7C{lat},{lng}"
-
-encoded_poly = urllib.parse.quote(polyline_encoded)
-url = (f"https://maps.googleapis.com/maps/api/staticmap?"
-       f"size={IMG_W}x{IMG_H}&scale={SCALE}"
-       f"&path=color:0x4285F4FF%7Cweight:4%7Cenc:{encoded_poly}"
-       f"{markers_param}&language=zh-TW&key={MAP_KEY}")
-
-urllib.request.urlretrieve(url, OUTPUT)
-
-# ---- ANNOTATE WITH PLACE NAMES ----
-# Calculate map bounds from all place coordinates
-lats = [p[0] for p in places]
-lngs = [p[1] for p in places]
-# Add padding (same as Google's auto-fit)
-lat_pad = (max(lats) - min(lats)) * 0.15 + 0.002
-lng_pad = (max(lngs) - min(lngs)) * 0.15 + 0.002
-min_lat, max_lat = min(lats) - lat_pad, max(lats) + lat_pad
-min_lng, max_lng = min(lngs) - lng_pad, max(lngs) + lng_pad
-center_lat = (min_lat + max_lat) / 2
-center_lng = (min_lng + max_lng) / 2
-
-# Find zoom level that fits all points
-def lat_to_y(lat, zoom):
-    siny = max(min(math.sin(lat * math.pi / 180), 0.9999), -0.9999)
-    return 256 * (2 ** zoom) * (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi))
-
-def lng_to_x(lng, zoom):
-    return 256 * (2 ** zoom) * (lng + 180) / 360
-
-# Auto-detect zoom (try from high to low)
-for zoom in range(18, 0, -1):
-    x_min = lng_to_x(min_lng, zoom)
-    x_max = lng_to_x(max_lng, zoom)
-    y_min = lat_to_y(max_lat, zoom)  # Note: y is inverted
-    y_max = lat_to_y(min_lat, zoom)
-    if (x_max - x_min) < REAL_W * 0.9 and (y_max - y_min) < REAL_H * 0.9:
-        break
-
-cx = lng_to_x(center_lng, zoom)
-cy = lat_to_y(center_lat, zoom)
-
-def to_pixel(lat, lng):
-    x = lng_to_x(lng, zoom) - cx + REAL_W / 2
-    y = lat_to_y(lat, zoom) - cy + REAL_H / 2
-    return int(x), int(y)
-
-# Load image and font
-img = Image.open(OUTPUT)
-draw = ImageDraw.Draw(img)
-try:
-    font = ImageFont.truetype("/System/Library/Fonts/STHeiti Medium.ttc", 22)
-    font_small = ImageFont.truetype("/System/Library/Fonts/STHeiti Light.ttc", 16)
-except:
-    font = ImageFont.load_default()
-    font_small = font
-
-# Draw place name labels
-for i, (lat, lng, name, color) in enumerate(places):
-    px, py = to_pixel(lat, lng)
-    label_text = f" {chr(65+i)} {name} "
-
-    # Calculate text box
-    bbox = draw.textbbox((0, 0), label_text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-
-    # Position label: try right of marker, fall back to left if near edge
-    lx = px + 20
-    if lx + tw > REAL_W - 10:
-        lx = px - tw - 20
-    ly = py - th // 2 - 15
-
-    # Draw background box with rounded feel
-    pad = 3
-    draw.rectangle([lx - pad, ly - pad, lx + tw + pad, ly + th + pad],
-                    fill=(255, 255, 255, 220), outline=(80, 80, 80))
-    draw.text((lx, ly), label_text, fill=(0, 0, 0), font=font)
-
-# Draw transport info between consecutive places
-for i, leg_text in enumerate(legs):
-    if i + 1 < len(places):
-        lat1, lng1 = places[i][0], places[i][1]
-        lat2, lng2 = places[i+1][0], places[i+1][1]
-        px1, py1 = to_pixel(lat1, lng1)
-        px2, py2 = to_pixel(lat2, lng2)
-        mx, my = (px1 + px2) // 2, (py1 + py2) // 2
-
-        bbox = draw.textbbox((0, 0), leg_text, font=font_small)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        pad = 2
-        draw.rectangle([mx - tw//2 - pad, my - th//2 - pad,
-                         mx + tw//2 + pad, my + th//2 + pad],
-                        fill=(230, 240, 255, 200), outline=(100, 130, 200))
-        draw.text((mx - tw//2, my - th//2), leg_text, fill=(30, 60, 140), font=font_small)
-
-# Draw day label in top-left corner
-day_text = f" 🗺️ {DAY_LABEL} 路線圖 "
-bbox = draw.textbbox((0, 0), day_text, font=font)
-tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-draw.rectangle([8, 8, 16 + tw, 16 + th], fill=(255, 255, 255, 230), outline=(60, 60, 60))
-draw.text((12, 12), day_text, fill=(0, 0, 0), font=font)
-
-img.save(OUTPUT)
-print(f"Annotated map saved: {OUTPUT}")
+os.makedirs("tmp", exist_ok=True)
+with open(OUTPUT, "w") as f:
+    f.write(html)
+print(f"Route map saved: {OUTPUT}")
 ```
+
+Then share the HTML file as a link using the `share-link` skill so the user can open it in their mobile browser.
 
 **7c. Overall trip map** (all days combined)
 
-Same approach but use different marker colors per day and label with day numbers:
-- 🔴 Red markers: Day 1 spots
-- 🔵 Blue markers: Day 2 spots
-- 🟢 Green markers: Day 3 spots
+Same template, but with all places from all days and no leg polylines (markers only):
 
 ```python
-# For the overall map, use same annotation script but:
-# - No route polyline (markers only)
-# - Label format: "D1 景點名" / "D2 景點名" etc.
-# - Color-code by day
+data = {
+    "title": "三日總覽",
+    "subtitle": "京都 3天2夜",
+    "places": [
+        # Day 1 — red markers
+        {"lat": 34.9858, "lng": 135.7588, "name": "京都車站 (Day 1)", "color": "red"},
+        {"lat": 34.9803, "lng": 135.7478, "name": "東寺 (Day 1)", "color": "red"},
+        # Day 2 — blue markers
+        {"lat": 35.0148, "lng": 135.6728, "name": "天龍寺 (Day 2)", "color": "blue"},
+        {"lat": 35.0170, "lng": 135.6713, "name": "竹林 (Day 2)", "color": "blue"},
+        # Day 3 — green markers
+        {"lat": 34.9949, "lng": 135.7850, "name": "清水寺 (Day 3)", "color": "green"},
+        {"lat": 34.9987, "lng": 135.7756, "name": "祇園 (Day 3)", "color": "green"},
+    ],
+    "legs": [],  # No legs for overview — markers only
+}
 ```
-
-Send maps with `[SEND_FILE:tmp/day1_route.png]`.
 
 **IMPORTANT**:
-- Always use encoded polyline from Directions API for route lines. NEVER draw straight lines.
-- Place names and transport info MUST be rendered directly on the map image.
-- If Pillow is not available, fall back to sending the base map + text legend (see below).
-
-**Fallback text legend** (only if Pillow annotation fails):
-
-For daily route maps:
-```
-🗺️ Day 1 路線圖
-A → 京都車站（起點）
-  ↓ 🚶 15min / 1.2km
-B → 東寺
-  ↓ 🚃 10min / 4.5km
-C → 伏見稻荷大社
-```
-
-For the overall trip map:
-```
-🗺️ 三日總覽
-🔴 Day 1 — 京都車站周邊（東寺、伏見稻荷、三十三間堂）
-🔵 Day 2 — 嵐山（天龍寺、竹林、渡月橋）
-🟢 Day 3 — 東山（清水寺、祇園、建仁寺）
-```
+- Always get per-leg encoded polylines from Directions API. Include `routes.legs.polyline.encodedPolyline` in FieldMask.
+- Each leg's polyline contains the actual road path for that transport segment.
+- Transport labels use Chinese text: 步行, 電車, 公車, 地鐵, 計程車, 自駕.
+- The HTML file is self-contained (uses CDN for Leaflet). Share it via `share-link` skill.
+- On mobile: map takes top half, route panel is collapsible at bottom.
+- On desktop: left panel (route info) + right panel (interactive map).
 
 **Step 8 — Format itinerary output**
 
@@ -583,15 +478,8 @@ Day 3 (MM/DD): ☁️ 20°C, 降雨 20%
 2. [Forum] description — URL
 3. [Travel Site] description — URL （未經驗證）
 
-🗺️ Day 1 路線圖:
-[SEND_FILE:tmp/day1_route.png]
-A → PLACE_1（起點）
-  ↓ 🚶 15min / 0.8km
-B → PLACE_2
-  ↓ 🚇 20min / 5km
-C → RESTAURANT（午餐）
-  ↓ 🚌 10min / 2km
-D → PLACE_3（終點）
+🗺️ Day 1 互動路線圖:
+SHARE_LINK_URL ← (use share-link skill to host tmp/day1_route.html)
 
 ---
 
@@ -603,10 +491,7 @@ D → PLACE_3（終點）
 ---
 
 🗺️ 三日總覽:
-[SEND_FILE:tmp/trip_overview.png]
-🔴 Day 1 — AREA（PLACE_1, PLACE_2, PLACE_3）
-🔵 Day 2 — AREA（PLACE_4, PLACE_5, PLACE_6）
-🟢 Day 3 — AREA（PLACE_7, PLACE_8, PLACE_9）
+SHARE_LINK_URL ← (use share-link skill to host tmp/trip_overview.html)
 
 ---
 
@@ -696,4 +581,4 @@ Run three web searches with different keywords:
 - Add estimated costs where available (`priceLevel` from Google, payment info from Tabelog)
 - **Flights**: For international/long-distance trips, always search flights using SerpApi (google_flights engine). Show top 2-3 options with airline, time, duration, price. Include price_insights if available.
 - **Cost estimate**: ALWAYS include a cost breakdown at the end of itineraries. Categories: flights, local transport, accommodation, meals, attractions. Use `exchange-rate` skill for currency conversion to user's local currency (default TWD). Add money-saving tips.
-- **Map legends**: Every map MUST be followed by a text legend mapping markers to place names with distances/durations between stops.
+- **Route maps**: Use the HTML template at `.claude/skills/travel/route_map.html`. Generate interactive maps with Leaflet (left panel: route info, right: zoomable map). Get per-leg polylines from Directions API for actual road routes. Share HTML via `share-link` skill.

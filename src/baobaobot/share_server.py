@@ -317,7 +317,15 @@ class ShareServer:
             "X-Content-Type-Options": "nosniff",
         }
         if content_type.startswith("text/html"):
-            headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:;"
+            headers["Content-Disposition"] = "inline"
+            headers["Content-Security-Policy"] = (
+                "default-src 'none'; "
+                "script-src 'unsafe-inline' https:; "
+                "style-src 'unsafe-inline' https:; "
+                "img-src data: blob: https: http:; "
+                "connect-src https: http:; "
+                "font-src https:;"
+            )
 
         return web.FileResponse(file_path, headers=headers)
 
