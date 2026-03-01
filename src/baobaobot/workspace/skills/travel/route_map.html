@@ -92,6 +92,15 @@ html,body{height:100%;overflow:hidden;
 #map{width:100%;height:100%}
 .panel::-webkit-scrollbar{width:3px}
 .panel::-webkit-scrollbar-thumb{background:#cbd5e0;border-radius:2px}
+
+/* ======== Print mode: ?print=1 ======== */
+body.print-mode{overflow:visible;height:auto!important}
+body.print-mode #panel{display:none}
+body.print-mode .toggle{display:none}
+body.print-mode #map-area{position:relative;left:0;top:0;right:0;bottom:auto;
+  width:100%;height:600px}
+body.print-mode .map-legend{bottom:10px;right:10px}
+body.print-mode .leaflet-control-zoom{display:none}
 </style>
 </head>
 <body>
@@ -280,9 +289,29 @@ function fixLayout(){
 }
 
 // ============================================================
+// Print mode detection (?print=1)
+// ============================================================
+const PRINT_MODE=new URLSearchParams(window.location.search).has('print');
+
+// ============================================================
 // Init
 // ============================================================
 document.addEventListener('DOMContentLoaded',()=>{
+  if(PRINT_MODE){
+    document.body.classList.add('print-mode');
+    buildMap();
+    buildLegend();
+    // Wait for tiles to load, then signal ready
+    setTimeout(()=>{
+      if(map)map.invalidateSize();
+      // Add a marker element that headless Chrome can wait for
+      const ready=document.createElement('div');
+      ready.id='print-ready';
+      ready.style.display='none';
+      document.body.appendChild(ready);
+    },2000);
+    return;
+  }
   fixLayout();
   buildPanel();
   buildMap();

@@ -582,3 +582,8 @@ Run three web searches with different keywords:
 - **Flights**: For international/long-distance trips, always search flights using SerpApi (google_flights engine). Show top 2-3 options with airline, time, duration, price. Include price_insights if available.
 - **Cost estimate**: ALWAYS include a cost breakdown at the end of itineraries. Categories: flights, local transport, accommodation, meals, attractions. Use `exchange-rate` skill for currency conversion to user's local currency (default TWD). Add money-saving tips.
 - **Route maps**: Use the HTML template at `.claude/skills/travel/route_map.html`. Generate interactive maps with Leaflet (left panel: route info, right: zoomable map). Get per-leg polylines from Directions API for actual road routes. Share HTML via `share-link` skill.
+- **PDF export**: When generating a PDF of the itinerary, do NOT convert the interactive HTML directly to PDF. Instead:
+  1. Use the route map's print mode by appending `?print=1` to the HTML URL — this hides the panel and shows a full-width map with no interactive controls
+  2. Take a screenshot of the print-mode page using headless Chrome / Puppeteer, or use Google Static Maps API as a fallback for the map image
+  3. Embed the static map screenshot in the PDF, and include the interactive link below it so users can still access the zoomable map
+  4. The agent can decide: if the trip is simple (1 day), a single static map in PDF is fine; for multi-day trips, include one map per day
