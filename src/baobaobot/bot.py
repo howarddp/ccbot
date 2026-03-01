@@ -565,22 +565,38 @@ async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    ws_root = str(workspace_dir.resolve())
+    # Resolve to workspace root (workspace_* dir) — the cwd from session_map
+    # may be a subdirectory (e.g. workspace_fun/projects/baobaobot), which
+    # won't match the share server's registered roots.
+    resolved = workspace_dir.resolve()
+    ws_roots = ctx.config.iter_workspace_dirs()
+    workspace_root = None
+    for root in ws_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            workspace_root = root
+            break
+        except ValueError:
+            continue
+    if workspace_root is None:
+        workspace_root = workspace_dir  # fallback to original
 
-    # Support /share subpath
+    ws_root = str(workspace_root.resolve())
+
+    # Support /browse subpath
     args = (update.message.text or "").split(None, 1)
     rel = ""
     if len(args) > 1:
-        target = (workspace_dir / args[1]).resolve()
+        target = (workspace_root / args[1]).resolve()
         try:
-            target.relative_to(workspace_dir.resolve())
+            target.relative_to(workspace_root.resolve())
         except ValueError:
-            target = workspace_dir.resolve()
-        rel = str(target.relative_to(workspace_dir.resolve()))
+            target = workspace_root.resolve()
+        rel = str(target.relative_to(workspace_root.resolve()))
 
     from .share_server import generate_token
 
-    display_name = rel if rel else workspace_dir.name
+    display_name = rel if rel else workspace_root.name
     token = generate_token(f"p:{ws_root}:{rel}", ttl=600, name=display_name)
     encoded_rel = urllib.parse.quote(rel, safe="/") if rel else ""
     path_part = f"/p/{token}/{encoded_rel}" if encoded_rel else f"/p/{token}/"
