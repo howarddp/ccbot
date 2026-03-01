@@ -402,9 +402,62 @@ print(f"Route map saved: {OUTPUT}")
 
 Then share the HTML file as a link using the `share-link` skill so the user can open it in their mobile browser.
 
-**7c. Overall trip map** (all days combined)
+**7c. Multi-day combined map** (PREFERRED for multi-day trips)
 
-Same template, but with all places from all days and no leg polylines (markers only):
+Use `mode: "multi"` to combine all days into **one HTML file** with tab switching (overview + per-day views):
+
+```python
+data = {
+    "mode": "multi",
+    "title": "京都 3天2夜",
+    "subtitle": "含總覽 + 每日路線切換",
+    "days": [
+        {
+            "title": "Day 1 — 東山區",
+            "tab": "Day 1",  # short label for tab button
+            "places": [
+                {"lat": 34.9858, "lng": 135.7588, "name": "京都車站", "color": "green"},
+                {"lat": 34.9671, "lng": 135.7727, "name": "伏見稻荷大社", "color": "blue"},
+                {"lat": 34.9949, "lng": 135.7850, "name": "清水寺", "color": "red"},
+            ],
+            "legs": [
+                {"transport": "電車", "duration": "15min", "distance": "4.5km",
+                 "polyline": "ENCODED_POLYLINE_LEG_0"},
+                {"transport": "公車", "duration": "20min", "distance": "3.0km",
+                 "polyline": "ENCODED_POLYLINE_LEG_1"},
+            ]
+        },
+        {
+            "title": "Day 2 — 嵐山",
+            "tab": "Day 2",
+            "places": [
+                {"lat": 35.0148, "lng": 135.6728, "name": "天龍寺", "color": "green"},
+                {"lat": 35.0170, "lng": 135.6713, "name": "竹林小路", "color": "blue"},
+                {"lat": 35.0094, "lng": 135.6726, "name": "渡月橋", "color": "red"},
+            ],
+            "legs": [
+                {"transport": "步行", "duration": "10min", "distance": "0.5km",
+                 "polyline": "ENCODED_POLYLINE_LEG_0"},
+                {"transport": "步行", "duration": "15min", "distance": "1.0km",
+                 "polyline": "ENCODED_POLYLINE_LEG_1"},
+            ]
+        }
+    ]
+}
+```
+
+The template renders:
+- **Tab bar**: 「總覽」(all days on one map) + per-day tabs (「Day 1」「Day 2」…)
+- Switching tabs filters both the panel content AND the map layers (markers + routes)
+- Overview tab shows all days with color-coded day headers
+
+**DEFAULT: Always use multi mode** for multi-day trips. One link with tab switching is much better UX than multiple separate links.
+- Only fall back to separate files when days are in completely different regions (e.g., Day 1 in Tokyo, Day 2 in Osaka) where a combined map would zoom out too far to be useful.
+- For single-day trips, use the regular single mode (no `mode` field needed).
+
+**7d. Legacy: separate overview map** (only if not using multi mode)
+
+Same template with single mode, but with all places from all days and no leg polylines (markers only):
 
 ```python
 data = {
@@ -478,9 +531,6 @@ Day 3 (MM/DD): ☁️ 20°C, 降雨 20%
 2. [Forum] description — URL
 3. [Travel Site] description — URL （未經驗證）
 
-🗺️ Day 1 互動路線圖:
-SHARE_LINK_URL ← (use share-link skill to host tmp/day1_route.html)
-
 ---
 
 📅 Day 2 — AREA_NAME (🌧️ 18°C, 降雨 70%)
@@ -490,8 +540,8 @@ SHARE_LINK_URL ← (use share-link skill to host tmp/day1_route.html)
 
 ---
 
-🗺️ 三日總覽:
-SHARE_LINK_URL ← (use share-link skill to host tmp/trip_overview.html)
+🗺️ 互動路線圖（含總覽 + 每日切換）:
+SHARE_LINK_URL ← (use share-link skill to host tmp/trip_route.html, generated with multi mode)
 
 ---
 
@@ -581,7 +631,7 @@ Run three web searches with different keywords:
 - Add estimated costs where available (`priceLevel` from Google, payment info from Tabelog)
 - **Flights**: For international/long-distance trips, always search flights using SerpApi (google_flights engine). Show top 2-3 options with airline, time, duration, price. Include price_insights if available.
 - **Cost estimate**: ALWAYS include a cost breakdown at the end of itineraries. Categories: flights, local transport, accommodation, meals, attractions. Use `exchange-rate` skill for currency conversion to user's local currency (default TWD). Add money-saving tips.
-- **Route maps**: Use the HTML template at `.claude/skills/travel/route_map.html`. Generate interactive maps with Leaflet (left panel: route info, right: zoomable map). Get per-leg polylines from Directions API for actual road routes. Share HTML via `share-link` skill.
+- **Route maps**: Use the HTML template at `.claude/skills/travel/route_map.html`. For multi-day trips, **always use multi mode** (`mode: "multi"` with `days` array) to generate a single HTML with tab switching. For single-day trips, use regular single mode. Get per-leg polylines from Directions API for actual road routes. Share HTML via `share-link` skill.
 - **PDF export**: When generating a PDF of the itinerary, do NOT convert the interactive HTML directly to PDF. Instead:
   1. Use the route map's print mode by appending `?print=1` to the HTML URL — this hides the panel and shows a full-width map with no interactive controls
   2. Take a screenshot of the print-mode page using headless Chrome / Puppeteer, or use Google Static Maps API as a fallback for the map image

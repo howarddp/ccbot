@@ -76,6 +76,22 @@ html,body{height:100%;overflow:hidden;
   color:#fff;font-size:11px;font-weight:600;white-space:nowrap}
 .leg-text{color:#718096;font-size:12px;white-space:nowrap}
 
+/* ======== Day Tabs (multi-day mode) ======== */
+.day-tabs{
+  display:flex;gap:0;border-bottom:2px solid #e2e8f0;
+  background:#f7fafc;position:sticky;top:0;z-index:11;
+  overflow-x:auto;-webkit-overflow-scrolling:touch}
+.day-tab{
+  flex:1;min-width:0;padding:12px 8px;text-align:center;
+  font-size:13px;font-weight:600;color:#718096;
+  cursor:pointer;border-bottom:3px solid transparent;
+  transition:all .2s;white-space:nowrap;
+  -webkit-tap-highlight-color:transparent;background:none;border-top:none;border-left:none;border-right:none}
+.day-tab:hover{color:#2d3748;background:#edf2f7}
+.day-tab.active{color:#4285F4;border-bottom-color:#4285F4;background:#fff}
+.day-content{display:none}
+.day-content.active{display:block}
+
 /* ======== Map Legend ======== */
 .map-legend{
   position:absolute;bottom:20px;right:10px;z-index:800;
@@ -109,11 +125,11 @@ body.print-mode .leaflet-control-zoom{display:none}
   <span id="toggleIcon">☰</span>
   <span>路線</span>
 </button>
+<div id="panel"></div>
 <div id="map-area">
   <div id="map"></div>
   <div class="map-legend" id="mapLegend"></div>
 </div>
-<div id="panel"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -134,6 +150,12 @@ const TC={
   'Subway':'#805AD5','Taxi':'#E53E3E','Drive':'#DD6B20'
 };
 const TD={'步行':[6,8],'Walk':[6,8]};
+const DAY_COLORS=['#EA4335','#4285F4','#34A853','#FBBC04','#9C27B0','#FF6D00','#00BCD4'];
+
+// ============================================================
+// Detect mode
+// ============================================================
+const IS_MULTI=ROUTE_DATA.mode==='multi'&&Array.isArray(ROUTE_DATA.days);
 
 // ============================================================
 // Decode Google encoded polyline
@@ -151,21 +173,18 @@ function decodePoly(s){
 }
 
 // ============================================================
-// Build panel
+// Build single-day panel content
 // ============================================================
-function buildPanel(){
-  const el=document.getElementById('panel');
-  const {title,subtitle,places,legs}=ROUTE_DATA;
-  let h='<div class="handle"></div>';
-  h+=`<div class="panel-header"><h1>${title}</h1>`;
-  if(subtitle) h+=`<div class="subtitle">${subtitle}</div>`;
-  h+=`</div>`;
+function buildDayHTML(data,dayIndex){
+  let h='';
+  const places=data.places||[], legs=data.legs||[];
   places.forEach((p,i)=>{
     const lb=String.fromCharCode(65+i);
     const cl=MC[p.color]||'#4285F4';
+    const globalIdx=dayIndex!==undefined?`${dayIndex},${i}`:String(i);
     const sf=i===0?'<div class="place-sub">起點</div>':
              i===places.length-1?'<div class="place-sub">終點</div>':'';
-    h+=`<div class="place" onclick="focusMarker(${i})">
+    h+=`<div class="place" onclick="focusMarker(${globalIdx})">
       <div class="marker" style="background:${cl}">${lb}</div>
       <div class="place-info"><div class="place-name">${p.name}</div>${sf}</div></div>`;
     if(i<legs.length){
@@ -174,37 +193,80 @@ function buildPanel(){
         <span class="leg-text">${l.duration} · ${l.distance}</span></div>`;
     }
   });
+  return h;
+}
+
+// ============================================================
+// Build panel (single or multi)
+// ============================================================
+function buildPanel(){
+  const el=document.getElementById('panel');
+  let h='<div class="handle"></div>';
+
+  if(!IS_MULTI){
+    const {title,subtitle}=ROUTE_DATA;
+    h+=`<div class="panel-header"><h1>${title}</h1>`;
+    if(subtitle) h+=`<div class="subtitle">${subtitle}</div>`;
+    h+=`</div>`;
+    h+=buildDayHTML(ROUTE_DATA);
+  } else {
+    const {title,subtitle,days}=ROUTE_DATA;
+    h+=`<div class="panel-header"><h1>${title}</h1>`;
+    if(subtitle) h+=`<div class="subtitle">${subtitle}</div>`;
+    h+=`</div>`;
+    // Day tabs
+    h+='<div class="day-tabs">';
+    h+=`<button class="day-tab active" onclick="switchDay(-1)">總覽</button>`;
+    days.forEach((d,i)=>{
+      const label=d.tab||d.title||('Day '+(i+1));
+      h+=`<button class="day-tab" onclick="switchDay(${i})">${label}</button>`;
+    });
+    h+='</div>';
+    // Overview content (shown by default)
+    h+=`<div class="day-content active" id="day-overview">`;
+    days.forEach((d,i)=>{
+      const dc=DAY_COLORS[i%DAY_COLORS.length];
+      h+=`<div style="padding:10px 18px 4px;font-size:13px;font-weight:700;color:${dc};
+        border-left:4px solid ${dc};margin:8px 12px 0">${d.title||'Day '+(i+1)}</div>`;
+      h+=buildDayHTML(d,i);
+    });
+    h+=`</div>`;
+    // Per-day content (hidden by default)
+    days.forEach((d,i)=>{
+      h+=`<div class="day-content" id="day-${i}">`;
+      h+=buildDayHTML(d,i);
+      h+=`</div>`;
+    });
+  }
   el.innerHTML=h;
 }
 
 // ============================================================
 // Build map legend
 // ============================================================
-function buildLegend(){
-  const seen=new Set(),legs=ROUTE_DATA.legs||[];
+function buildLegend(legs){
+  const seen=new Set();
   let h='';
-  legs.forEach(l=>{
+  (legs||[]).forEach(l=>{
     if(seen.has(l.transport))return;seen.add(l.transport);
     const c=TC[l.transport]||'#718096';
     const st=TD[l.transport]?`border-top:3px dashed ${c};height:0`:`background:${c}`;
     h+=`<div class="li"><span class="ll" style="${st}"></span>${l.transport}</div>`;
   });
   const el=document.getElementById('mapLegend');
-  el.innerHTML=h;if(!h)el.style.display='none';
+  el.innerHTML=h;if(!h)el.style.display='none';else el.style.display='';
 }
 
 // ============================================================
 // Build map
 // ============================================================
-let map,markers=[];
-function buildMap(){
-  map=L.map('map',{zoomControl:true,attributionControl:true,tap:true});
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    attribution:'© OpenStreetMap',maxZoom:19
-  }).addTo(map);
+let map;
+let allLayers=[];   // {dayIndex, layer, type:'marker'|'route'}
+let markersByDay={}; // dayIndex -> [markers]
 
-  const bounds=L.latLngBounds();
-  const {places,legs}=ROUTE_DATA;
+function addDayToMap(data,dayIndex,bounds){
+  const places=data.places||[], legs=data.legs||[];
+  const dayMarkers=[];
 
   places.forEach((p,i)=>{
     const lb=String.fromCharCode(65+i);
@@ -216,9 +278,12 @@ function buildMap(){
         border:2px solid #fff">${lb}</div>`,
       iconSize:[30,30],iconAnchor:[15,15],popupAnchor:[0,-16]});
     const m=L.marker([p.lat,p.lng],{icon}).addTo(map);
+    const dayLabel=dayIndex>=0?(ROUTE_DATA.days[dayIndex].title||'Day '+(dayIndex+1))+' — ':'';
     const sf=i===0?' (起點)':i===places.length-1?' (終點)':'';
-    m.bindPopup(`<b>${lb}. ${p.name}${sf}</b>`);
-    markers.push(m);bounds.extend([p.lat,p.lng]);
+    m.bindPopup(`<b>${dayLabel}${lb}. ${p.name}${sf}</b>`);
+    dayMarkers.push(m);
+    allLayers.push({dayIndex,layer:m,type:'marker'});
+    bounds.extend([p.lat,p.lng]);
   });
 
   legs.forEach((leg,i)=>{
@@ -229,22 +294,89 @@ function buildMap(){
       const c=TC[leg.transport]||'#4285F4';
       const d=TD[leg.transport]||null;
       const o={color:c,weight:5,opacity:.8};if(d)o.dashArray=d.join(' ');
-      L.polyline(coords,o).addTo(map).bindPopup(`${leg.transport} ${leg.duration} / ${leg.distance}`);
+      const line=L.polyline(coords,o).addTo(map).bindPopup(`${leg.transport} ${leg.duration} / ${leg.distance}`);
+      allLayers.push({dayIndex,layer:line,type:'route'});
       coords.forEach(c=>bounds.extend(c));
     }
   });
 
-  if(!legs.length&&ROUTE_DATA.polyline){
+  markersByDay[dayIndex]=dayMarkers;
+}
+
+function buildMap(){
+  map=L.map('map',{zoomControl:true,attributionControl:true,tap:true});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'© OpenStreetMap',maxZoom:19
+  }).addTo(map);
+
+  const bounds=L.latLngBounds();
+
+  if(!IS_MULTI){
+    addDayToMap(ROUTE_DATA,-1,bounds);
+    buildLegend(ROUTE_DATA.legs);
+  } else {
+    ROUTE_DATA.days.forEach((d,i)=>addDayToMap(d,i,bounds));
+    // Build combined legend
+    const allLegs=[];
+    ROUTE_DATA.days.forEach(d=>(d.legs||[]).forEach(l=>allLegs.push(l)));
+    buildLegend(allLegs);
+  }
+
+  if(!allLayers.length&&ROUTE_DATA.polyline){
     const c=decodePoly(ROUTE_DATA.polyline);
     L.polyline(c,{color:'#4285F4',weight:5,opacity:.8}).addTo(map);
     c.forEach(p=>bounds.extend(p));
   }
 
   if(bounds.isValid()) map.fitBounds(bounds,{padding:[50,50]});
-
-  // Force re-render after a tick (fixes in-app browser issues)
   setTimeout(()=>map.invalidateSize(),100);
   setTimeout(()=>map.invalidateSize(),500);
+}
+
+// ============================================================
+// Multi-day: switch day tab
+// ============================================================
+let currentDay=-1; // -1 = overview (all days)
+
+function switchDay(dayIdx){
+  if(!IS_MULTI)return;
+  currentDay=dayIdx;
+
+  // Update tabs
+  document.querySelectorAll('.day-tab').forEach((t,i)=>{
+    t.classList.toggle('active',i===(dayIdx+1));
+  });
+
+  // Update panel content
+  document.querySelectorAll('.day-content').forEach(el=>el.classList.remove('active'));
+  if(dayIdx===-1){
+    document.getElementById('day-overview').classList.add('active');
+  } else {
+    const el=document.getElementById('day-'+dayIdx);
+    if(el) el.classList.add('active');
+  }
+
+  // Update map layers
+  const bounds=L.latLngBounds();
+  allLayers.forEach(({dayIndex,layer})=>{
+    if(dayIdx===-1||dayIndex===dayIdx){
+      if(!map.hasLayer(layer)) layer.addTo(map);
+      if(layer.getLatLng) bounds.extend(layer.getLatLng());
+      else if(layer.getBounds) bounds.extend(layer.getBounds());
+    } else {
+      if(map.hasLayer(layer)) map.removeLayer(layer);
+    }
+  });
+  if(bounds.isValid()) map.fitBounds(bounds,{padding:[50,50]});
+
+  // Update legend
+  if(dayIdx===-1){
+    const allLegs=[];
+    ROUTE_DATA.days.forEach(d=>(d.legs||[]).forEach(l=>allLegs.push(l)));
+    buildLegend(allLegs);
+  } else {
+    buildLegend(ROUTE_DATA.days[dayIdx].legs);
+  }
 }
 
 // ============================================================
@@ -254,19 +386,24 @@ let panelOpen=true;
 function togglePanel(){
   panelOpen=!panelOpen;
   document.getElementById('panel').classList.toggle('collapsed');
-  // Update toggle position on desktop
   var btn=document.getElementById('toggleBtn');
+  var mapArea=document.getElementById('map-area');
   if(window.innerWidth>768){
     btn.style.left=panelOpen?'392px':'12px';
+    mapArea.style.left=panelOpen?'380px':'0';
   }
   setTimeout(()=>map&&map.invalidateSize(),350);
 }
-function focusMarker(i){
-  if(!markers[i])return;
-  const p=ROUTE_DATA.places[i];
+function focusMarker(dayIdx,placeIdx){
+  // Support both focusMarker(i) for single mode and focusMarker(dayIdx,placeIdx) for multi
+  if(placeIdx===undefined){placeIdx=dayIdx;dayIdx=-1;}
+  const ms=markersByDay[dayIdx];
+  if(!ms||!ms[placeIdx])return;
+  const data=dayIdx>=0?ROUTE_DATA.days[dayIdx]:ROUTE_DATA;
+  const p=(data.places||[])[placeIdx];
+  if(!p)return;
   map.setView([p.lat,p.lng],16,{animate:true});
-  markers[i].openPopup();
-  // On mobile, collapse panel to show map
+  ms[placeIdx].openPopup();
   if(window.innerWidth<=768&&panelOpen){togglePanel();}
 }
 
@@ -278,7 +415,6 @@ function fixLayout(){
   document.body.style.height=h+'px';
   const mapArea=document.getElementById('map-area');
   if(window.innerWidth<=768){
-    // Mobile: map takes full height, panel overlays from bottom
     mapArea.style.top='0';mapArea.style.left='0';
     mapArea.style.right='0';mapArea.style.bottom='0';
     mapArea.style.height=h+'px';
@@ -300,11 +436,8 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(PRINT_MODE){
     document.body.classList.add('print-mode');
     buildMap();
-    buildLegend();
-    // Wait for tiles to load, then signal ready
     setTimeout(()=>{
       if(map)map.invalidateSize();
-      // Add a marker element that headless Chrome can wait for
       const ready=document.createElement('div');
       ready.id='print-ready';
       ready.style.display='none';
@@ -315,8 +448,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   fixLayout();
   buildPanel();
   buildMap();
-  buildLegend();
-  // Position toggle button
   if(window.innerWidth>768){
     document.getElementById('toggleBtn').style.left='392px';
   }
