@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 _TICK_INTERVAL_S = 60.0
 
 # How often to run summary per workspace
-_SUMMARY_INTERVAL_S = 7200
+_SUMMARY_INTERVAL_S = 1800
 
 # Subprocess timeout for claude -p
 _SUBPROCESS_TIMEOUT_S = 300
@@ -44,7 +44,7 @@ _SUBPROCESS_TIMEOUT_S = 300
 _MAX_CONCURRENT = 2
 
 # Idle threshold: JSONL must not have changed in the last N seconds
-_IDLE_THRESHOLD_S = 300  # 5 minutes
+_IDLE_THRESHOLD_S = 900  # 15 minutes
 
 # cron_meta key for last summary time
 _META_KEY_LAST_SUMMARY_TIME = "system_scheduler.last_summary_time"
