@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Fetch YouTube video transcript (subtitles) as plain text.
+
+Usage:
+    yt-transcript URL [-l LANG] [--max-length N]
+
+Two-phase approach:
+  Phase 1: uvx yt-dlp --dump-json  → metadata + available subtitle languages
+  Phase 2: youtube-transcript-api  → plain text transcript (avoids 429 rate limits)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+
+# Language priority for auto-selection
+_LANG_PRIORITY = ["zh-Hant", "zh-TW", "zh", "en", "ja", "ko"]
+
+
+def _run(cmd: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess and return the result."""
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _extract_video_id(url: str) -> str | None:
+    """Extract YouTube video ID from various URL formats."""
+    patterns = [
+        r"(?:v=|/v/|youtu\.be/)([a-zA-Z0-9_-]{11})",
+        r"(?:embed/)([a-zA-Z0-9_-]{11})",
+        r"(?:shorts/)([a-zA-Z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
+    # Maybe it's already a video ID
+    if re.match(r"^[a-zA-Z0-9_-]{11}$", url):
+        return url
+    return None
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    """Format seconds into HH:MM:SS or MM:SS."""
+    if not seconds:
+        return "unknown"
+    s = int(seconds)
+    h, remainder = divmod(s, 3600)
+    m, sec = divmod(remainder, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m}:{sec:02d}"
+
+
+def _pick_language(
+    subtitles: dict[str, list],
+    auto_captions: dict[str, list],
+    preferred: str | None,
+) -> tuple[str, bool]:
+    """Pick best subtitle language. Returns (lang_code, is_auto).
+
+    Strategy:
+    1. If user specified a language, use it (manual first, then auto)
+    2. Otherwise, try manual subtitles in priority order
+    3. Then try auto-captions in priority order
+    4. Fallback to first available
+    """
+    if preferred:
+        if preferred in subtitles:
+            return preferred, False
+        if preferred in auto_captions:
+            return preferred, True
+        # Try prefix match (e.g. "zh" matches "zh-Hant")
+        for lang in subtitles:
+            if lang.startswith(preferred):
+                return lang, False
+        for lang in auto_captions:
+            if lang.startswith(preferred):
+                return lang, True
+        print(f"Warning: requested language '{preferred}' not available", file=sys.stderr)
+
+    # Auto-select: manual subtitles first
+    for lang in _LANG_PRIORITY:
+        if lang in subtitles:
+            return lang, False
+    for lang in _LANG_PRIORITY:
+        for avail in subtitles:
+            if avail.startswith(lang):
+                return avail, False
+
+    # Then auto-captions
+    for lang in _LANG_PRIORITY:
+        if lang in auto_captions:
+            return lang, True
+    for lang in _LANG_PRIORITY:
+        for avail in auto_captions:
+            if avail.startswith(lang):
+                return avail, True
+
+    # Fallback to first available
+    if subtitles:
+        first = next(iter(subtitles))
+        return first, False
+    if auto_captions:
+        first = next(iter(auto_captions))
+        return first, True
+
+    return "", False
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Fetch YouTube video transcript as plain text"
+    )
+    parser.add_argument("url", help="YouTube video URL")
+    parser.add_argument(
+        "-l", "--lang", default=None, help="Preferred subtitle language code (e.g. en, zh-Hant, ja)"
+    )
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=30000,
+        help="Max transcript characters (default: 30000)",
+    )
+    args = parser.parse_args()
+
+    # Phase 1: Get video metadata
+    print("Fetching video metadata...", file=sys.stderr)
+    result = _run([
+        "uvx", "yt-dlp",
+        "--js-runtimes", "node",
+        "--remote-components", "ejs:github",
+        "--dump-json", "--no-download", args.url,
+    ])
+    if result.returncode != 0:
+        print(f"Error fetching metadata: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        meta = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        print("Error: failed to parse video metadata", file=sys.stderr)
+        sys.exit(1)
+
+    title = meta.get("title", "Unknown")
+    channel = meta.get("channel", meta.get("uploader", "Unknown"))
+    duration = _format_duration(meta.get("duration"))
+    upload_date = meta.get("upload_date", "")
+    if upload_date and len(upload_date) == 8:
+        upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+    view_count = meta.get("view_count")
+    description = meta.get("description", "")
+
+    subtitles = meta.get("subtitles") or {}
+    auto_captions = meta.get("automatic_captions") or {}
+
+    # Print header
+    print(f"# {title}\n")
+    print(f"- Channel: {channel}")
+    print(f"- Duration: {duration}")
+    if upload_date:
+        print(f"- Upload date: {upload_date}")
+    if view_count is not None:
+        print(f"- Views: {view_count:,}")
+
+    # Show available languages
+    if subtitles:
+        print(f"- Manual subtitles: {', '.join(sorted(subtitles.keys()))}")
+    if auto_captions:
+        langs = sorted(auto_captions.keys())
+        # Show only first 10 for brevity
+        display = ", ".join(langs[:10])
+        if len(langs) > 10:
+            display += f" ... ({len(langs)} total)"
+        print(f"- Auto captions: {display}")
+
+    print()
+
+    # Pick language
+    lang, is_auto = _pick_language(subtitles, auto_captions, args.lang)
+
+    if not lang:
+        print("No subtitles available for this video.\n")
+        if description:
+            print("## Video Description\n")
+            desc = description[: args.max_length]
+            print(desc)
+            if len(description) > args.max_length:
+                print(f"\n... (truncated, {len(description)} chars total)")
+        return
+
+    caption_type = "auto-generated" if is_auto else "manual"
+    print(f"Using {caption_type} subtitles: {lang}\n")
+
+    # Phase 2: Fetch transcript via youtube-transcript-api Python API (avoids 429 rate limits)
+    video_id = _extract_video_id(args.url)
+    transcript = ""
+
+    if video_id:
+        print("Fetching transcript via youtube-transcript-api...", file=sys.stderr)
+        # Build language list: requested lang first, then priority list
+        lang_list = [lang]
+        for pl in _LANG_PRIORITY:
+            if pl not in lang_list:
+                lang_list.append(pl)
+
+        # Use Python API directly via uvx (CLI has different behavior)
+        py_code = (
+            "from youtube_transcript_api import YouTubeTranscriptApi;"
+            "api = YouTubeTranscriptApi();"
+            f"r = api.fetch('{video_id}', languages={lang_list!r});"
+            "print(' '.join(s.text for s in r.snippets))"
+        )
+        result = _run(
+            ["uvx", "--from", "youtube-transcript-api", "python3", "-c", py_code],
+            timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            transcript = result.stdout.strip()
+        else:
+            print(f"Warning: youtube-transcript-api failed, trying yt-dlp-transcript...", file=sys.stderr)
+
+    # Fallback to yt-dlp-transcript if youtube-transcript-api failed
+    if not transcript:
+        print("Fetching transcript via yt-dlp-transcript...", file=sys.stderr)
+        result = _run(["uvx", "yt-dlp-transcript", args.url, "-l", lang], timeout=180)
+        if result.returncode == 0:
+            transcript = result.stdout.strip()
+
+    if not transcript:
+        print("Failed to fetch transcript.\n")
+        if description:
+            print("## Video Description\n")
+            desc = description[: args.max_length]
+            print(desc)
+            if len(description) > args.max_length:
+                print(f"\n... (truncated, {len(description)} chars total)")
+        return
+
+    # Output transcript with length limit
+    print("## Transcript\n")
+    if len(transcript) > args.max_length:
+        print(transcript[: args.max_length])
+        print(
+            f"\n... (truncated at {args.max_length} chars, "
+            f"full transcript: {len(transcript)} chars)"
+        )
+    else:
+        print(transcript)
+
+
+if __name__ == "__main__":
+    main()

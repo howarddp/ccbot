@@ -63,6 +63,7 @@ _BIN_SCRIPTS = [
     "web-search",
     "web-read",
     "share-link",
+    "yt-transcript",
 ]
 
 # Skills deployed to each per-topic workspace
@@ -100,6 +101,7 @@ _SKILL_NAMES = [
     "tabelog-reviews",
     "tripadvisor-reviews",
     "jalan-reviews",
+    "youtube-summary",
 ]
 
 

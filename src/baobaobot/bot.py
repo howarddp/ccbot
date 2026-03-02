@@ -399,17 +399,20 @@ async def screenshot_command(
     )
     if url and tmp_path:
         asyncio.create_task(cleanup_file_after(tmp_path))
-        await update.message.reply_document(
-            document=url,
-            filename="screenshot.png",
-            reply_markup=keyboard,
-        )
-    else:
-        await update.message.reply_document(
-            document=io.BytesIO(png_bytes),
-            filename="screenshot.png",
-            reply_markup=keyboard,
-        )
+        try:
+            await update.message.reply_document(
+                document=url,
+                filename="screenshot.png",
+                reply_markup=keyboard,
+            )
+            return
+        except Exception:
+            logger.warning("Failed to send screenshot via URL, falling back to bytes")
+    await update.message.reply_document(
+        document=io.BytesIO(png_bytes),
+        filename="screenshot.png",
+        reply_markup=keyboard,
+    )
 
 
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
