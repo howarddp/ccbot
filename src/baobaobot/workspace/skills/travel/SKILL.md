@@ -11,11 +11,13 @@ Plan multi-day travel itineraries or look up individual places with reviews from
 
 - **AskUserQuestion**: MUST use the `AskUserQuestion` tool for all clarification questions. NEVER type questions as plain text.
 - **Reviews**: At least 3 web sources per place (`web-search` skill) + MUST call `tripadvisor-reviews` for every destination.
-- **Route map**: MUST use `.claude/skills/travel/route_map.html` template. NEVER use Google Static Maps API PNGs as substitute.
-- **Multi mode**: For multi-day trips, MUST use `mode: "multi"` → ONE combined HTML with tab switching.
+- **YouTube**: MUST search YouTube for every place — see Step 3a below.
+- **Route map**: When generating a route map, MUST use `.claude/skills/travel/route_map.html` template. NEVER use Google Static Maps API PNGs as substitute.
+- **Multi mode**: For multi-day route maps, MUST use `mode: "multi"` → ONE combined HTML with tab switching.
 - **Share link**: MUST use `share-link` skill to host HTML maps and send the URL.
+- **Route map is optional**: For Mode 2 (itinerary planning), output the itinerary FIRST, then ask the user if they want an interactive route map. Only generate the map if they say yes.
 - **Google Maps link**: Every place mentioned MUST include a Google Maps link (from `google-places` skill response).
-- **Source URLs**: Every review/tip MUST include source URL. Unverified info marked `（未經驗證）`.
+- **Source URLs**: Every review/tip MUST include source URL. Unverified info marked `(unverified)`.
 
 ## Available Skills Reference
 
@@ -32,6 +34,8 @@ Plan multi-day travel itineraries or look up individual places with reviews from
 | `jalan-reviews` | Japan hotel/spot reviews (Jalan) |
 | `web-search` | Web search for blog/forum reviews |
 | `web-read` | Extract full article content from URL |
+| `youtube-search` | YouTube video search by keyword |
+| `youtube-summary` | YouTube video transcript extraction |
 | `share-link` | Host HTML files and generate shareable links |
 
 ---
@@ -48,19 +52,29 @@ When the user asks about a **single place** (attraction, restaurant, hotel):
 - TripAdvisor: always → `tripadvisor-reviews "PLACE_NAME CITY"`
 - Tabelog: Japan restaurants → `tabelog-reviews "PLACE_NAME" -n 5`
 - Jalan: Japan hotels/spots → `jalan-reviews "PLACE_NAME" -n 5`
+- YouTube: see Step 3a below
 
 **Step 3 — Web search reviews (MANDATORY: 3+ sources)**
 
 Run three separate `web-search` calls with different keywords:
-1. User's language: `"PLACE_NAME 評價 推薦 心得" --region tw-tzh --limit 5`
+1. User's locale language: `"PLACE_NAME [review/recommend keywords in user's language]" --limit 5`
 2. English: `"PLACE_NAME CITY review recommended" --limit 5`
-3. Region-specific or different angle: `"PLACE_NAME CITY blog travel experience" --limit 5`
+3. Different angle: `"PLACE_NAME CITY blog travel experience" --limit 5`
 
 Use `web-read "URL"` when a snippet is insufficient.
 
+**Step 3a — YouTube reviews (MANDATORY)**
+
+1. Search: `yt-search "PLACE_NAME travel vlog" --sort views -n 5`
+   - Keyword language matches user's locale (zh-TW → `旅遊 vlog`, ja → `旅行 vlog`, en → `travel vlog`)
+2. Filter results: skip videos < 2 min (shorts/ads) or > 30 min (too long)
+3. Take the top 2 qualifying videos — run `yt-transcript "URL"` for each
+4. Extract from transcript: experience highlights, practical tips, costs, warnings
+5. If no subtitles available — skip summary, list video link only
+
 **Step 4 — Format output**
 
-Include: name, address, Google Maps link, multi-platform ratings, opening hours, price level, website, review summary with source URLs.
+Use the **Review Card Format** (see appendix at bottom) for each place.
 
 ---
 
@@ -81,9 +95,9 @@ When the user asks to **plan a trip**:
 - Number of travelers (default: 1)
 
 **Rules:**
-- If user gives enough info (e.g. "3天京都行程"), proceed with defaults
+- If user gives enough info (e.g. "3 days in Kyoto"), proceed with defaults
 - If critical info missing, use `AskUserQuestion` (max 4 questions)
-- Each question: 2-4 options, recommended option first with "(推薦)", short `header` (max 12 chars)
+- Each question: 2-4 options, recommended option first with "(Recommended)", short `header` (max 12 chars)
 - Tailor options to context (skip known info, match destination)
 
 **Fallback** (ONLY if `AskUserQuestion` tool does not exist): ask in plain text with numbered options.
@@ -92,18 +106,18 @@ When the user asks to **plan a trip**:
 
 Use `google-flights` skill. Show top 2-3 options with airline, time, duration, price. Include price insights.
 
-Common airport codes: TPE(桃園), TSA(松山), KIX(關西), NRT(成田), HND(羽田), ICN(仁川), HKG(香港), BKK(曼谷), SIN(新加坡)
+Common airport codes: TPE(Taoyuan), TSA(Songshan), KIX(Kansai), NRT(Narita), HND(Haneda), ICN(Incheon), HKG(Hong Kong), BKK(Bangkok), SIN(Singapore)
 
 ### Step 3 — Check weather
 
 Use `google-geocoding` to get destination coordinates, then `weather` skill for daily forecast.
 
 **Weather-based planning:**
-- ☀️ Hot (>30°C): outdoor activities early/late, indoor breaks midday
-- 🌧️ Rain >50%: prioritize indoor attractions, move outdoor to other days
-- 🌧️ Heavy rain/typhoon: indoor-only, warn user, suggest backup
-- ❄️ Cold (<5°C): suggest onsen, indoor dining, warm attractions
-- 🌡️ Extreme heat (>35°C): shorter walks, AC breaks, hydration reminders
+- Hot (>30°C): outdoor activities early/late, indoor breaks midday
+- Rain >50%: prioritize indoor attractions, move outdoor to other days
+- Heavy rain/typhoon: indoor-only, warn user, suggest backup
+- Cold (<5°C): suggest onsen, indoor dining, warm attractions
+- Extreme heat (>35°C): shorter walks, AC breaks, hydration reminders
 
 ### Step 4 — Search candidate places
 
@@ -111,65 +125,98 @@ Use `google-places` skill to search attractions and restaurants (10 each). Get c
 
 ### Step 5 — Collect reviews for shortlisted places
 
-Same as Mode 1 Steps 2-3. Use reviews to decide which places to include. At least 3 web sources per recommended place.
+Same as Mode 1 Steps 2-3 (including Step 3a YouTube). Use reviews to decide which places to include. At least 3 web sources per recommended place.
 
 **Platform selection by region:**
-- Japan: Google + TripAdvisor + Tabelog (restaurants) + Jalan (hotels/spots) + web-search x3
-- Taiwan: Google + TripAdvisor + web-search x3
-- Other: Google + TripAdvisor + web-search x3
+- Japan: Google + TripAdvisor + YouTube + Tabelog (restaurants) + Jalan (hotels/spots) + web-search x3
+- Taiwan: Google + TripAdvisor + YouTube + web-search x3
+- Other: Google + TripAdvisor + YouTube + web-search x3
 
-### Step 6 — Optimize route order
+### Step 6 — Arrange places by day
 
-Use `google-directions` skill with `optimizeWaypointOrder: true` for each day.
-- Group nearby attractions on the same day
+Group places geographically and arrange the visit order:
+- Group nearby attractions on the same day (use coordinates from Step 4)
 - Account for opening hours
 - Include meal timing (breakfast, lunch, dinner)
+- For 5+ stops per day: use `google-distance-matrix` to compare travel times and optimize visit order
+- For fewer stops: estimate transport time between stops (approximate is OK — no API call needed)
 
-### Step 7 — Generate interactive route map (REQUIRED)
+### Step 7 — Format and output itinerary
 
-⚠️ **MUST use `.claude/skills/travel/route_map.html` template. NEVER use Static Maps API PNGs.**
+Output the itinerary to the user FIRST, before any route map generation.
 
-**7a. Get route data**: Use `google-directions` skill for each day's stops. MUST request per-leg polylines (include `routes.legs.polyline.encodedPolyline` in the FieldMask). **CRITICAL: Every leg MUST have a `"polyline"` field with the encoded polyline from Google Directions. Without it, the map renders ugly straight lines instead of real road paths. NEVER skip this step.**
+Include these sections:
+1. **Weather overview**: per-day weather summary
+2. **Flight options** (if applicable): top 2-3 flights with price
+3. **Transport pass recommendations**: recommended passes
+4. **Daily itinerary**: time-based schedule with per-place review cards (see format below)
+5. **Cost estimate**: breakdown (flights, transport, accommodation, meals, attractions) with currency conversion via `exchange-rate` skill
 
-**7b. Generate HTML**: Read the template, inject route data JSON via Python, save to `tmp/`.
+Use the **Review Card Format** (see appendix at bottom) for each place in the daily schedule. Add time prefix and transport between stops:
+
+```
+#### 09:00 Place Name ⭐ Google 4.5
+[... review card ...]
+🚶 Walk 10min → Next stop
+```
+
+### Step 8 — Ask about interactive route map
+
+After outputting the itinerary, use `AskUserQuestion` to ask:
+
+```
+"Would you like me to generate an interactive route map?"
+```
+
+Options:
+- "Yes, generate route map (Recommended)" — proceed to Step 9
+- "No thanks" — done
+
+### Step 9 — Generate interactive route map (only if user requested)
+
+**MUST use `.claude/skills/travel/route_map.html` template. NEVER use Static Maps API PNGs.**
+
+**9a. Optimize route**: Use `google-directions` skill with `optimizeWaypointOrder: true` for each day. MUST request per-leg polylines (include `routes.legs.polyline.encodedPolyline` in the FieldMask). **CRITICAL: Every leg MUST have a `"polyline"` field with the encoded polyline from Google Directions. Without it, the map renders ugly straight lines instead of real road paths. NEVER skip this step.**
+
+**9b. Generate HTML**: Read the template, inject route data JSON via Python, save to `tmp/`.
 
 Template data schema (single day):
 ```json
 {
-  "title": "Day 1 路線圖",
-  "subtitle": "京都經典路線 — 4 個景點",
+  "title": "Day 1 Route",
+  "subtitle": "Kyoto Classic Route — 4 stops",
   "places": [
-    {"lat": 34.98, "lng": 135.76, "name": "京都車站", "color": "green"},
-    {"lat": 34.97, "lng": 135.77, "name": "伏見稻荷大社", "color": "blue"}
+    {"lat": 34.98, "lng": 135.76, "name": "Kyoto Station", "color": "green"},
+    {"lat": 34.97, "lng": 135.77, "name": "Fushimi Inari Shrine", "color": "blue"}
   ],
   "legs": [
-    {"transport": "電車", "duration": "15min", "distance": "4.5km", "polyline": "ENCODED_POLYLINE"}
+    {"transport": "Train", "duration": "15min", "distance": "4.5km", "polyline": "ENCODED_POLYLINE"}
   ]
 }
 ```
 
-**7c. Multi-day map (REQUIRED for multi-day trips)**:
+**9c. Multi-day map (REQUIRED for multi-day trips)**:
 
 Use `mode: "multi"` to combine all days into ONE HTML with tab switching:
 ```json
 {
   "mode": "multi",
-  "title": "京都 3天2夜",
-  "subtitle": "含總覽 + 每日路線切換",
+  "title": "Kyoto 3D2N",
+  "subtitle": "Overview + daily route switching",
   "days": [
     {
-      "title": "Day 1 — 東山區",
+      "title": "Day 1 — Higashiyama",
       "tab": "Day 1",
-      "places": [{"lat": 34.98, "lng": 135.76, "name": "京都車站", "color": "green"}],
-      "legs": [{"transport": "電車", "duration": "15min", "distance": "4.5km", "polyline": "..."}]
+      "places": [{"lat": 34.98, "lng": 135.76, "name": "Kyoto Station", "color": "green"}],
+      "legs": [{"transport": "Train", "duration": "15min", "distance": "4.5km", "polyline": "..."}]
     }
   ]
 }
 ```
 
-Template features: tab bar (總覽 + per-day), collapsible panel, Leaflet map, RWD (desktop: side panel, mobile: bottom panel).
+Template features: tab bar (Overview + per-day), collapsible panel, Leaflet map, RWD (desktop: side panel, mobile: bottom panel).
 
-**7d. Inject and save**:
+**9d. Inject and save**:
 ```python
 import json, os
 TEMPLATE = ".claude/skills/travel/route_map.html"
@@ -185,20 +232,43 @@ with open(OUTPUT, "w") as f:
 
 Then use `share-link` skill to host the HTML and send the URL.
 
-Transport labels: 步行, 電車, 公車, 地鐵, 計程車, 自駕.
+Transport labels: Walk, Train, Bus, Subway, Taxi, Drive.
 
-### Step 8 — Format itinerary output
+---
 
-Include these sections:
-1. **天氣概覽**: per-day weather summary
-2. **航班建議** (if applicable): top 2-3 flights with price
-3. **交通券建議**: recommended passes
-4. **每日行程**: time-based schedule with place ratings, Maps links, transport between stops, review tips
-5. **互動路線圖**: share-link URL (multi mode HTML)
-6. **費用預估**: breakdown (flights, transport, accommodation, meals, attractions) with currency conversion via `exchange-rate` skill
-7. **Review sources**: all URLs with source type labels
+## Appendix: Review Card Format
 
-**Source attribution**: Always tag source type (`[Blog]`, `[PTT]`, `[Forum]`, `[News]`, `[Travel Site]`). Mark unverified: `（未經驗證）`.
+Both Mode 1 and Mode 2 use this format for each place. Adapt detail level to context (Mode 1 standalone = full detail, Mode 2 itinerary = concise).
+
+```
+### Place Name
+📍 Address | [Google Maps](link)
+⏰ Opening hours | 💰 Price level
+
+**Reviews**
+- Google: ⭐ 4.5/5 (1,234 reviews) — "representative review snippet"
+- TripAdvisor: ⭐ 4.0/5 (567 reviews) — "representative review snippet"
+- Tabelog: ⭐ 3.8/5 (89 reviews) — "representative snippet" (Japan restaurants only)
+- Jalan: ⭐ 4.2/5 (234 reviews) — "representative snippet" (Japan hotels/spots only)
+- YouTube: 🎬 N related videos — key insights from transcript
+  - [Video Title](url) — summary of highlights
+- Blog/Web: review highlights from web search
+  - [Article Title](url) — summary [Blog]
+  - [Thread Title](url) — summary [PTT/Forum]
+
+💡 Tips: practical advice consolidated from all sources
+```
+
+**Rules:**
+- MUST show every platform that was queried, even if no results (e.g. "TripAdvisor: not found")
+- Rating format: ⭐ X.X/5 (N reviews) — keep it concise
+- Each platform's snippet should be the most representative or useful comment
+- YouTube: summarize transcript insights if available; otherwise list video link + duration
+- Blog/Web: include source type tag `[Blog]`, `[PTT]`, `[Forum]`, `[News]`, `[Travel Site]`
+- All URLs must be clickable links
+- Mark unverified info: `(unverified)`
+
+---
 
 ## PDF Export
 

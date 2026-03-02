@@ -3,6 +3,9 @@
 
 Usage:
     web-search "query" [--limit N] [--region REGION] [--time RANGE]
+    web-search "query" --images
+    web-search "query" --videos
+    web-search "query" --news
 """
 
 from __future__ import annotations
@@ -11,6 +14,22 @@ import argparse
 import json
 import sys
 import textwrap
+import time
+
+
+def _search_with_retry(func, max_retries: int = 1, **kwargs) -> list:
+    """Call a ddgs search function with retry on failure."""
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return list(func(**kwargs))
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                print(f"Retry {attempt + 1}/{max_retries} after error: {e}", file=sys.stderr)
+                time.sleep(2)
+    assert last_error is not None
+    raise last_error
 
 
 def main() -> None:
@@ -20,7 +39,11 @@ def main() -> None:
     parser.add_argument("--region", default="wt-wt", help="Region code (default: wt-wt, tw-tzh for Taiwan)")
     parser.add_argument("--time", default=None, choices=["d", "w", "m", "y"], help="Time range: d=day, w=week, m=month, y=year")
     parser.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
-    parser.add_argument("--news", action="store_true", help="Search news instead of web")
+
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--news", action="store_true", help="Search news")
+    mode.add_argument("--images", action="store_true", help="Search images")
+    mode.add_argument("--videos", action="store_true", help="Search videos")
     args = parser.parse_args()
 
     try:
@@ -31,20 +54,16 @@ def main() -> None:
 
     try:
         ddgs = DDGS()
+        common = dict(keywords=args.query, region=args.region, timelimit=args.time, max_results=args.limit)
+
         if args.news:
-            results = list(ddgs.news(
-                keywords=args.query,
-                region=args.region,
-                timelimit=args.time,
-                max_results=args.limit,
-            ))
+            results = _search_with_retry(ddgs.news, **common)
+        elif args.images:
+            results = _search_with_retry(ddgs.images, **common)
+        elif args.videos:
+            results = _search_with_retry(ddgs.videos, **common)
         else:
-            results = list(ddgs.text(
-                keywords=args.query,
-                region=args.region,
-                timelimit=args.time,
-                max_results=args.limit,
-            ))
+            results = _search_with_retry(ddgs.text, **common)
     except Exception as e:
         print(f"Search error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -57,18 +76,45 @@ def main() -> None:
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return
 
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "")
-        url = r.get("href") or r.get("url", "")
-        body = r.get("body") or r.get("description", "")
-        date = r.get("date", "")
-        snippet = textwrap.fill(body, width=80, initial_indent="   ", subsequent_indent="   ")
-        print(f"{i}. {title}")
-        if date:
-            print(f"   Date: {date}")
-        print(f"   {url}")
-        print(snippet)
-        print()
+    if args.images:
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            image = r.get("image", "")
+            source = r.get("source", "")
+            print(f"{i}. {title}")
+            print(f"   {image}")
+            if source:
+                print(f"   Source: {source}")
+            print()
+    elif args.videos:
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            url = r.get("content", "")
+            publisher = r.get("publisher", "")
+            duration = r.get("duration", "")
+            print(f"{i}. {title}")
+            print(f"   {url}")
+            parts = []
+            if publisher:
+                parts.append(publisher)
+            if duration:
+                parts.append(duration)
+            if parts:
+                print(f"   {' | '.join(parts)}")
+            print()
+    else:
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            url = r.get("href") or r.get("url", "")
+            body = r.get("body") or r.get("description", "")
+            date = r.get("date", "")
+            snippet = textwrap.fill(body, width=80, initial_indent="   ", subsequent_indent="   ")
+            print(f"{i}. {title}")
+            if date:
+                print(f"   Date: {date}")
+            print(f"   {url}")
+            print(snippet)
+            print()
 
     print(f"Found {len(results)} result(s).")
 

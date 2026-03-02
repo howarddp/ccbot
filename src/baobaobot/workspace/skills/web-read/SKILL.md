@@ -5,7 +5,7 @@ description: "Extract clean text content from web pages. Use when: user shares a
 
 # Web Read Skill
 
-Extract clean, readable text content from any web page using trafilatura.
+Extract clean, readable text content from any web page. Uses a 2-layer fallback strategy.
 
 ## Usage
 
@@ -26,6 +26,19 @@ Extract clean, readable text content from any web page using trafilatura.
 {{BIN_DIR}}/web-read "https://example.com/article" --format xml
 ```
 
+## Fallback Strategy
+
+The `web-read` script uses trafilatura (fast HTTP fetch + content extraction).
+If the script fails (non-zero exit code), fall back to **chrome-devtools MCP**:
+
+### chrome-devtools MCP Fallback
+
+Use the chrome-devtools MCP tools to open the page in a real browser and extract text:
+
+1. Open the URL: `mcp__chrome-devtools__new_page(url, background=true, isolatedContext="web-read")`
+2. Extract text: `mcp__chrome-devtools__evaluate_script(function="() => document.body.innerText")`
+3. Clean up: `mcp__chrome-devtools__list_pages()` to get page ID, then `mcp__chrome-devtools__close_page(pageId)`
+
 ## When to Use
 
 - User shares a URL and asks "read this" or "summarize this"
@@ -39,4 +52,4 @@ Extract clean, readable text content from any web page using trafilatura.
 - Use `--length 3000` for long articles to avoid overwhelming output
 - Combine with `memory-save` to store article summaries
 - Combine with `web-search` for research workflows: search → read → summarize
-- Works best on articles, blog posts, documentation; may not work well on SPAs or JS-heavy sites
+- Layer 2 (chrome-devtools) is best for JS-heavy SPAs, bot-protected sites, and pages requiring authentication in the browser

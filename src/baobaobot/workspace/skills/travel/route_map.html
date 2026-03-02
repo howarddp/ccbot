@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
@@ -123,7 +123,7 @@ body.print-mode .leaflet-control-zoom{display:none}
 
 <button class="toggle" id="toggleBtn" onclick="togglePanel()">
   <span id="toggleIcon">☰</span>
-  <span>路線</span>
+  <span>Route</span>
 </button>
 <div id="panel"></div>
 <div id="map-area">
@@ -144,12 +144,10 @@ const ROUTE_DATA = __ROUTE_DATA_JSON__;
 // ============================================================
 const MC={green:'#34A853',blue:'#4285F4',red:'#EA4335'};
 const TC={
-  '步行':'#38A169','電車':'#D69E2E','公車':'#3182CE',
-  '地鐵':'#805AD5','計程車':'#E53E3E','自駕':'#DD6B20',
   'Walk':'#38A169','Train':'#D69E2E','Bus':'#3182CE',
   'Subway':'#805AD5','Taxi':'#E53E3E','Drive':'#DD6B20'
 };
-const TD={'步行':[6,8],'Walk':[6,8]};
+const TD={'Walk':[6,8]};
 const DAY_COLORS=['#EA4335','#4285F4','#34A853','#FBBC04','#9C27B0','#FF6D00','#00BCD4'];
 
 // ============================================================
@@ -182,8 +180,8 @@ function buildDayHTML(data,dayIndex){
     const lb=String.fromCharCode(65+i);
     const cl=MC[p.color]||'#4285F4';
     const globalIdx=dayIndex!==undefined?`${dayIndex},${i}`:String(i);
-    const sf=i===0?'<div class="place-sub">起點</div>':
-             i===places.length-1?'<div class="place-sub">終點</div>':'';
+    const sf=i===0?'<div class="place-sub">Start</div>':
+             i===places.length-1?'<div class="place-sub">End</div>':'';
     h+=`<div class="place" onclick="focusMarker(${globalIdx})">
       <div class="marker" style="background:${cl}">${lb}</div>
       <div class="place-info"><div class="place-name">${p.name}</div>${sf}</div></div>`;
@@ -216,7 +214,7 @@ function buildPanel(){
     h+=`</div>`;
     // Day tabs
     h+='<div class="day-tabs">';
-    h+=`<button class="day-tab active" onclick="switchDay(-1)">總覽</button>`;
+    h+=`<button class="day-tab active" onclick="switchDay(-1)">Overview</button>`;
     days.forEach((d,i)=>{
       const label=d.tab||d.title||('Day '+(i+1));
       h+=`<button class="day-tab" onclick="switchDay(${i})">${label}</button>`;
@@ -279,7 +277,7 @@ function addDayToMap(data,dayIndex,bounds){
       iconSize:[30,30],iconAnchor:[15,15],popupAnchor:[0,-16]});
     const m=L.marker([p.lat,p.lng],{icon}).addTo(map);
     const dayLabel=dayIndex>=0?(ROUTE_DATA.days[dayIndex].title||'Day '+(dayIndex+1))+' — ':'';
-    const sf=i===0?' (起點)':i===places.length-1?' (終點)':'';
+    const sf=i===0?' (Start)':i===places.length-1?' (End)':'';
     m.bindPopup(`<b>${dayLabel}${lb}. ${p.name}${sf}</b>`);
     dayMarkers.push(m);
     allLayers.push({dayIndex,layer:m,type:'marker'});

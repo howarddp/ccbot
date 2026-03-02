@@ -5,7 +5,7 @@ description: "Search the web via DuckDuckGo. Use when: user asks to look somethi
 
 # Web Search Skill
 
-Search the web using DuckDuckGo. Returns titles, URLs, and snippets.
+Search the web using DuckDuckGo. Returns titles, URLs, and snippets. Includes retry and chrome-devtools MCP fallback.
 
 ## Usage
 
@@ -25,9 +25,28 @@ Search the web using DuckDuckGo. Returns titles, URLs, and snippets.
 # News search
 {{BIN_DIR}}/web-search "query" --news
 
+# Image search
+{{BIN_DIR}}/web-search "query" --images
+
+# Video search
+{{BIN_DIR}}/web-search "query" --videos
+
 # JSON output
 {{BIN_DIR}}/web-search "query" --json
 ```
+
+## Fallback Strategy
+
+The script has built-in retry (1 retry with 2s delay on failure).
+If the script still fails (non-zero exit code), fall back to **chrome-devtools MCP**:
+
+### chrome-devtools MCP Fallback
+
+Use the chrome-devtools MCP tools to search via Google in a real browser:
+
+1. Open Google search: `mcp__chrome-devtools__new_page(url="https://www.google.com/search?q=<URL_ENCODED_QUERY>", background=true, isolatedContext="web-search")`
+2. Extract results: `mcp__chrome-devtools__evaluate_script(function="() => document.body.innerText")`
+3. Clean up: `mcp__chrome-devtools__list_pages()` to get page ID, then `mcp__chrome-devtools__close_page(pageId)`
 
 ## Common Region Codes
 
@@ -41,11 +60,13 @@ Search the web using DuckDuckGo. Returns titles, URLs, and snippets.
 - User asks "search for...", "look up...", "find information about..."
 - You need current/recent information beyond your training data
 - User wants news about a topic (use `--news`)
-- Researching a product, service, or topic
-- Fact-checking or verifying information
+- Finding images of a place or product (use `--images`)
+- Finding video content (use `--videos`)
 
 ## Tips
 
 - Use `--region tw-tzh` for Taiwan-specific results
 - Use `--time d` or `--time w` for recent results
 - Combine with `web-read` to get full article content from search result URLs
+- `--images` is useful for travel/place research
+- `--news`, `--images`, `--videos` are mutually exclusive
