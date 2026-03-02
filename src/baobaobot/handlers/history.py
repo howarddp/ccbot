@@ -107,13 +107,16 @@ async def send_history(
         _hist_user = getattr(target, "from_user", None)
         if _hist_user:
             _hist_vkey = _hist_user.id
-    # In group mode, override with chat_id to match _deliver_message queue_id
+    # In group mode, override with chat_id and use thread_id=0
+    # (group shares one session, verbosity is group-wide)
+    _hist_thread_id = message_thread_id or 0
     if agent_ctx.config.mode == "group":
         _hist_chat = getattr(target, "chat", None)
         if _hist_chat:
             _hist_vkey = _hist_chat.id
+        _hist_thread_id = 0
     verbosity = (
-        sm.get_verbosity(_hist_vkey, message_thread_id or 0)
+        sm.get_verbosity(_hist_vkey, _hist_thread_id)
         if _hist_vkey
         else "normal"
     )

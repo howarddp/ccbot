@@ -231,6 +231,10 @@ class SessionManager:
                             int(tid): lv for tid, lv in val.items()
                         }
                     # else: old flat format ("quiet"), silently discard
+                logger.debug(
+                    "Loaded user_verbosity from state.json: %s",
+                    self.user_verbosity,
+                )
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -971,7 +975,12 @@ class SessionManager:
             raise ValueError(f"Invalid verbosity level: {level}")
         if user_id not in self.user_verbosity:
             self.user_verbosity[user_id] = {}
-        if self.user_verbosity[user_id].get(thread_id) != level:
+        old = self.user_verbosity[user_id].get(thread_id)
+        logger.debug(
+            "set_verbosity: user=%d thread=%d old=%s new=%s",
+            user_id, thread_id, old, level,
+        )
+        if old != level:
             self.user_verbosity[user_id][thread_id] = level
             self._save_state()
 

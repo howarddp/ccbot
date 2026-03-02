@@ -89,9 +89,11 @@ async def verbosity_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     thread_id = update.message.message_thread_id or 0
     # In group mode, use chat_id as verbosity key (matches _deliver_message queue_id)
+    # and thread_id=0 (group shares one session, verbosity is group-wide)
     chat = update.effective_chat
     if agent_ctx.config.mode == "group" and chat:
         vkey = chat.id
+        thread_id = 0
     else:
         vkey = user.id
     current = agent_ctx.session_manager.get_verbosity(vkey, thread_id)
@@ -131,9 +133,11 @@ async def handle_verbosity_callback(
         return
 
     # In group mode, use chat_id as verbosity key (matches _deliver_message queue_id)
+    # and thread_id=0 (group shares one session, verbosity is group-wide)
     chat = query.message.chat if query.message else None
     if agent_ctx.config.mode == "group" and chat:
         vkey = chat.id
+        thread_id = 0
     else:
         vkey = user.id
     agent_ctx.session_manager.set_verbosity(vkey, thread_id, level)
