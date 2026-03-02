@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Session initialization: load recent memories, TODOs, and experience topics.
+
+Combines memory-list and todo-list into a single output with content,
+controlled by line limits (newest first, truncate older entries).
+
+Usage:
+    session-init [--workspace PATH] [--daily-days N] [--summary-days N]
+                 [--daily-limit N] [--summary-limit N]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _memory_common import connect_db, resolve_workspace, sync_workspace
+from _todo_common import format_todo_short
+from _todo_common import list_todos
+
+
+def _print_grouped(
+    rows: list[dict],
+    limit: int,
+    header_prefix: str = "###",
+) -> bool:
+    """Print rows grouped by date (newest first), respecting line limit.
+
+    Returns True if output was truncated.
+    """
+    groups: dict[str, list[str]] = {}
+    for r in rows:
+        d = r["date"]
+        groups.setdefault(d, []).append(r["content"])
+
+    total = 0
+    truncated = False
+    for d in sorted(groups, reverse=True):
+        lines = groups[d]
+        if total + len(lines) > limit and total > 0:
+            truncated = True
+            break
+        print(f"\n{header_prefix} {d}")
+        for line in lines:
+            print(line)
+        total += len(lines)
+
+    return truncated
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Session initialization")
+    parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
+    parser.add_argument(
+        "--daily-days", type=int, default=7, help="Daily memory lookback days (default: 7)"
+    )
+    parser.add_argument(
+        "--summary-days", type=int, default=3, help="Summary lookback days (default: 3)"
+    )
+    parser.add_argument(
+        "--daily-limit", type=int, default=150, help="Max daily lines (default: 150)"
+    )
+    parser.add_argument(
+        "--summary-limit", type=int, default=100, help="Max summary lines (default: 100)"
+    )
+    args = parser.parse_args()
+
+    workspace = resolve_workspace(args.workspace)
+    if not workspace.exists():
+        print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    conn = connect_db(workspace)
+    sync_workspace(conn, workspace)
+
+    today = date.today()
+
+    # --- Open TODOs ---
+    todos = list_todos(conn, status="open")
+    print(f"## ✅ Open TODOs ({len(todos)} items)")
+    if todos:
+        for row in todos:
+            print(format_todo_short(row))
+    else:
+        print("\nNo open TODOs.")
+
+    # --- Recently completed TODOs (by done_at) ---
+    done_cutoff = (today - timedelta(days=7)).isoformat()
+    done_todos = conn.execute(
+        "SELECT * FROM todos WHERE status = 'done' AND done_at >= ? "
+        "ORDER BY done_at DESC",
+        (done_cutoff,),
+    ).fetchall()
+    if done_todos:
+        print(f"\n## ✅ Recently Completed ({len(done_todos)} items, last 7 days)")
+        for row in done_todos[:20]:
+            print(format_todo_short(row))
+        if len(done_todos) > 20:
+            print(f"(... {len(done_todos) - 20} more omitted)")
+
+    # --- Summaries ---
+    summary_cutoff = (today - timedelta(days=args.summary_days)).isoformat()
+    summary_rows = conn.execute(
+        "SELECT date, line_num, content FROM memories "
+        "WHERE source = 'summary' AND date >= ? "
+        "ORDER BY date DESC, line_num ASC",
+        (summary_cutoff,),
+    ).fetchall()
+
+    print(f"\n## 📋 Summaries (recent {args.summary_days} days)")
+    if summary_rows:
+        truncated = _print_grouped(
+            [dict(r) for r in summary_rows], args.summary_limit
+        )
+        if truncated:
+            print(
+                "\n(... older entries omitted, use memory-search to find specific info)"
+            )
+    else:
+        print("\nNo summaries found.")
+
+    # --- Daily memories ---
+    daily_cutoff = (today - timedelta(days=args.daily_days)).isoformat()
+    daily_rows = conn.execute(
+        "SELECT date, line_num, content FROM memories "
+        "WHERE source = 'daily' AND date >= ? "
+        "ORDER BY date DESC, line_num ASC",
+        (daily_cutoff,),
+    ).fetchall()
+
+    print(f"\n## 📅 Daily Memories (recent {args.daily_days} days)")
+    if daily_rows:
+        truncated = _print_grouped(
+            [dict(r) for r in daily_rows], args.daily_limit
+        )
+        if truncated:
+            print(
+                "\n(... older entries omitted, use memory-search to find specific info)"
+            )
+    else:
+        print("\nNo daily memories found.")
+
+    # --- Experience topics (read file contents) ---
+    exp_dir = workspace / "memory" / "experience"
+    print("\n## 📚 Experience Topics")
+    if exp_dir.exists():
+        exp_files = sorted(exp_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if exp_files:
+            for f in exp_files[:10]:
+                print(f"\n### {f.stem}")
+                lines = f.read_text(encoding="utf-8").splitlines()
+                # Skip YAML frontmatter
+                start = 0
+                if lines and lines[0].strip() == "---":
+                    for i, line in enumerate(lines[1:], 1):
+                        if line.strip() == "---":
+                            start = i + 1
+                            break
+                content_lines = [l for l in lines[start:] if l.strip()]
+                for line in content_lines[:100]:
+                    print(line)
+                if len(content_lines) > 100:
+                    print("(... truncated)")
+            if len(exp_files) > 10:
+                omitted = [f.stem for f in exp_files[10:]]
+                print(f"\n(... {len(omitted)} more topics omitted: {', '.join(omitted)})")
+        else:
+            print("\nNo experience topics found.")
+    else:
+        print("\nNo experience topics found.")
+
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

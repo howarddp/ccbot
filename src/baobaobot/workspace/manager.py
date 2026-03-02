@@ -66,6 +66,7 @@ _BIN_SCRIPTS = [
     "yt-transcript",
     "yt-channel",
     "yt-search",
+    "session-init",
 ]
 
 # Skills deployed to each per-topic workspace
