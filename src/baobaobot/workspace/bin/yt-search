@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Search YouTube videos by keyword.
+
+Usage:
+    yt-search QUERY [-n LIMIT] [--sort relevance|date|views]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+
+
+def _run(cmd: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess and return the result."""
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    """Format seconds into HH:MM:SS or MM:SS."""
+    if not seconds:
+        return "?"
+    s = int(seconds)
+    h, remainder = divmod(s, 3600)
+    m, sec = divmod(remainder, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m}:{sec:02d}"
+
+
+def _format_count(n: int | None) -> str:
+    """Format a large number with K/M suffix."""
+    if n is None:
+        return "?"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
+def _format_date(date_str: str | None) -> str:
+    """Format YYYYMMDD to YYYY-MM-DD."""
+    if not date_str or len(date_str) != 8:
+        return date_str or "?"
+    return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Search YouTube videos by keyword")
+    parser.add_argument("query", nargs="+", help="Search query")
+    parser.add_argument(
+        "-n", "--limit",
+        type=int,
+        default=5,
+        help="Number of results (default: 5)",
+    )
+    parser.add_argument(
+        "--sort",
+        choices=["relevance", "date", "views"],
+        default="relevance",
+        help="Sort order (default: relevance)",
+    )
+    args = parser.parse_args()
+
+    query = " ".join(args.query)
+    limit = args.limit
+
+    # Build yt-dlp search URL
+    search_url = f"ytsearch{limit}:{query}"
+
+    print(f"Searching YouTube for: {query}...", file=sys.stderr)
+    result = _run([
+        "uvx", "yt-dlp",
+        "--js-runtimes", "node",
+        "--remote-components", "ejs:github",
+        search_url,
+        "--flat-playlist",
+        "--dump-json",
+        "--no-download",
+    ], timeout=180)
+
+    if result.returncode != 0:
+        print(f"Error searching YouTube: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse JSONL output
+    videos = []
+    for line in result.stdout.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            videos.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    if not videos:
+        print(f"No results found for: {query}")
+        return
+
+    # Sort if requested (yt-dlp default is relevance)
+    if args.sort == "date":
+        videos.sort(key=lambda v: v.get("upload_date", ""), reverse=True)
+    elif args.sort == "views":
+        videos.sort(key=lambda v: v.get("view_count") or 0, reverse=True)
+
+    # Print results
+    print(f"# YouTube Search: {query}\n")
+    print(f"Found {len(videos)} results:\n")
+
+    for i, v in enumerate(videos, 1):
+        title = v.get("title", "Unknown")
+        channel = v.get("channel", v.get("uploader", "?"))
+        date = _format_date(v.get("upload_date"))
+        duration = _format_duration(v.get("duration"))
+        views = _format_count(v.get("view_count"))
+        url = v.get("url") or v.get("webpage_url", "")
+        if url and not url.startswith("http"):
+            url = f"https://www.youtube.com/watch?v={url}"
+
+        print(f"{i}. **{title}**")
+        print(f"   {channel} | {date} | {duration} | {views} views")
+        print(f"   {url}")
+        print()
+
+
+if __name__ == "__main__":
+    main()
