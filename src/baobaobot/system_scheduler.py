@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 if TYPE_CHECKING:
+    from .backends.base import TmuxCliBackend
     from .session import SessionManager
     from .tmux_manager import TmuxManager
 
@@ -69,6 +70,7 @@ _ADMIN_NOTIFY_THRESHOLD = 5
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_output(stdout: str) -> tuple[str, str | None]:
     """Parse claude -p stdout.
 
@@ -85,16 +87,14 @@ def _parse_output(stdout: str) -> tuple[str, str | None]:
         if stripped == "[DONE]":
             return "done", None
         if stripped == "[NOTIFY]":
-            content = "\n".join(lines[i + 1:]).strip()
+            content = "\n".join(lines[i + 1 :]).strip()
             return "notify", content if content else None
     # No recognised marker — treat as silent to avoid noise
     return "silent", None
 
 
 def _get_meta(conn: sqlite3.Connection, key: str, default: str = "") -> str:
-    row = conn.execute(
-        "SELECT value FROM cron_meta WHERE key = ?", (key,)
-    ).fetchone()
+    row = conn.execute("SELECT value FROM cron_meta WHERE key = ?", (key,)).fetchone()
     return row[0] if row else default
 
 
@@ -136,6 +136,7 @@ class SystemScheduler:
         admin_user_ids: list[int] | None = None,
         on_notify: OnNotifyCallback,
         tmux_manager: TmuxManager | None = None,
+        backend: TmuxCliBackend | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._iter_workspace_dirs = iter_workspace_dirs
@@ -145,6 +146,7 @@ class SystemScheduler:
         self._admin_user_ids = admin_user_ids or []
         self._on_notify = on_notify
         self._tmux_manager = tmux_manager
+        self._backend = backend
 
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
         self._running = False
@@ -159,10 +161,13 @@ class SystemScheduler:
     def _detect_timezone() -> str:
         """Detect system timezone, fallback to UTC."""
         import subprocess
+
         try:
             result = subprocess.run(
                 ["readlink", "/etc/localtime"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0 and "zoneinfo/" in result.stdout:
                 return result.stdout.strip().split("zoneinfo/")[-1]
@@ -199,7 +204,9 @@ class SystemScheduler:
         """
         ws_dir = self._find_workspace_dir(workspace_name)
         if not ws_dir:
-            logger.warning("trigger_summary: workspace dir not found for %r", workspace_name)
+            logger.warning(
+                "trigger_summary: workspace dir not found for %r", workspace_name
+            )
             return False
 
         window_id = self._resolve_window(workspace_name)
@@ -217,7 +224,9 @@ class SystemScheduler:
             return False
 
         async with self._semaphore:
-            return await self._run_summary(workspace_name, ws_dir, window_id, jsonl_path)
+            return await self._run_summary(
+                workspace_name, ws_dir, window_id, jsonl_path
+            )
 
     # --- Timer loop ---
 
@@ -297,6 +306,7 @@ class SystemScheduler:
         summary_path = ws_dir / "memory" / "summaries" / f"{today_date}.md"
 
         from .utils import baobaobot_dir
+
         memory_save_bin = baobaobot_dir() / "shared" / "bin" / "memory-save"
 
         prompt = self._summary_template.format(
@@ -339,20 +349,27 @@ class SystemScheduler:
         # Send /clear to the tmux window to free context after successful summary
         await self._send_clear_to_window(workspace_name, window_id)
 
-        logger.info(
-            "SystemScheduler: summary done for %s → %s", workspace_name, action
-        )
+        logger.info("SystemScheduler: summary done for %s → %s", workspace_name, action)
         return True
 
     async def _run_claude_p(self, prompt: str, cwd: Path) -> str:
-        """Run `claude -p` as subprocess, return stdout."""
+        """Run headless CLI task, return stdout.
+
+        Uses backend.run_headless() when available.
+        """
+        if self._backend is not None and self._backend.supports_headless:
+            return await self._backend.run_headless(prompt, cwd)
+
+        # Fallback: direct claude -p call
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         proc = await asyncio.create_subprocess_exec(
             "claude",
-            "-p", prompt,
+            "-p",
+            prompt,
             "--dangerously-skip-permissions",
-            "--output-format", "text",
+            "--output-format",
+            "text",
             "--no-session-persistence",
             cwd=str(cwd),
             env=env,
@@ -372,9 +389,7 @@ class SystemScheduler:
 
     # --- Post-summary actions ---
 
-    async def _send_clear_to_window(
-        self, workspace_name: str, window_id: str
-    ) -> None:
+    async def _send_clear_to_window(self, workspace_name: str, window_id: str) -> None:
         """Send /clear to the tmux window after a successful summary."""
         if not self._tmux_manager:
             return
@@ -385,17 +400,20 @@ class SystemScheduler:
             if ok:
                 logger.info(
                     "SystemScheduler: sent /clear to window %s (%s)",
-                    window_id, workspace_name,
+                    window_id,
+                    workspace_name,
                 )
             else:
                 logger.warning(
                     "SystemScheduler: failed to send /clear to window %s (%s)",
-                    window_id, workspace_name,
+                    window_id,
+                    workspace_name,
                 )
         except Exception:
             logger.warning(
                 "SystemScheduler: error sending /clear to window %s (%s)",
-                window_id, workspace_name,
+                window_id,
+                workspace_name,
                 exc_info=True,
             )
 
@@ -413,7 +431,9 @@ class SystemScheduler:
             chat_id = self._session_manager.group_chat_ids.get(key)
             if not chat_id:
                 logger.debug(
-                    "SystemScheduler: no chat_id for user %d thread %d", user_id, thread_id
+                    "SystemScheduler: no chat_id for user %d thread %d",
+                    user_id,
+                    thread_id,
                 )
                 continue
             try:
@@ -421,7 +441,9 @@ class SystemScheduler:
                 delivered += 1
                 logger.info(
                     "SystemScheduler: delivered summary to user %d thread %d chat %d",
-                    user_id, thread_id, chat_id,
+                    user_id,
+                    thread_id,
+                    chat_id,
                 )
             except Exception:
                 logger.warning(
@@ -433,7 +455,8 @@ class SystemScheduler:
         if delivered == 0:
             logger.warning(
                 "SystemScheduler: no delivery targets found for workspace=%s window=%s",
-                workspace_name, window_id,
+                workspace_name,
+                window_id,
             )
 
     async def _maybe_notify_admin(
@@ -478,7 +501,9 @@ class SystemScheduler:
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_TIME, time_val)
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_JSONL, str(jsonl_path))
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_OFFSET, str(size))
-                _set_meta(conn, _META_KEY_NEXT_SUMMARY_RUN, str(now + _SUMMARY_INTERVAL_S))
+                _set_meta(
+                    conn, _META_KEY_NEXT_SUMMARY_RUN, str(now + _SUMMARY_INTERVAL_S)
+                )
                 _set_meta(conn, _META_KEY_SUMMARY_ERRORS, "0")
                 conn.commit()
             finally:
@@ -613,11 +638,16 @@ class SystemScheduler:
         return None
 
     def _get_jsonl_path(self, window_id: str, ws_dir: Path) -> Path | None:
-        """Find the JSONL transcript file for a window's current session."""
+        """Find the transcript file for a window's current session."""
         state = self._session_manager.get_window_state(window_id)
         if not state.session_id:
             return None
 
+        # Delegate to backend if available
+        if self._backend is not None:
+            return self._backend.find_session_file(state.session_id, state.cwd)
+
+        # Fallback: scan Claude projects dir
         projects_dir = Path.home() / ".claude" / "projects"
         if not projects_dir.exists():
             return None

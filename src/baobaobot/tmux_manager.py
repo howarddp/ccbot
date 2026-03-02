@@ -20,8 +20,12 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import libtmux
+
+if TYPE_CHECKING:
+    from .backends.base import TmuxCliBackend
 
 logger = logging.getLogger(__name__)
 
@@ -37,25 +41,46 @@ class TmuxWindow:
 
 
 class TmuxManager:
-    """Manages tmux windows for Claude Code sessions."""
+    """Manages tmux windows for CLI sessions."""
 
     def __init__(
         self,
         session_name: str = "baobaobot",
-        claude_command: str = "claude",
+        backend: object | None = None,
         main_window_name: str = "__main__",
+        *,
+        claude_command: str = "",
     ):
         """Initialize tmux manager.
 
         Args:
             session_name: Name of the tmux session to use.
-            claude_command: Command to start Claude Code in new windows.
+            backend: A TmuxCliBackend instance providing launch commands.
             main_window_name: Name of the placeholder main window.
+            claude_command: Deprecated — use *backend* instead.
         """
         self.session_name = session_name
-        self.claude_command = claude_command
         self.main_window_name = main_window_name
         self._server: libtmux.Server | None = None
+        self._backend: TmuxCliBackend | None = None
+        self._cli_command = claude_command or "claude"
+
+        if backend is not None:
+            from .backends.base import TmuxCliBackend as _TmuxCliBackend
+
+            if isinstance(backend, _TmuxCliBackend):
+                self._backend = backend
+
+    @property
+    def claude_command(self) -> str:
+        """Backward-compatible accessor."""
+        if self._backend is not None:
+            return self._backend.cli_command
+        return self._cli_command
+
+    @property
+    def backend(self) -> TmuxCliBackend | None:
+        return self._backend
 
     @property
     def server(self) -> libtmux.Server:
@@ -369,12 +394,12 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_get_pid)
 
-    async def restart_claude(self, window_id: str) -> bool:
-        """Kill the Claude Code process in a window and restart it.
+    async def restart_cli(self, window_id: str) -> bool:
+        """Kill the CLI process in a window and restart it.
 
-        Finds the claude child process of the shell, sends SIGTERM,
-        waits up to 3s, then SIGKILL if still alive.  Finally sends
-        the configured claude_command to restart.
+        Finds the CLI child process of the shell (using the backend's
+        ``process_pattern``), sends SIGTERM, waits up to 3s, then SIGKILL
+        if still alive.  Finally sends the launch command to restart.
 
         Returns:
             True if restart was initiated, False on failure.
@@ -384,30 +409,36 @@ class TmuxManager:
             logger.error("Cannot restart: no shell PID for window %s", window_id)
             return False
 
-        def _kill_claude() -> bool:
+        process_pattern = self._backend.process_pattern if self._backend else "claude"
+
+        def _kill_process() -> bool:
             try:
                 result = subprocess.run(
-                    ["pgrep", "-P", str(shell_pid), "-f", "claude"],
+                    ["pgrep", "-P", str(shell_pid), "-f", process_pattern],
                     capture_output=True,
                     text=True,
                 )
                 if result.returncode != 0 or not result.stdout.strip():
-                    logger.info("No claude child process found under PID %d", shell_pid)
+                    logger.info(
+                        "No %s child process found under PID %d",
+                        process_pattern,
+                        shell_pid,
+                    )
                     return True  # Nothing to kill, proceed to restart
 
                 for pid_str in result.stdout.strip().split("\n"):
                     pid = int(pid_str.strip())
                     try:
                         os.kill(pid, signal.SIGTERM)
-                        logger.info("Sent SIGTERM to claude PID %d", pid)
+                        logger.info("Sent SIGTERM to PID %d", pid)
                     except OSError as e:
                         logger.warning("SIGTERM failed for PID %d: %s", pid, e)
                 return True
             except Exception as e:
-                logger.error("Failed to find/kill claude process: %s", e)
+                logger.error("Failed to find/kill %s process: %s", process_pattern, e)
                 return False
 
-        killed = await asyncio.to_thread(_kill_claude)
+        killed = await asyncio.to_thread(_kill_process)
         if not killed:
             return False
 
@@ -418,7 +449,7 @@ class TmuxManager:
         def _force_kill() -> None:
             try:
                 result = subprocess.run(
-                    ["pgrep", "-P", str(shell_pid), "-f", "claude"],
+                    ["pgrep", "-P", str(shell_pid), "-f", process_pattern],
                     capture_output=True,
                     text=True,
                 )
@@ -427,7 +458,7 @@ class TmuxManager:
                         pid = int(pid_str.strip())
                         try:
                             os.kill(pid, signal.SIGKILL)
-                            logger.info("Sent SIGKILL to claude PID %d", pid)
+                            logger.info("Sent SIGKILL to PID %d", pid)
                         except OSError:
                             pass
             except Exception:
@@ -436,15 +467,20 @@ class TmuxManager:
         await asyncio.to_thread(_force_kill)
         await asyncio.sleep(0.5)
 
-        # Restart Claude Code
+        # Restart the CLI
         success = await self.send_keys(
             window_id, self.claude_command, enter=True, literal=True
         )
         if success:
-            logger.info("Restarted Claude Code in window %s", window_id)
+            logger.info("Restarted CLI in window %s", window_id)
         else:
-            logger.error("Failed to restart Claude Code in window %s", window_id)
+            logger.error("Failed to restart CLI in window %s", window_id)
         return success
+
+    # Backward-compatible alias
+    async def restart_claude(self, window_id: str) -> bool:
+        """Alias for restart_cli (backward compat)."""
+        return await self.restart_cli(window_id)
 
     async def kill_window(self, window_id: str) -> bool:
         """Kill a tmux window by its ID."""
@@ -515,12 +551,13 @@ class TmuxManager:
                 if start_claude:
                     pane = window.active_pane
                     if pane:
-                        # Unset CLAUDECODE to avoid "nested session" error
-                        # when bot runs inside the same tmux session
-                        pane.send_keys(
-                            f"unset CLAUDECODE && {self.claude_command}",
-                            enter=True,
+                        # Use backend's launch command (handles env unset etc.)
+                        launch_cmd = (
+                            self._backend.get_launch_command()
+                            if self._backend
+                            else f"unset CLAUDECODE && {self.claude_command}"
                         )
+                        pane.send_keys(launch_cmd, enter=True)
 
                 logger.info(
                     "Created window '%s' (id=%s) at %s",

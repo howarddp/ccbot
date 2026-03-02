@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .backends.base import Backend
     from .cron.service import CronService
     from .router import Router
     from .session import SessionManager
@@ -64,6 +65,7 @@ class AgentContext:
     """Runtime context for a single agent."""
 
     config: AgentConfig
+    backend: Backend
     tmux_manager: TmuxManager
     session_manager: SessionManager
     router: Router
@@ -85,6 +87,8 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
     wired to the agent's config.  SessionMonitor is left as None
     (created later during bot startup when the Application is available).
     """
+    from .backends import create_backend
+    from .backends.base import TmuxCliBackend
     from .cron.service import CronService
     from .routers import create_router
     from .session import SessionManager
@@ -92,9 +96,17 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
 
     router = create_router(config.mode)
 
+    backend = create_backend(
+        agent_type=config.agent_type,
+        cli_command=config.claude_command,
+    )
+
+    # All current backends are TmuxCliBackend subclasses
+    tmux_backend = backend if isinstance(backend, TmuxCliBackend) else None
+
     tmux_mgr = TmuxManager(
         session_name=config.tmux_session_name,
-        claude_command=config.claude_command,
+        backend=tmux_backend,
         main_window_name=config.tmux_main_window_name,
     )
 
@@ -102,7 +114,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
         state_file=config.state_file,
         session_map_file=config.session_map_file,
         tmux_session_name=config.tmux_session_name,
-        claude_projects_path=config.claude_projects_path,
+        backend=tmux_backend,
         tmux_manager=tmux_mgr,
         agent_name=config.name,
     )
@@ -120,6 +132,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
 
     return AgentContext(
         config=config,
+        backend=backend,
         tmux_manager=tmux_mgr,
         session_manager=session_mgr,
         router=router,

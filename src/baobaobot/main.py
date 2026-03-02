@@ -224,9 +224,16 @@ def _setup() -> None:
     mode_resp = input("Bot mode (forum/group) [forum]: ").strip().lower()
     mode = mode_resp if mode_resp in ("forum", "group") else "forum"
 
-    claude_cmd = input("Claude command [claude]: ").strip()
+    # Agent type selection
+    agent_type_input = input("Agent type (claude/gemini) [claude]: ").strip().lower()
+    agent_type = (
+        agent_type_input if agent_type_input in ("claude", "gemini") else "claude"
+    )
+
+    default_cmd = "gemini" if agent_type == "gemini" else "claude"
+    claude_cmd = input(f"CLI command [{default_cmd}]: ").strip()
     if not claude_cmd:
-        claude_cmd = "claude"
+        claude_cmd = default_cmd
 
     # Locale auto-detect from OS timezone
     detected_locale = _tz_to_locale()
@@ -260,7 +267,7 @@ def _setup() -> None:
 
 [global]
 allowed_users = [{users_toml}]
-claude_command = "{claude_cmd}"
+cli_command = "{claude_cmd}"
 locale = "{locale}"
 
 # Memory
@@ -279,6 +286,7 @@ monitor_poll_interval = 2.0    # seconds between session polling cycles
 # Per-agent keys override [global] values.
 [[agents]]
 name = "{agent_name}"
+agent_type = "{agent_type}"
 bot_token_env = "{token_env_var}"
 mode = "{mode}"
 """
@@ -302,10 +310,10 @@ mode = "{mode}"
     wm.init_shared()
     print(f"Shared files initialized at {shared_dir}")
 
-    # Install hook
-    from .hook import _install_hook
+    # Install hooks for all supported backends
+    from .hook import install_all_hooks
 
-    _install_hook()
+    install_all_hooks()
 
     # Install voice transcription dependency
     if enable_voice:

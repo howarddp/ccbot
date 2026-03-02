@@ -37,6 +37,7 @@ from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
 if TYPE_CHECKING:
+    from .backends.base import TmuxCliBackend  # noqa: F401
     from .tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
@@ -117,14 +118,22 @@ class SessionManager:
         state_file: Path,
         session_map_file: Path,
         tmux_session_name: str,
-        claude_projects_path: Path,
+        claude_projects_path: Path | None = None,
+        backend: TmuxCliBackend | None = None,  # accepts Backend subclasses
         tmux_manager: TmuxManager,
         agent_name: str = "",
     ) -> None:
         self._state_file = state_file
         self._session_map_file = session_map_file
         self._tmux_session_name = tmux_session_name
-        self._claude_projects_path = claude_projects_path
+        self._backend = backend
+        # Use backend's projects_path, fall back to explicit arg or Claude default
+        if claude_projects_path is not None:
+            self._claude_projects_path = claude_projects_path
+        elif backend is not None:
+            self._claude_projects_path = backend.projects_path
+        else:
+            self._claude_projects_path = Path.home() / ".claude" / "projects"
         self._tmux_manager = tmux_manager
         self._agent_name = agent_name
 
@@ -643,10 +652,17 @@ class SessionManager:
         logger.info("Cleared session for window_id %s", window_id)
 
     def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
-        """Build the direct file path for a session from session_id and cwd."""
-        if not session_id or not cwd:
+        """Build the direct file path for a session from session_id and cwd.
+
+        Delegates to backend.find_session_file() when available.
+        """
+        if not session_id:
             return None
-        # Encode cwd: /data/code/baobaobot -> -data-code-baobaobot
+        if self._backend is not None:
+            return self._backend.find_session_file(session_id, cwd)
+        if not cwd:
+            return None
+        # Fallback: Claude-specific path encoding
         encoded_cwd = cwd.replace("/", "-")
         return self._claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
 
@@ -978,7 +994,10 @@ class SessionManager:
         old = self.user_verbosity[user_id].get(thread_id)
         logger.debug(
             "set_verbosity: user=%d thread=%d old=%s new=%s",
-            user_id, thread_id, old, level,
+            user_id,
+            thread_id,
+            old,
+            level,
         )
         if old != level:
             self.user_verbosity[user_id][thread_id] = level

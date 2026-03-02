@@ -128,13 +128,21 @@ class AgentConfig:
 
 # Keys that can appear in [global] and be overridden per-agent
 _MERGEABLE_KEYS = {
+    "agent_type",
     "allowed_users",
     "claude_command",
+    "cli_command",
     "whisper_model",
     "cron_default_tz",
     "locale",
     "recent_memory_days",
     "monitor_poll_interval",
+}
+
+# Default CLI command per agent_type
+_DEFAULT_CLI_COMMANDS: dict[str, str] = {
+    "claude": "claude",
+    "gemini": "gemini",
 }
 
 
@@ -221,15 +229,23 @@ def _build_agent_config(
             return agent_raw[key]
         return global_section.get(key, default)
 
+    agent_type = _get("agent_type", "claude")
+    default_cli_cmd = _DEFAULT_CLI_COMMANDS.get(agent_type, agent_type)
+
+    # cli_command is the canonical field; claude_command is a legacy alias
+    cli_command = str(
+        _get("cli_command", "") or _get("claude_command", default_cli_cmd)
+    )
+
     return AgentConfig(
         name=name,
-        agent_type=agent_raw.get("agent_type", "claude"),
+        agent_type=agent_type,
         platform=agent_raw.get("platform", "telegram"),
         mode=agent_raw.get("mode", "forum"),
         bot_token=bot_token,
         allowed_users=allowed_users,
         tmux_session_name=tmux_session_name,
-        claude_command=_get("claude_command", "claude"),
+        claude_command=cli_command,
         config_dir=config_dir,
         agent_dir=agent_dir,
         monitor_poll_interval=float(_get("monitor_poll_interval", 2.0)),

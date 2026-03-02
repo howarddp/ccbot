@@ -28,6 +28,7 @@ from .transcript_parser import TranscriptParser
 from .utils import read_cwd_from_jsonl
 
 if TYPE_CHECKING:
+    from .backends.base import TmuxCliBackend  # noqa: F401
     from .session import SessionManager
     from .tmux_manager import TmuxManager
 
@@ -110,6 +111,7 @@ class SessionMonitor:
         poll_interval: float,
         state_file: Path,
         agent_name: str = "",
+        backend: TmuxCliBackend | None = None,
     ):
         self._tmux_manager = tmux_manager
         self._session_manager = session_manager
@@ -118,6 +120,7 @@ class SessionMonitor:
         self.projects_path = projects_path
         self.poll_interval = poll_interval
         self._agent_name = agent_name
+        self._backend = backend
 
         self.state = MonitorState(state_file=state_file)
         self.state.load()
@@ -156,12 +159,24 @@ class SessionMonitor:
         return cwds
 
     async def scan_projects(self) -> list[SessionInfo]:
-        """Scan projects that have active tmux windows."""
+        """Scan projects that have active tmux windows.
+
+        Delegates to backend.scan_session_files() when a backend is set.
+        """
         active_cwds = await self._get_active_cwds()
         if not active_cwds:
             return []
 
-        sessions = []
+        # Delegate to backend if available
+        if self._backend is not None:
+            backend_results = await self._backend.scan_session_files(active_cwds)
+            return [
+                SessionInfo(session_id=r.session_id, file_path=r.file_path)
+                for r in backend_results
+            ]
+
+        # Fallback: original Claude-specific scanning (for backward compat)
+        sessions: list[SessionInfo] = []
 
         if not self.projects_path.exists():
             return sessions
@@ -279,9 +294,14 @@ class SessionMonitor:
                 # Track safe_offset: only advance past lines that parsed
                 # successfully. A non-empty line that fails JSON parsing is
                 # likely a partial write; stop and retry next cycle.
+                parse_line = (
+                    self._backend.parse_transcript_line
+                    if self._backend is not None
+                    else TranscriptParser.parse_line
+                )
                 safe_offset = session.last_byte_offset
                 async for line in f:
-                    data = TranscriptParser.parse_line(line)
+                    data = parse_line(line)
                     if data:
                         new_entries.append(data)
                         safe_offset = await f.tell()
@@ -368,7 +388,12 @@ class SessionMonitor:
                 # Parse new entries using the shared logic, carrying over pending tools
                 carry = self._pending_tools.get(session_info.session_id, {})
                 nn_active = self._no_notify_active.get(session_info.session_id, False)
-                parsed_entries, remaining, nn_active = TranscriptParser.parse_entries(
+                parse_entries_fn = (
+                    self._backend.parse_transcript_entries
+                    if self._backend is not None
+                    else TranscriptParser.parse_entries
+                )
+                parsed_entries, remaining, nn_active = parse_entries_fn(
                     new_entries,
                     pending_tools=carry,
                     no_notify_active=nn_active,

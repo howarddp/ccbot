@@ -3017,17 +3017,25 @@ async def post_init(application: Application) -> None:
                 user_id, chat_id, thread_id, e,
             )
 
-    system_sched = SystemScheduler(
-        session_manager=agent_ctx.session_manager,
-        iter_workspace_dirs=agent_ctx.config.iter_workspace_dirs,
-        locale=agent_ctx.config.locale,
-        agent_name=agent_ctx.config.name,
-        admin_user_ids=list(agent_ctx.config.allowed_users),
-        on_notify=_on_summary_notify,
-        tmux_manager=agent_ctx.tmux_manager,
-    )
-    agent_ctx.system_scheduler = system_sched
-    await system_sched.start()
+    # Only start system scheduler for backends that support headless mode
+    if agent_ctx.backend.supports_headless:
+        system_sched = SystemScheduler(
+            session_manager=agent_ctx.session_manager,
+            iter_workspace_dirs=agent_ctx.config.iter_workspace_dirs,
+            locale=agent_ctx.config.locale,
+            agent_name=agent_ctx.config.name,
+            admin_user_ids=list(agent_ctx.config.allowed_users),
+            on_notify=_on_summary_notify,
+            tmux_manager=agent_ctx.tmux_manager,
+            backend=agent_ctx.backend,
+        )
+        agent_ctx.system_scheduler = system_sched
+        await system_sched.start()
+    else:
+        logger.info(
+            "SystemScheduler skipped: %s backend does not support headless mode",
+            agent_ctx.backend.name,
+        )
     logger.info("System scheduler started")
 
     # Start cron service
@@ -3127,6 +3135,7 @@ async def post_init(application: Application) -> None:
         poll_interval=agent_ctx.config.monitor_poll_interval,
         state_file=agent_ctx.config.monitor_state_file,
         agent_name=agent_ctx.config.name,
+        backend=agent_ctx.backend,
     )
 
     async def message_callback(msg: NewMessage) -> None:

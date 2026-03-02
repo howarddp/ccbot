@@ -155,26 +155,36 @@ def _try_extract(lines: list[str], pattern: UIPattern) -> InteractiveUIContent |
 # ── Public API ───────────────────────────────────────────────────────────
 
 
-def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
+def extract_interactive_content(
+    pane_text: str,
+    patterns: list[UIPattern] | None = None,
+) -> InteractiveUIContent | None:
     """Extract content from an interactive UI in terminal output.
 
     Tries each UI pattern in declaration order; first match wins.
     Returns None if no recognizable interactive UI is found.
+
+    Args:
+        pane_text: Captured terminal text.
+        patterns: Optional list of UIPatterns to use instead of the default.
     """
     if not pane_text:
         return None
 
     lines = pane_text.strip().split("\n")
-    for pattern in UI_PATTERNS:
+    for pattern in patterns if patterns is not None else UI_PATTERNS:
         result = _try_extract(lines, pattern)
         if result:
             return result
     return None
 
 
-def is_interactive_ui(pane_text: str) -> bool:
+def is_interactive_ui(
+    pane_text: str,
+    patterns: list[UIPattern] | None = None,
+) -> bool:
     """Check if terminal currently shows an interactive UI."""
-    return extract_interactive_content(pane_text) is not None
+    return extract_interactive_content(pane_text, patterns=patterns) is not None
 
 
 # ── Status line parsing ─────────────────────────────────────────────────
@@ -183,14 +193,23 @@ def is_interactive_ui(pane_text: str) -> bool:
 STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 
 
-def parse_status_line(pane_text: str) -> str | None:
-    """Extract the Claude Code status line from terminal output.
+def parse_status_line(
+    pane_text: str,
+    spinners: frozenset[str] | None = None,
+) -> str | None:
+    """Extract the CLI status line from terminal output.
 
     Status lines start with a spinner character (see STATUS_SPINNERS).
     Returns the text after the spinner, or None if no status line found.
+
+    Args:
+        pane_text: Captured terminal text.
+        spinners: Optional set of spinner characters to use.
     """
     if not pane_text:
         return None
+
+    active_spinners = spinners if spinners is not None else STATUS_SPINNERS
 
     # Search from bottom up — status line is near the bottom but may have
     # separator lines, prompts, etc. below it.
@@ -203,7 +222,7 @@ def parse_status_line(pane_text: str) -> str | None:
             continue
         if line.startswith("❯"):
             return None  # idle prompt → no active status
-        if line[0] in STATUS_SPINNERS:
+        if line[0] in active_spinners:
             return line[1:].strip()
     return None
 

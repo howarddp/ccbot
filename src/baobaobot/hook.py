@@ -131,6 +131,89 @@ def _install_hook() -> int:
     return 0
 
 
+_GEMINI_SETTINGS_FILE = Path.home() / ".gemini" / "settings.json"
+
+
+def _is_gemini_hook_installed(settings: dict) -> bool:
+    """Check if baobaobot hook is already installed in Gemini settings."""
+    hooks = settings.get("hooks", {})
+    session_start = hooks.get("SessionStart", [])
+
+    for entry in session_start:
+        if not isinstance(entry, dict):
+            continue
+        inner_hooks = entry.get("hooks", [])
+        for h in inner_hooks:
+            if not isinstance(h, dict):
+                continue
+            cmd = h.get("command", "")
+            if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
+                return True
+    return False
+
+
+def _install_gemini_hook() -> int:
+    """Install the baobaobot hook into Gemini's settings.json.
+
+    Returns 0 on success, 1 on error.
+    """
+    settings_file = _GEMINI_SETTINGS_FILE
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+    settings: dict = {}
+    if settings_file.exists():
+        try:
+            settings = json.loads(settings_file.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error("Error reading %s: %s", settings_file, e)
+            print(f"Error reading {settings_file}: {e}", file=sys.stderr)
+            return 1
+
+    if _is_gemini_hook_installed(settings):
+        logger.info("Hook already installed in %s", settings_file)
+        print(f"Hook already installed in {settings_file}")
+        return 0
+
+    baobaobot_path = _find_baobaobot_path()
+    hook_command = f"{baobaobot_path} hook"
+    hook_config = {"type": "command", "command": hook_command, "timeout": 5}
+    logger.info("Installing Gemini hook command: %s", hook_command)
+
+    if "hooks" not in settings:
+        settings["hooks"] = {}
+    if "SessionStart" not in settings["hooks"]:
+        settings["hooks"]["SessionStart"] = []
+
+    settings["hooks"]["SessionStart"].append({"hooks": [hook_config]})
+
+    try:
+        settings_file.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+        )
+    except OSError as e:
+        logger.error("Error writing %s: %s", settings_file, e)
+        print(f"Error writing {settings_file}: {e}", file=sys.stderr)
+        return 1
+
+    logger.info("Hook installed successfully in %s", settings_file)
+    print(f"Hook installed successfully in {settings_file}")
+    return 0
+
+
+def install_all_hooks() -> int:
+    """Install hooks for all supported backends.
+
+    Returns 0 if all succeed, 1 if any fail.
+    """
+    result = _install_hook()
+    # Install Gemini hook only if gemini CLI exists
+    if shutil.which("gemini"):
+        gemini_result = _install_gemini_hook()
+        if gemini_result != 0:
+            result = gemini_result
+    return result
+
+
 def hook_main() -> None:
     """Process a Claude Code hook event from stdin, or install the hook."""
     # Configure logging for the hook subprocess (main.py logging doesn't apply here)
