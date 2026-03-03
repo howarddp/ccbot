@@ -49,6 +49,21 @@ This is better than multiple `[SEND_FILE]` markers because:
 - No Telegram upload size limits (served via HTTP)
 - Files from any location can be combined into one page
 
+## Diff Files
+
+When sharing `.diff` or `.patch` files, convert to HTML first for a mobile-friendly view:
+
+1. Run the helper:
+   ```bash
+   "{{BIN_DIR}}/diff2html" /path/to/changes.diff --title "Description"
+   ```
+2. Share the generated HTML:
+   ```
+   [SHARE_LINK:/path/to/changes.html]
+   ```
+
+The helper generates a self-contained HTML page with syntax-highlighted, line-by-line diff view (via diff2html CDN) that is easy to read on mobile.
+
 ## CLI Usage
 
 Alternatively, use the CLI tool to generate URLs programmatically:

@@ -67,6 +67,7 @@ _BIN_SCRIPTS = [
     "yt-channel",
     "yt-search",
     "session-init",
+    "diff2html",
 ]
 
 # Skills deployed to each per-topic workspace

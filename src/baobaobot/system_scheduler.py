@@ -259,6 +259,11 @@ class SystemScheduler:
             except OSError:
                 continue
 
+            # Also check in-memory interaction time (user sends / Claude responses)
+            last_interact = self._session_manager.get_last_interaction_time(window_id)
+            if last_interact and (now - last_interact) < _IDLE_THRESHOLD_S:
+                continue
+
             tasks.append((ws_name, ws_dir, window_id, jsonl_path))
 
         for ws_name, ws_dir, window_id, jsonl_path in tasks:

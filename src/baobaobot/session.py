@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Iterator
@@ -147,6 +148,9 @@ class SessionManager:
         # Per-workspace verbosity: user_id -> {thread_id -> level}
         self.user_verbosity: dict[int, dict[int, str]] = {}
 
+        # In-memory interaction timestamps for idle detection (not persisted)
+        self._last_interaction: dict[str, float] = {}
+
         self._load_state()
         self._rebuild_reverse_index()
 
@@ -156,6 +160,16 @@ class SessionManager:
         for uid, bindings in self.thread_bindings.items():
             for tid, wid in bindings.items():
                 self._window_to_thread[(uid, wid)] = tid
+
+    # --- Interaction tracking (in-memory, for idle detection) ---
+
+    def touch_interaction(self, window_id: str) -> None:
+        """Record that an interaction occurred on this window (user send or Claude response)."""
+        self._last_interaction[window_id] = time.time()
+
+    def get_last_interaction_time(self, window_id: str) -> float:
+        """Return the last interaction timestamp for a window, or 0.0 if unknown."""
+        return self._last_interaction.get(window_id, 0.0)
 
     def _save_state(self) -> None:
         state: dict[str, Any] = {
@@ -1038,6 +1052,7 @@ class SessionManager:
             return False, "Window not found (may have been closed)"
         success = await self._tmux_manager.send_keys(window.window_id, text)
         if success:
+            self.touch_interaction(window_id)
             return True, f"Sent to {display}"
         return False, "Failed to send keys"
 

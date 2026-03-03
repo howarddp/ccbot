@@ -26,13 +26,25 @@ Only record things that would be **useful to recall days or weeks later**:
 - **System commands and lookups**: viewing TODOs, checking memory, listing schedules,
   reading summaries — these are navigation, not content
 - **Greetings and filler**: "hi", "thanks", "ok", simple acknowledgments
-- **Claude's responses**: tool calls, intermediate steps, command output —
-  unless the user explicitly confirmed or approved the result
+- **Claude's intermediate work**: tool calls, command output, debugging steps —
+  process details not worth recording on their own
 - **One-off Q&A with no lasting value**: asking the time, currency conversion,
   trivia questions, recipe suggestions — unless the user acted on it
 - Anything before `{last_summary_time}`
 
 **Rule of thumb**: if you wouldn't write it in a diary, don't include it.
+
+## Agent task results
+
+When the user requested a substantive task and the agent completed it, record the outcome
+with an `[Agent]` prefix. Only for meaningful tasks (research, code changes, file generation,
+planning) — skip trivial Q&A, lookups, and system commands.
+
+Format as a request + result pair:
+```
+- 14:30 [Howard] 要求查詢京都三日遊行程
+- 14:35 [Agent] 完成京都行程規劃：Day1 清水寺/祇園、Day2 伏見稻荷/嵐山、Day3 金閣寺/二條城
+```
 
 ## File Handling
 

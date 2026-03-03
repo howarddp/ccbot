@@ -2517,6 +2517,7 @@ async def handle_new_message(
             logger.info(f"No active groups for session {msg.session_id}")
             return
         for chat_id, wid in active_groups:
+            sm.touch_interaction(wid)
             # In group mode, use chat_id as queue key
             # (group chat_ids are negative, so no collision with user_ids)
             await _deliver_message(msg, bot, agent_ctx, chat_id, wid, thread_id=None)
@@ -2530,6 +2531,7 @@ async def handle_new_message(
         return
 
     for user_id, wid, thread_id in active_users:
+        sm.touch_interaction(wid)
         await _deliver_message(msg, bot, agent_ctx, user_id, wid, thread_id=thread_id)
 
 

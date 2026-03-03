@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Convert .diff / .patch files to mobile-friendly HTML using diff2html.
+
+Generates a self-contained HTML page (via diff2html CDN) with line-by-line
+mode optimized for mobile viewing.
+
+Usage:
+    diff2html /path/to/changes.diff
+    diff2html /path/to/changes.diff --title "My Changes"
+    diff2html /path/to/changes.patch -o /tmp/output.html
+
+Output: writes an HTML file (same name with .html extension by default)
+and prints the output path to stdout.
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import sys
+from pathlib import Path
+
+_HTML_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+<style>
+  body {{
+    margin: 0;
+    padding: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #fff;
+  }}
+  h1 {{
+    font-size: 1.1rem;
+    margin: 0 0 8px 0;
+    padding: 0 4px;
+    color: #24292f;
+  }}
+  /* Mobile-friendly overrides */
+  .d2h-wrapper {{
+    font-size: 12px;
+  }}
+  .d2h-code-line, .d2h-code-side-line {{
+    white-space: pre-wrap;
+    word-break: break-all;
+  }}
+  .d2h-file-header {{
+    font-size: 13px;
+  }}
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+<div id="diff"></div>
+<script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {{
+  var diffString = {diff_json};
+  var targetElement = document.getElementById("diff");
+  var configuration = {{
+    drawFileList: true,
+    matching: "lines",
+    outputFormat: "line-by-line",
+    highlight: true,
+    fileListToggle: true,
+    fileListStartVisible: false,
+    fileContentToggle: true,
+    stickyFileHeaders: true
+  }};
+  var diff2htmlUi = new Diff2HtmlUI(targetElement, diffString, configuration);
+  diff2htmlUi.draw();
+  diff2htmlUi.highlightCode();
+}});
+</script>
+</body>
+</html>
+"""
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Convert .diff/.patch files to mobile-friendly HTML"
+    )
+    parser.add_argument("path", help="Path to .diff or .patch file")
+    parser.add_argument("--title", default="", help="Page title (default: filename)")
+    parser.add_argument(
+        "-o", "--output", default="", help="Output path (default: same name with .html)"
+    )
+    args = parser.parse_args()
+
+    src = Path(args.path).resolve()
+    if not src.is_file():
+        print(f"Error: {args.path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    diff_text = src.read_text(encoding="utf-8", errors="replace")
+
+    title = html.escape(args.title or src.name)
+    diff_json = json.dumps(diff_text)
+
+    page = _HTML_TEMPLATE.format(title=title, diff_json=diff_json)
+
+    if args.output:
+        out = Path(args.output).resolve()
+    else:
+        out = src.with_suffix(".html")
+
+    out.write_text(page, encoding="utf-8")
+    print(str(out))
+
+
+if __name__ == "__main__":
+    main()
