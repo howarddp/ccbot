@@ -638,6 +638,7 @@ class ShareServer:
         # (preexec_fn is unsafe with threads, can deadlock after fork)
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
+        env.pop("CLAUDECODE", None)
         shell = os.environ.get("SHELL", "/bin/bash")
         proc = subprocess.Popen(
             [shell, "-l"],
