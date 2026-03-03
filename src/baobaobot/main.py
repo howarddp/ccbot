@@ -23,6 +23,7 @@ from pathlib import Path
 PIDFILE_NAME = "baobaobot.pid"
 
 _is_restart = False
+_stop_with_tmux_kill = False
 
 
 def _read_pid(config_dir: Path) -> int | None:
@@ -54,6 +55,60 @@ def _remove_pid(config_dir: Path) -> None:
         (config_dir / PIDFILE_NAME).unlink()
     except FileNotFoundError:
         pass
+
+
+def _kill_tmux_session(session_name: str = "baobaobot") -> None:
+    """Kill the tmux session if it exists."""
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", session_name],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        subprocess.run(
+            ["tmux", "kill-session", "-t", session_name],
+            capture_output=True,
+        )
+        print(f"Killed tmux session '{session_name}'.")
+
+
+def _stop() -> None:
+    """Send SIGUSR1 to the running bot to trigger graceful stop with summaries."""
+    from .utils import baobaobot_dir
+
+    config_dir = baobaobot_dir()
+    pid = _read_pid(config_dir)
+
+    if pid is None or not _is_pid_alive(pid):
+        print("baobaobot is not running.")
+        _remove_pid(config_dir)
+        _kill_tmux_session()
+        return
+
+    print(f"Sending stop signal to baobaobot (PID {pid})...")
+    os.kill(pid, signal.SIGUSR1)
+
+    # Poll for process exit — 6 minute timeout (summaries can take a while)
+    timeout = 360  # seconds
+    interval = 0.5
+    elapsed = 0.0
+    while elapsed < timeout:
+        time.sleep(interval)
+        elapsed += interval
+        if not _is_pid_alive(pid):
+            print("baobaobot stopped successfully.")
+            _kill_tmux_session()  # safety net
+            return
+
+    # Timeout — force kill
+    print(f"Timeout after {timeout}s. Force killing PID {pid}...")
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    time.sleep(0.5)
+    _remove_pid(config_dir)
+    _kill_tmux_session()
+    print("baobaobot force killed.")
 
 
 def _send_restart_notifications(
@@ -551,12 +606,110 @@ def _launch_in_tmux(config_dir: Path, session_name: str = "baobaobot") -> None:
     print("  Detach:     Ctrl-B, D")
 
 
+async def _safe_trigger_summary(
+    scheduler: object,  # SystemScheduler
+    ws_name: str,
+    logger: logging.Logger,
+) -> bool:
+    """Wrap scheduler.trigger_summary with exception handling."""
+    try:
+        result = await scheduler.trigger_summary(ws_name)  # type: ignore[union-attr]
+        if result:
+            logger.info("Summary completed for workspace '%s'", ws_name)
+        else:
+            logger.info("No new content for workspace '%s', skipping summary", ws_name)
+        return result
+    except Exception as e:
+        logger.error("Summary failed for workspace '%s': %s", ws_name, e)
+        return False
+
+
+async def _handle_stop_signal(
+    apps: list,  # list[Application]
+    agent_contexts: list,  # list[AgentContext]
+    stop_event: object,  # asyncio.Event
+) -> None:
+    """Handle SIGUSR1: run final summaries for all workspaces, then trigger shutdown."""
+    import asyncio
+
+    logger = logging.getLogger(__name__)
+    logger.warning("Received stop signal, running final summaries...")
+    print("Received stop signal, running final summaries...")
+
+    # Send shutdown notification to each agent's primary chat
+    for app, ctx in zip(apps, agent_contexts):
+        sm = ctx.session_manager
+        cfg = ctx.config
+        chat_id: int | None = None
+        thread_id: int | None = None
+
+        if cfg.mode == "group":
+            for cid in sm.group_bindings:
+                chat_id = cid
+                break
+        else:
+            for uid, bindings in sm.thread_bindings.items():
+                for tid in bindings:
+                    cid_val = sm.group_chat_ids.get(f"{uid}:{tid}")
+                    if cid_val:
+                        chat_id = cid_val
+                        thread_id = tid
+                        break
+                if chat_id:
+                    break
+
+        if chat_id is not None:
+            try:
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text="⏳ Shutting down for restart...",
+                    message_thread_id=thread_id,
+                )
+            except Exception as e:
+                logger.warning("Failed to send shutdown notification: %s", e)
+
+    # Collect summary tasks
+    tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
+    for ctx in agent_contexts:
+        scheduler = ctx.system_scheduler
+        if scheduler is None:
+            continue
+        for ws_dir in ctx.config.iter_workspace_dirs():
+            ws_name = ws_dir.name.removeprefix("workspace_")
+            task = asyncio.create_task(
+                _safe_trigger_summary(scheduler, ws_name, logger),
+                name=f"summary:{ctx.config.name}:{ws_name}",
+            )
+            tasks.append(task)
+
+    if tasks:
+        logger.info("Running %d summary tasks...", len(tasks))
+        done, pending = await asyncio.wait(tasks, timeout=300)  # 5 min timeout
+        for t in pending:
+            logger.warning("Cancelling timed-out summary task: %s", t.get_name())
+            t.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=5)
+        completed = sum(1 for t in done if not t.cancelled() and t.result())
+        logger.info("Summaries complete: %d/%d ran", completed, len(tasks))
+    else:
+        logger.info("No summary tasks to run.")
+
+    global _stop_with_tmux_kill
+    _stop_with_tmux_kill = True
+    stop_event.set()  # type: ignore[union-attr]
+
+
 def main() -> None:
     """Main entry point."""
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
         from .hook import hook_main
 
         hook_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "stop":
+        _stop()
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "add-agent":
@@ -644,101 +797,94 @@ def main() -> None:
         session = ctx.tmux_manager.get_or_create_session()
         logger.info("Tmux session '%s' ready", session.session_name)
 
-    from .bot import create_bot
+    import asyncio
 
-    if len(agent_contexts) == 1:
-        # Single agent: blocking run_polling
-        logger.info("Starting Telegram bot...")
-        application = create_bot(agent_contexts[0])
-        application.bot_data["_is_restart"] = _is_restart
-        application.run_polling(allowed_updates=["message", "callback_query"])
-    else:
-        # Multiple agents: run concurrently with asyncio
-        import asyncio
-        import signal
+    from .bot import create_bot, post_init, post_shutdown
 
-        logger.info("Starting %d Telegram bots...", len(agent_contexts))
+    _INIT_MAX_RETRIES = 10
+    _INIT_RETRY_DELAY = 5  # seconds
 
-        _INIT_MAX_RETRIES = 10
-        _INIT_RETRY_DELAY = 5  # seconds
+    async def _init_with_retry(app, post_init_fn) -> None:  # type: ignore[no-untyped-def]
+        """Initialize, post_init, start, and begin polling with retry on network errors."""
+        from telegram.error import NetworkError, TimedOut
 
-        async def _init_with_retry(app, post_init_fn) -> None:  # type: ignore[no-untyped-def]
-            """Initialize, post_init, start, and begin polling with retry on network errors."""
-            from telegram.error import TimedOut, NetworkError
-
-            for attempt in range(1, _INIT_MAX_RETRIES + 1):
+        for attempt in range(1, _INIT_MAX_RETRIES + 1):
+            try:
+                await app.initialize()
+                await post_init_fn(app)
+                await app.start()
+                updater = app.updater
+                assert updater is not None
+                await updater.start_polling(
+                    allowed_updates=["message", "callback_query"]
+                )
+                return
+            except (TimedOut, NetworkError, OSError) as e:
+                logger.warning(
+                    "Bot init attempt %d/%d failed: %s. Retrying in %ds...",
+                    attempt,
+                    _INIT_MAX_RETRIES,
+                    e,
+                    _INIT_RETRY_DELAY,
+                )
+                # Shut down partially initialized app before retrying
                 try:
-                    await app.initialize()
-                    await post_init_fn(app)
-                    await app.start()
-                    updater = app.updater
-                    assert updater is not None
-                    await updater.start_polling(
-                        allowed_updates=["message", "callback_query"]
-                    )
-                    return
-                except (TimedOut, NetworkError, OSError) as e:
-                    logger.warning(
-                        "Bot init attempt %d/%d failed: %s. Retrying in %ds...",
-                        attempt,
-                        _INIT_MAX_RETRIES,
-                        e,
-                        _INIT_RETRY_DELAY,
-                    )
-                    # Shut down partially initialized app before retrying
-                    try:
-                        if app.running:
-                            await app.stop()
-                        await app.shutdown()
-                    except Exception:
-                        pass
-                    if attempt == _INIT_MAX_RETRIES:
-                        raise
-                    await asyncio.sleep(_INIT_RETRY_DELAY)
-
-        async def _run_multi() -> None:
-            apps = []
-            for ctx in agent_contexts:
-                app = create_bot(ctx)
-                app.bot_data["_is_restart"] = _is_restart
-                apps.append(app)
-
-            # Initialize and start all applications
-            # NOTE: post_init is only called by run_polling(), not by
-            # initialize()/start() directly. We must call it manually.
-            from .bot import post_init
-
-            for app in apps:
-                await _init_with_retry(app, post_init)
-
-            logger.info("All %d bots started, waiting...", len(apps))
-
-            # Wait until interrupted via signal
-            stop_event = asyncio.Event()
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, stop_event.set)
-
-            await stop_event.wait()
-
-            # Shutdown all applications
-            from .bot import post_shutdown
-
-            for i, app in enumerate(apps):
-                try:
-                    await post_shutdown(app)
-                    updater = app.updater
-                    if updater:
-                        await updater.stop()
-                    await app.stop()
+                    if app.running:
+                        await app.stop()
                     await app.shutdown()
-                except Exception as e:
-                    logger.error("Error shutting down app %d: %s", i, e)
+                except Exception:
+                    pass
+                if attempt == _INIT_MAX_RETRIES:
+                    raise
+                await asyncio.sleep(_INIT_RETRY_DELAY)
 
-        try:
-            asyncio.run(_run_multi())
-        except KeyboardInterrupt:
-            pass
+    async def _run_bot() -> None:
+        apps = []
+        for ctx in agent_contexts:
+            app = create_bot(ctx)
+            app.bot_data["_is_restart"] = _is_restart
+            apps.append(app)
+
+        for app in apps:
+            await _init_with_retry(app, post_init)
+
+        logger.info("All %d bot(s) started, waiting...", len(apps))
+
+        # Wait until interrupted via signal
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+        loop.add_signal_handler(
+            signal.SIGUSR1,
+            lambda: asyncio.ensure_future(
+                _handle_stop_signal(apps, agent_contexts, stop_event)
+            ),
+        )
+
+        await stop_event.wait()
+
+        # Shutdown all applications
+        for i, app in enumerate(apps):
+            try:
+                await post_shutdown(app)
+                updater = app.updater
+                if updater:
+                    await updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception as e:
+                logger.error("Error shutting down app %d: %s", i, e)
+
+        if _stop_with_tmux_kill:
+            _kill_tmux_session()
+
+    logger.info("Starting %d Telegram bot(s)...", len(agent_contexts))
+
+    try:
+        asyncio.run(_run_bot())
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
