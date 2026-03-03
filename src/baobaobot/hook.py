@@ -216,6 +216,37 @@ def hook_main() -> None:
         )
         return
     tmux_session_name, window_id, window_name = parts
+
+    # When a share_server web tmux session is linked to this window,
+    # display-message may resolve to the web session (e.g. "web-abc123")
+    # instead of the real bot session. Find the real session by listing
+    # all sessions that contain this window.
+    if tmux_session_name.startswith("web-"):
+        try:
+            real_result = subprocess.run(
+                [
+                    "tmux",
+                    "list-panes",
+                    "-a",
+                    "-F",
+                    "#{session_name}:#{window_id}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            for line in real_result.stdout.strip().splitlines():
+                sess, wid = line.split(":", 1)
+                if wid == window_id and not sess.startswith("web-"):
+                    logger.debug(
+                        "Resolved web session %s -> real session %s",
+                        tmux_session_name,
+                        sess,
+                    )
+                    tmux_session_name = sess
+                    break
+        except Exception:
+            pass  # fall through with original name
+
     # Key uses window_id for uniqueness
     session_window_key = f"{tmux_session_name}:{window_id}"
 
