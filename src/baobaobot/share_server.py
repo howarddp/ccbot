@@ -1,4 +1,4 @@
-"""HTTP file server for sharing files and receiving uploads.
+"""HTTP file server for sharing files, uploads, and web terminals.
 
 Serves workspace files via signed URLs and provides upload pages.
 Designed to sit behind a Cloudflare quick tunnel.
@@ -8,11 +8,15 @@ Routes:
   GET  /p/{token}/           — directory preview (index.html or listing)
   GET  /u/{token}            — upload page
   POST /u/{token}/upload     — receive uploaded files
+  GET  /term/{token}/        — web terminal page (xterm.js)
+  GET  /term/{token}/ws      — web terminal WebSocket (PTY bridge)
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import fcntl
 import hashlib
 import hmac
 import html as html_mod
@@ -20,12 +24,28 @@ import json
 import logging
 import mimetypes
 import os
+import pty
+import signal
+import struct
+import subprocess
+import termios
 import time
 import urllib.parse
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from aiohttp import web
+from contextlib import contextmanager
+
+from aiohttp import WSMsgType, web
+
+
+@contextmanager
+def _suppress_os():
+    """Suppress OSError (e.g. bad file descriptor after close)."""
+    try:
+        yield
+    except OSError:
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +209,7 @@ _UPLOAD_HTML = (_TEMPLATES_DIR / "upload.html").read_text(encoding="utf-8")
 _EXPIRED_HTML = (_TEMPLATES_DIR / "expired.html").read_text(encoding="utf-8")
 _INVALID_HTML = (_TEMPLATES_DIR / "invalid.html").read_text(encoding="utf-8")
 _DIRECTORY_HTML = (_TEMPLATES_DIR / "directory.html").read_text(encoding="utf-8")
+_TERMINAL_HTML = (_TEMPLATES_DIR / "terminal.html").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +260,9 @@ class ShareServer:
         self._app.router.add_get("/p/{token}/{path:.*}", self._handle_preview)
         self._app.router.add_get("/u/{token}", self._handle_upload_page)
         self._app.router.add_post("/u/{token}/upload", self._handle_upload)
+        self._app.router.add_get("/term/{token}/ws", self._handle_terminal_ws)
+        self._app.router.add_get("/term/{token}/", self._handle_terminal_page)
+        self._app.router.add_get("/term/{token}", self._handle_terminal_page)
 
     def _find_file(self, rel_path: str, workspace: Path | None = None) -> Path | None:
         """Find a file in a specific workspace or across all roots."""
@@ -567,6 +591,144 @@ class ShareServer:
                 logger.exception("Upload callback failed")
 
         return web.json_response({"status": "ok", "files": filenames})
+
+    # -- Terminal (web shell) --
+
+    def _verify_terminal_workspace(self, token: str) -> tuple[Path | None, str]:
+        """Verify terminal token against each registered workspace root.
+
+        Token payload format: 'term:{workspace_abs}'
+        Returns (workspace_path, status).
+        """
+        worst = "invalid"
+        for root in self._workspace_roots:
+            status = check_token(token, f"term:{root}")
+            if status == "ok":
+                return root, "ok"
+            if status == "expired":
+                worst = "expired"
+        return None, worst
+
+    async def _handle_terminal_page(self, request: web.Request) -> web.Response:
+        """Serve the xterm.js terminal page."""
+        token = request.match_info["token"]
+        workspace, ws_status = self._verify_terminal_workspace(token)
+        if workspace is None:
+            return _deny_response(ws_status)
+        return web.Response(text=_TERMINAL_HTML, content_type="text/html")
+
+    async def _handle_terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """WebSocket handler: bridge browser ↔ PTY."""
+        token = request.match_info["token"]
+        workspace, ws_status = self._verify_terminal_workspace(token)
+        if workspace is None:
+            raise web.HTTPForbidden()
+
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        # Create PTY
+        master_fd, slave_fd = pty.openpty()
+
+        # Set default terminal size
+        winsize = struct.pack("HHHH", 24, 80, 0, 0)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+        # Spawn shell — use start_new_session instead of preexec_fn
+        # (preexec_fn is unsafe with threads, can deadlock after fork)
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        shell = os.environ.get("SHELL", "/bin/bash")
+        proc = subprocess.Popen(
+            [shell, "-l"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=str(workspace),
+            env=env,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        logger.info("Terminal session started: PID %d in %s", proc.pid, workspace)
+
+        # Set master_fd to non-blocking for async reading
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        loop = asyncio.get_event_loop()
+
+        async def pty_reader() -> None:
+            """Read PTY output and send to WebSocket using event loop I/O."""
+            while not ws.closed:
+                # Wait for data using event loop's I/O multiplexer
+                readable = loop.create_future()
+                loop.add_reader(master_fd, readable.set_result, True)
+                try:
+                    await readable
+                except asyncio.CancelledError:
+                    with _suppress_os():
+                        loop.remove_reader(master_fd)
+                    raise
+                finally:
+                    with _suppress_os():
+                        loop.remove_reader(master_fd)
+                # Read available data
+                try:
+                    data = os.read(master_fd, 32768)
+                    if not data:
+                        break
+                    await ws.send_bytes(data)
+                except OSError:
+                    break
+
+        reader_task = asyncio.create_task(pty_reader())
+
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        if data.get("type") == "resize":
+                            cols = data.get("cols", 80)
+                            rows = data.get("rows", 24)
+                            ws_pack = struct.pack("HHHH", rows, cols, 0, 0)
+                            try:
+                                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, ws_pack)
+                                os.kill(proc.pid, signal.SIGWINCH)
+                            except OSError:
+                                pass
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                elif msg.type == WSMsgType.BINARY:
+                    try:
+                        os.write(master_fd, msg.data)
+                    except OSError:
+                        break
+                elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                    break
+        finally:
+            # Cleanup: close PTY, cancel reader, terminate shell
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            reader_task.cancel()
+            try:
+                await reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            logger.info("Terminal session ended: PID %d", proc.pid)
+
+        return ws
 
     # -- Server lifecycle --
 

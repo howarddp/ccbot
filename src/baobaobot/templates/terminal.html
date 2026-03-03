@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
+#terminal { height: calc(100% - 44px); }
+.toolbar {
+  height: 44px;
+  background: #2d2d2d;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  gap: 3px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.toolbar button {
+  background: #3c3c3c;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.toolbar button:active { background: #555; }
+.toolbar button.mod { background: #4a3a1a; }
+.toolbar button.mod.active { background: #6a5a2a; border-color: #8a7a4a; color: #fff; }
+.status-bar {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 24px; background: #007acc; color: #fff;
+  font-size: 12px; font-family: system-ui, sans-serif;
+  display: flex; align-items: center; padding: 0 8px;
+  z-index: 10;
+}
+.status-bar.disconnected { background: #c00; }
+#terminal { margin-top: 24px; height: calc(100% - 68px); }
+</style>
+</head>
+<body>
+<div class="status-bar" id="statusBar">
+  <span id="statusText">Connecting...</span>
+</div>
+<div id="terminal"></div>
+<div class="toolbar">
+  <button onclick="sendKey('\x1b')">Esc</button>
+  <button class="mod" id="ctrlBtn" onclick="toggleMod('ctrl')">Ctrl</button>
+  <button onclick="sendKey('\t')">Tab</button>
+  <button onclick="sendKey('\x1b[A')">&#x25B2;</button>
+  <button onclick="sendKey('\x1b[B')">&#x25BC;</button>
+  <button onclick="sendKey('\x1b[D')">&#x25C0;</button>
+  <button onclick="sendKey('\x1b[C')">&#x25B6;</button>
+  <button onclick="sendKey('\x03')">^C</button>
+  <button onclick="sendKey('\x04')">^D</button>
+  <button onclick="sendKey('\x1a')">^Z</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+<script>
+(function() {
+  const term = new Terminal({
+    fontSize: 14,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#aeafad' },
+    cursorBlink: true,
+    scrollback: 5000,
+    convertEol: true,
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+  term.loadAddon(fitAddon);
+  term.loadAddon(webLinksAddon);
+  term.open(document.getElementById('terminal'));
+  fitAddon.fit();
+
+  const statusBar = document.getElementById('statusBar');
+  const statusText = document.getElementById('statusText');
+  let ctrlActive = false;
+  let socket = null;
+
+  // Build WebSocket URL from current page URL
+  let basePath = location.pathname;
+  if (!basePath.endsWith('/')) basePath += '/';
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = proto + '//' + location.host + basePath + 'ws';
+
+  function setStatus(text, connected) {
+    statusText.textContent = text;
+    statusBar.className = 'status-bar' + (connected ? '' : ' disconnected');
+  }
+
+  function connect() {
+    socket = new WebSocket(wsUrl);
+    socket.binaryType = 'arraybuffer';
+
+    socket.onopen = function() {
+      setStatus('Connected', true);
+      // Send initial size
+      socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      term.focus();
+    };
+
+    socket.onmessage = function(e) {
+      if (e.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(e.data));
+      }
+    };
+
+    socket.onclose = function() {
+      setStatus('Disconnected — session ended or token expired', false);
+    };
+
+    socket.onerror = function() {
+      setStatus('Connection error', false);
+    };
+  }
+
+  // Terminal input -> WebSocket
+  term.onData(function(data) {
+    if (ctrlActive) {
+      var ch = data.charCodeAt(0);
+      if (ch >= 97 && ch <= 122) { data = String.fromCharCode(ch - 96); }
+      else if (ch >= 65 && ch <= 90) { data = String.fromCharCode(ch - 64); }
+      setMod('ctrl', false);
+    }
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(new TextEncoder().encode(data));
+    }
+  });
+
+  // Resize
+  term.onResize(function(size) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
+    }
+  });
+
+  window.addEventListener('resize', function() { fitAddon.fit(); });
+
+  // Toolbar helpers (global)
+  window.sendKey = function(key) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(new TextEncoder().encode(key));
+    }
+    term.focus();
+  };
+
+  window.toggleMod = function(mod) {
+    if (mod === 'ctrl') setMod('ctrl', !ctrlActive);
+  };
+
+  function setMod(mod, active) {
+    if (mod === 'ctrl') {
+      ctrlActive = active;
+      document.getElementById('ctrlBtn').classList.toggle('active', active);
+    }
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

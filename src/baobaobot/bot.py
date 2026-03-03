@@ -608,6 +608,92 @@ async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await safe_reply(update.message, f"🔗 [Browse {display_name}]({url})")
 
 
+async def terminal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a web terminal URL for the current topic's workspace."""
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    workspace_dir = _resolve_workspace_dir(update, context)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    ctx = _ctx(context)
+    if not public_url or not ctx.share_server:
+        await safe_reply(update.message, "❌ Share server unavailable.")
+        return
+
+    # Resolve to workspace root
+    resolved = workspace_dir.resolve()
+    ws_roots = ctx.config.iter_workspace_dirs()
+    workspace_root = None
+    for root in ws_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            workspace_root = root
+            break
+        except ValueError:
+            continue
+    if workspace_root is None:
+        workspace_root = workspace_dir
+
+    from .share_server import generate_token
+
+    ws_root = str(workspace_root.resolve())
+    display_name = workspace_root.name
+    token = generate_token(f"term:{ws_root}", ttl=600, name=display_name)
+    url = f"{public_url}/term/{token}/"
+
+    await safe_reply(update.message, f"💻 [Terminal {display_name}]({url})")
+
+
+async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a web upload URL for the current topic's workspace."""
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    workspace_dir = _resolve_workspace_dir(update, context)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    ctx = _ctx(context)
+    if not public_url or not ctx.share_server:
+        await safe_reply(update.message, "❌ Share server unavailable.")
+        return
+
+    # Resolve to workspace root
+    resolved = workspace_dir.resolve()
+    ws_roots = ctx.config.iter_workspace_dirs()
+    workspace_root = None
+    for root in ws_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            workspace_root = root
+            break
+        except ValueError:
+            continue
+    if workspace_root is None:
+        workspace_root = workspace_dir
+
+    from .share_server import generate_token
+
+    ws_root = str(workspace_root.resolve())
+    display_name = workspace_root.name
+    token = generate_token(f"upload:{ws_root}", ttl=600, name=display_name)
+    url = f"{public_url}/u/{token}"
+
+    await safe_reply(update.message, f"📤 [Upload to {display_name}]({url})")
+
+
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
@@ -3232,6 +3318,8 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("workspace", workspace_command))
     application.add_handler(CommandHandler("ls", ls_command))
     application.add_handler(CommandHandler("browse", browse_command))
+    application.add_handler(CommandHandler("terminal", terminal_command))
+    application.add_handler(CommandHandler("upload", upload_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("verbosity", verbosity_command))
