@@ -28,18 +28,29 @@ logger = logging.getLogger(__name__)
 
 # Gemini UI patterns for terminal detection
 _GEMINI_UI_PATTERNS: list[UIPattern] = [
+    # Gemini's "Action Required" permission prompt (shell commands, MCP tools)
+    # Note: Gemini renders inside box-drawing chars (│ ... │), so avoid ^ anchors
+    UIPattern(
+        name="GeminiPermission",
+        top=(re.compile(r"Action Required"),),
+        bottom=(
+            re.compile(r"suggest changes"),
+            re.compile(r"\(esc\)"),
+        ),
+        min_gap=2,
+    ),
     # Gemini's yes/no confirmation
     UIPattern(
         name="GeminiConfirm",
-        top=(re.compile(r"^\s*Do you want to"),),
-        bottom=(re.compile(r"^\s*\(y/n\)"),),
+        top=(re.compile(r"Do you want to"),),
+        bottom=(re.compile(r"\(y/n\)"),),
         min_gap=1,
     ),
     # Gemini sandbox warning
     UIPattern(
         name="GeminiSandbox",
-        top=(re.compile(r"^\s*⚠\s+Warning"),),
-        bottom=(re.compile(r"^\s*\(y/n\)"),),
+        top=(re.compile(r"⚠\s+Warning"),),
+        bottom=(re.compile(r"\(y/n\)"),),
         min_gap=1,
     ),
 ]
@@ -61,6 +72,16 @@ class GeminiBackend(TmuxCliBackend):
     projects_path = Path.home() / ".gemini" / "tmp"
     settings_file = Path.home() / ".gemini" / "settings.json"
     env_unset_var = None  # Gemini doesn't need env var unsetting
+
+    # Transcript format flag — Gemini uses full-JSON, not line-based JSONL
+    is_full_json = True
+    startup_ready_pattern = r"Type your message"  # Gemini shows this when ready
+    startup_timeout = 15.0
+
+    def __init__(self, cli_command: str = ""):
+        super().__init__(cli_command)
+        # Cache: session_id → file path (avoids reading every JSON)
+        self._session_file_cache: dict[str, Path] = {}
 
     # --- Capabilities ---
 
@@ -110,61 +131,66 @@ class GeminiBackend(TmuxCliBackend):
             return None
 
     def _find_project_dirs(self, cwd: str) -> list[Path]:
-        """Find all possible Gemini project directories for a cwd.
-
-        Gemini may store sessions under:
-          1. ~/.gemini/tmp/<project_name>/chats/  (from projects.json)
-          2. ~/.gemini/tmp/<sha256_hash>/chats/   (hash of path)
-        """
+        """Find all possible Gemini project directories for a cwd."""
         dirs: list[Path] = []
 
-        # Try project name from projects.json
         project_name = self._project_name_for_cwd(cwd)
         if project_name:
             named_dir = self.projects_path / project_name
             if named_dir.is_dir():
                 dirs.append(named_dir)
 
-        # Try sha256 hash
         hash_dir = self.projects_path / self._project_hash(cwd)
         if hash_dir.is_dir() and hash_dir not in dirs:
             dirs.append(hash_dir)
 
         return dirs
 
+    def _scan_and_cache(self, chats_dir: Path) -> None:
+        """Read session IDs from chat files and populate cache."""
+        for f in chats_dir.glob("*.json"):
+            if f in self._session_file_cache.values():
+                continue
+            try:
+                data = json.loads(f.read_text())
+                sid = data.get("sessionId", "")
+                if sid:
+                    self._session_file_cache[sid] = f
+            except (json.JSONDecodeError, OSError):
+                continue
+
     def find_session_file(self, session_id: str, cwd: str = "") -> Path | None:
         if not session_id:
             return None
 
-        # If cwd is provided, search in the specific project dirs
+        # Check cache first
+        cached = self._session_file_cache.get(session_id)
+        if cached and cached.exists():
+            return cached
+
+        # Scan project dirs for cwd
         if cwd:
             for project_dir in self._find_project_dirs(cwd):
                 chats_dir = project_dir / "chats"
                 if chats_dir.is_dir():
-                    for f in chats_dir.glob("*.json"):
-                        try:
-                            data = json.loads(f.read_text())
-                            if data.get("sessionId") == session_id:
-                                return f
-                        except (json.JSONDecodeError, OSError):
-                            continue
+                    self._scan_and_cache(chats_dir)
 
-        # Fallback: search all project dirs
+            cached = self._session_file_cache.get(session_id)
+            if cached and cached.exists():
+                return cached
+
+        # Fallback: scan all project dirs
         if self.projects_path.exists():
             for project_dir in self.projects_path.iterdir():
                 if not project_dir.is_dir():
                     continue
                 chats_dir = project_dir / "chats"
-                if not chats_dir.is_dir():
-                    continue
-                for f in chats_dir.glob("*.json"):
-                    try:
-                        data = json.loads(f.read_text())
-                        if data.get("sessionId") == session_id:
-                            return f
-                    except (json.JSONDecodeError, OSError):
-                        continue
+                if chats_dir.is_dir():
+                    self._scan_and_cache(chats_dir)
 
+        cached = self._session_file_cache.get(session_id)
+        if cached and cached.exists():
+            return cached
         return None
 
     async def scan_session_files(self, active_cwds: set[str]) -> list[SessionFileInfo]:
@@ -173,8 +199,7 @@ class GeminiBackend(TmuxCliBackend):
         if not self.projects_path.exists():
             return sessions
 
-        # Build a mapping of project_dir -> cwd for matching
-        # First, check projects.json for named projects
+        # Build name → cwd mapping from projects.json
         projects_file = Path.home() / ".gemini" / "projects.json"
         name_to_cwd: dict[str, str] = {}
         if projects_file.exists():
@@ -185,11 +210,10 @@ class GeminiBackend(TmuxCliBackend):
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Build hash -> cwd mapping for active cwds
+        # Build hash → cwd mapping for active cwds
         hash_to_cwd: dict[str, str] = {}
         for cwd in active_cwds:
-            h = self._project_hash(cwd)
-            hash_to_cwd[h] = cwd
+            hash_to_cwd[self._project_hash(cwd)] = cwd
 
         for project_dir in self.projects_path.iterdir():
             if not project_dir.is_dir():
@@ -198,7 +222,6 @@ class GeminiBackend(TmuxCliBackend):
             dir_name = project_dir.name
             matched_cwd: str | None = None
 
-            # Check if dir name is a project name from projects.json
             if dir_name in name_to_cwd:
                 cwd = name_to_cwd[dir_name]
                 try:
@@ -208,7 +231,6 @@ class GeminiBackend(TmuxCliBackend):
                 if norm_cwd in active_cwds:
                     matched_cwd = norm_cwd
 
-            # Check if dir name is a hash of an active cwd
             if not matched_cwd and dir_name in hash_to_cwd:
                 matched_cwd = hash_to_cwd[dir_name]
 
@@ -226,6 +248,7 @@ class GeminiBackend(TmuxCliBackend):
                     data = json.loads(content)
                     session_id = data.get("sessionId", "")
                     if session_id:
+                        self._session_file_cache[session_id] = chat_file
                         sessions.append(
                             SessionFileInfo(
                                 session_id=session_id,

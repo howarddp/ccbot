@@ -50,7 +50,7 @@ def _make_agent_ctx(*, allowed: bool = True, wid: str | None = "@1") -> MagicMoc
     tm.find_window_by_id = AsyncMock(return_value=MagicMock(window_id=wid))
     tm.capture_pane = AsyncMock(return_value="❯ ")
     tm.send_keys = AsyncMock()
-    tm.restart_claude = AsyncMock(return_value=True)
+    tm.restart_cli = AsyncMock(return_value=True)
     ctx.tmux_manager = tm
 
     return ctx
@@ -393,7 +393,7 @@ class TestHandleMenuCallbackRestart:
                 update, _make_context(agent_ctx), query, query.data, agent_ctx
             )
 
-            agent_ctx.tmux_manager.restart_claude.assert_called_once_with("@1")
+            agent_ctx.tmux_manager.restart_cli.assert_called_once_with("@1")
             text = mock_reply.call_args[0][1]
             assert "restarted" in text
 

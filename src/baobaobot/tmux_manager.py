@@ -46,10 +46,8 @@ class TmuxManager:
     def __init__(
         self,
         session_name: str = "baobaobot",
-        backend: object | None = None,
+        backend: TmuxCliBackend | None = None,
         main_window_name: str = "__main__",
-        *,
-        claude_command: str = "",
     ):
         """Initialize tmux manager.
 
@@ -57,26 +55,18 @@ class TmuxManager:
             session_name: Name of the tmux session to use.
             backend: A TmuxCliBackend instance providing launch commands.
             main_window_name: Name of the placeholder main window.
-            claude_command: Deprecated — use *backend* instead.
         """
         self.session_name = session_name
         self.main_window_name = main_window_name
         self._server: libtmux.Server | None = None
-        self._backend: TmuxCliBackend | None = None
-        self._cli_command = claude_command or "claude"
-
-        if backend is not None:
-            from .backends.base import TmuxCliBackend as _TmuxCliBackend
-
-            if isinstance(backend, _TmuxCliBackend):
-                self._backend = backend
+        self._backend = backend
 
     @property
-    def claude_command(self) -> str:
-        """Backward-compatible accessor."""
+    def cli_command(self) -> str:
+        """Return the CLI command to launch in new windows."""
         if self._backend is not None:
             return self._backend.cli_command
-        return self._cli_command
+        return "claude"
 
     @property
     def backend(self) -> TmuxCliBackend | None:
@@ -469,18 +459,13 @@ class TmuxManager:
 
         # Restart the CLI
         success = await self.send_keys(
-            window_id, self.claude_command, enter=True, literal=True
+            window_id, self.cli_command, enter=True, literal=True
         )
         if success:
             logger.info("Restarted CLI in window %s", window_id)
         else:
             logger.error("Failed to restart CLI in window %s", window_id)
         return success
-
-    # Backward-compatible alias
-    async def restart_claude(self, window_id: str) -> bool:
-        """Alias for restart_cli (backward compat)."""
-        return await self.restart_cli(window_id)
 
     async def kill_window(self, window_id: str) -> bool:
         """Kill a tmux window by its ID."""
@@ -555,7 +540,7 @@ class TmuxManager:
                         launch_cmd = (
                             self._backend.get_launch_command()
                             if self._backend
-                            else f"unset CLAUDECODE && {self.claude_command}"
+                            else f"unset CLAUDECODE && {self.cli_command}"
                         )
                         pane.send_keys(launch_cmd, enter=True)
 
@@ -577,3 +562,37 @@ class TmuxManager:
                 return False, f"Failed to create window: {e}", "", ""
 
         return await asyncio.to_thread(_create_and_start)
+
+    async def wait_for_cli_ready(self, window_id: str) -> bool:
+        """Wait for the CLI's TUI to be ready in the given tmux window.
+
+        Polls the pane output for the backend's startup_ready_pattern.
+        Returns True if ready, False on timeout.
+        """
+        import re as _re
+        import time
+
+        if not self._backend or not self._backend.startup_ready_pattern:
+            return True
+
+        pattern = _re.compile(self._backend.startup_ready_pattern)
+        timeout = self._backend.startup_timeout
+        start = time.monotonic()
+
+        while time.monotonic() - start < timeout:
+            pane_text = await self.capture_pane(window_id)
+            if pane_text:
+                for line in pane_text.splitlines():
+                    if pattern.search(line):
+                        logger.debug(
+                            "CLI ready in window %s (%.1fs)",
+                            window_id,
+                            time.monotonic() - start,
+                        )
+                        return True
+            await asyncio.sleep(0.5)
+
+        logger.warning(
+            "CLI startup timeout (%.1fs) for window %s", timeout, window_id
+        )
+        return False

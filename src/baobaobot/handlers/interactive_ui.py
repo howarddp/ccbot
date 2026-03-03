@@ -181,8 +181,11 @@ async def handle_interactive_ui(
         logger.debug("No pane text captured for window_id %s", window_id)
         return False
 
+    # Use backend-specific UI patterns (Gemini vs Claude)
+    ui_patterns = agent_ctx.backend.get_ui_patterns()
+
     # Quick check if it looks like an interactive UI
-    if not is_interactive_ui(pane_text):
+    if not is_interactive_ui(pane_text, patterns=ui_patterns):
         logger.debug(
             "No interactive UI detected in window_id %s (last 3 lines: %s)",
             window_id,
@@ -191,7 +194,7 @@ async def handle_interactive_ui(
         return False
 
     # Extract content between separators
-    content = extract_interactive_content(pane_text)
+    content = extract_interactive_content(pane_text, patterns=ui_patterns)
     if not content:
         return False
 

@@ -52,16 +52,13 @@ class AgentConfig:
     # Tmux
     tmux_session_name: str = ""  # defaults to name
     tmux_main_window_name: str = "__main__"
-    claude_command: str = "claude"
+    cli_command: str = "claude"
 
     # Paths (derived from config_dir + agent name)
     config_dir: Path = field(default_factory=lambda: baobaobot_dir())
     agent_dir: Path = field(default_factory=lambda: Path())
 
     # Monitoring
-    claude_projects_path: Path = field(
-        default_factory=lambda: Path.home() / ".claude" / "projects"
-    )
     monitor_poll_interval: float = 2.0
 
     # Workspace / persona
@@ -245,7 +242,7 @@ def _build_agent_config(
         bot_token=bot_token,
         allowed_users=allowed_users,
         tmux_session_name=tmux_session_name,
-        claude_command=cli_command,
+        cli_command=cli_command,
         config_dir=config_dir,
         agent_dir=agent_dir,
         monitor_poll_interval=float(_get("monitor_poll_interval", 2.0)),

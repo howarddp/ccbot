@@ -98,7 +98,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
 
     backend = create_backend(
         agent_type=config.agent_type,
-        cli_command=config.claude_command,
+        cli_command=config.cli_command,
     )
 
     # All current backends are TmuxCliBackend subclasses

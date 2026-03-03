@@ -19,7 +19,7 @@ class TestCreateAgentContext:
             bot_token="123:abc",
             allowed_users=frozenset({1}),
             tmux_session_name="test-tmux",
-            claude_command="claude",
+            cli_command="claude",
             config_dir=tmp_path,
             agent_dir=agent_dir,
         )
@@ -42,7 +42,7 @@ class TestCreateAgentContext:
             bot_token="123:abc",
             allowed_users=frozenset({1}),
             tmux_session_name="my-session",
-            claude_command="claude --flag",
+            cli_command="claude --flag",
             config_dir=tmp_path,
             agent_dir=agent_dir,
         )
@@ -50,7 +50,7 @@ class TestCreateAgentContext:
         ctx = create_agent_context(cfg)
 
         assert ctx.tmux_manager.session_name == "my-session"
-        assert ctx.tmux_manager.claude_command == "claude --flag"
+        assert ctx.tmux_manager.cli_command == "claude --flag"
 
     def test_session_manager_uses_config(self, tmp_path: Path):
         agent_dir = tmp_path / "agents" / "test"

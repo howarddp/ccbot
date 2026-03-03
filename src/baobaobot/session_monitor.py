@@ -1,12 +1,14 @@
-"""Session monitoring service — watches JSONL files for new messages.
+"""Session monitoring service — watches transcript files for new messages.
 
 Runs an async polling loop that:
   1. Loads the current session_map to know which sessions to watch.
   2. Detects session_map changes (new/changed/deleted windows) and cleans up.
-  3. Reads new JSONL lines from each session file using byte-offset tracking.
-  4. Parses entries via TranscriptParser and emits NewMessage objects to a callback.
+  3. Reads new content from each session file:
+     - JSONL (Claude): incremental line reading with byte-offset tracking.
+     - Full JSON (Gemini): reads entire file, tracks message count.
+  4. Parses entries via backend-specific parsers and emits NewMessage objects.
 
-Optimizations: mtime cache skips unchanged files; byte offset avoids re-reading.
+Optimizations: mtime cache skips unchanged files; offset avoids re-reading.
 
 Key classes: SessionMonitor, NewMessage, SessionInfo.
 """
@@ -14,6 +16,7 @@ Key classes: SessionMonitor, NewMessage, SessionInfo.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -107,7 +110,6 @@ class SessionMonitor:
         session_manager: SessionManager,
         session_map_file: Path,
         tmux_session_name: str,
-        projects_path: Path,
         poll_interval: float,
         state_file: Path,
         agent_name: str = "",
@@ -117,7 +119,11 @@ class SessionMonitor:
         self._session_manager = session_manager
         self._session_map_file = session_map_file
         self._tmux_session_name = tmux_session_name
-        self.projects_path = projects_path
+        self.projects_path = (
+            backend.projects_path
+            if backend is not None
+            else Path.home() / ".claude" / "projects"
+        )
         self.poll_interval = poll_interval
         self._agent_name = agent_name
         self._backend = backend
@@ -322,6 +328,68 @@ class SessionMonitor:
             logger.error("Error reading session file %s: %s", file_path, e)
         return new_entries
 
+    @staticmethod
+    def _msg_hash(msg: dict) -> str:
+        """Hash a message dict for in-place update detection."""
+        return hashlib.md5(
+            json.dumps(msg, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
+
+    async def _read_full_json(
+        self, session: TrackedSession, file_path: Path
+    ) -> list[dict]:
+        """Read new messages from a full-JSON session file (e.g. Gemini).
+
+        Unlike JSONL, the entire file is a single JSON object with a
+        ``messages`` array.  We track the number of messages already
+        processed via ``last_byte_offset`` (repurposed as message count).
+
+        Also detects in-place updates to the last-seen message (e.g.,
+        Gemini adding ``toolCalls`` after the initial content write).
+        Updated messages are returned with a ``_recheck`` flag so the
+        parser can emit only the new entries (tool_use/tool_result).
+        """
+        new_entries: list[dict] = []
+        try:
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+
+            data = json.loads(content)
+            messages = data.get("messages", [])
+            already_seen = session.last_byte_offset  # repurposed as msg count
+
+            if len(messages) <= already_seen:
+                # No new messages — check for in-place updates on the last one
+                if already_seen > 0 and messages:
+                    last_msg = messages[already_seen - 1]
+                    new_hash = self._msg_hash(last_msg)
+                    old_hash = getattr(session, "_last_msg_hash", None)
+                    if old_hash is not None and new_hash != old_hash:
+                        logger.debug(
+                            "Detected in-place update on msg[%d] (hash %s→%s)",
+                            already_seen - 1,
+                            old_hash[:8],
+                            new_hash[:8],
+                        )
+                        session._last_msg_hash = new_hash  # type: ignore[attr-defined]
+                        new_entries.append({"_recheck": True, **last_msg})
+                return new_entries
+
+            # Extract only the new messages
+            new_messages = messages[already_seen:]
+            session.last_byte_offset = len(messages)
+
+            # Store hash of the last message for future in-place update detection
+            if messages:
+                session._last_msg_hash = self._msg_hash(messages[-1])  # type: ignore[attr-defined]
+
+            # Return raw message dicts for parse_entries to handle
+            new_entries.extend(new_messages)
+
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error("Error reading full-JSON session file %s: %s", file_path, e)
+        return new_entries
+
     async def check_for_updates(self, active_session_ids: set[str]) -> list[NewMessage]:
         """Check all sessions for new assistant messages.
 
@@ -344,18 +412,29 @@ class SessionMonitor:
                 tracked = self.state.get_session(session_info.session_id)
 
                 if tracked is None:
-                    # For new sessions, initialize offset to end of file
-                    # to avoid re-processing old messages
+                    # For new sessions, initialize offset to end to avoid
+                    # re-processing old messages.
+                    # For full-JSON backends: offset = message count
+                    # For JSONL backends: offset = file size in bytes
+                    is_full_json = (
+                        getattr(self._backend, "is_full_json", False)
+                        if self._backend is not None
+                        else False
+                    )
                     try:
-                        file_size = session_info.file_path.stat().st_size
                         current_mtime = session_info.file_path.stat().st_mtime
-                    except OSError:
-                        file_size = 0
+                        if is_full_json:
+                            data = json.loads(session_info.file_path.read_text())
+                            initial_offset = len(data.get("messages", []))
+                        else:
+                            initial_offset = session_info.file_path.stat().st_size
+                    except (OSError, json.JSONDecodeError):
+                        initial_offset = 0
                         current_mtime = 0.0
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),
-                        last_byte_offset=file_size,
+                        last_byte_offset=initial_offset,
                     )
                     self.state.update_session(tracked)
                     self._file_mtimes[session_info.session_id] = current_mtime
@@ -373,10 +452,20 @@ class SessionMonitor:
                     # File hasn't changed, skip reading
                     continue
 
-                # File changed, read new content from last offset
-                new_entries = await self._read_new_lines(
-                    tracked, session_info.file_path
+                # File changed, read new content
+                is_full_json = (
+                    getattr(self._backend, "is_full_json", False)
+                    if self._backend is not None
+                    else False
                 )
+                if is_full_json:
+                    new_entries = await self._read_full_json(
+                        tracked, session_info.file_path
+                    )
+                else:
+                    new_entries = await self._read_new_lines(
+                        tracked, session_info.file_path
+                    )
                 self._file_mtimes[session_info.session_id] = current_mtime
 
                 if new_entries:

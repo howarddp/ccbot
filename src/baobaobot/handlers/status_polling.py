@@ -164,9 +164,12 @@ async def update_status_message(
     interactive_window = get_interactive_window(agent_ctx, user_id, thread_id)
     should_check_new_ui = True
 
+    # Use backend-specific UI patterns (Gemini vs Claude)
+    ui_patterns = agent_ctx.backend.get_ui_patterns()
+
     if interactive_window == window_id:
         # User is in interactive mode for THIS window
-        if is_interactive_ui(pane_text):
+        if is_interactive_ui(pane_text, patterns=ui_patterns):
             # Interactive UI still showing — skip status update (user is interacting)
             return
         # Interactive UI gone — clear interactive mode, fall through to status check.
@@ -179,7 +182,7 @@ async def update_status_message(
         await clear_interactive_msg(user_id, bot, thread_id, agent_ctx=agent_ctx)
 
     # Check for permission prompt (interactive UI not triggered via JSONL)
-    if should_check_new_ui and is_interactive_ui(pane_text):
+    if should_check_new_ui and is_interactive_ui(pane_text, patterns=ui_patterns):
         await handle_interactive_ui(
             bot, user_id, window_id, thread_id, agent_ctx=agent_ctx
         )

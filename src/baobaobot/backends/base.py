@@ -86,6 +86,14 @@ class Backend(ABC):
         """Process a hook event payload.  Returns None if not handled."""
         return None
 
+    def get_ui_patterns(self) -> list[UIPattern]:
+        """Return UIPatterns for interactive UI detection.  Empty by default."""
+        return []
+
+    def get_status_spinners(self) -> frozenset[str]:
+        """Return spinner characters for status line detection.  Empty by default."""
+        return frozenset()
+
 
 # ---------------------------------------------------------------------------
 # TmuxCliBackend — shared base for tmux-based CLIs
@@ -116,6 +124,9 @@ class TmuxCliBackend(Backend):
     projects_path: Path = Path()  # where transcript files live
     settings_file: Path = Path()  # CLI settings file for hook installation
     env_unset_var: str | None = None  # env var to unset before launching
+    is_full_json: bool = False  # True if transcript is a single JSON (not JSONL)
+    startup_ready_pattern: str = ""  # regex to detect CLI is ready in tmux pane
+    startup_timeout: float = 15.0  # max seconds to wait for CLI startup
 
     def __init__(self, cli_command: str = ""):
         self.cli_command = cli_command or self.default_command
@@ -178,7 +189,7 @@ class TmuxCliBackend(Backend):
             List of discovered session files.
         """
 
-    # --- Terminal UI detection (subclass must implement) ---
+    # --- Terminal UI detection (override from Backend with concrete impl) ---
 
     @abstractmethod
     def get_ui_patterns(self) -> list[UIPattern]:

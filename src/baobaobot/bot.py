@@ -327,7 +327,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     display = ctx.session_manager.get_display_name(wid)
     await safe_reply(update.message, f"🔄 Restarting Claude in *{display}*…")
 
-    success = await ctx.tmux_manager.restart_claude(wid)
+    success = await ctx.tmux_manager.restart_cli(wid)
     clear_window_health(wid)
     ctx.session_manager.clear_window_session(wid)
 
@@ -1706,7 +1706,10 @@ async def _auto_create_session(
         rk.session_key,
     )
 
-    # Wait for Claude Code's SessionStart hook to register in session_map
+    # Wait for CLI TUI to be ready (polls tmux pane for prompt pattern)
+    await ctx.tmux_manager.wait_for_cli_ready(created_wid)
+
+    # Wait for SessionStart hook to register in session_map
     await ctx.session_manager.wait_for_session_map_entry(created_wid)
 
     # Bind via router — use topic-only name for display (not prefixed)
@@ -2049,7 +2052,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         display = ctx.session_manager.get_display_name(window_id)
-        success = await ctx.tmux_manager.restart_claude(window_id)
+        success = await ctx.tmux_manager.restart_cli(window_id)
         clear_window_health(window_id)
         ctx.session_manager.clear_window_session(window_id)
 
@@ -3166,12 +3169,12 @@ async def post_init(application: Application) -> None:
         )
         agent_ctx.system_scheduler = system_sched
         await system_sched.start()
+        logger.info("System scheduler started")
     else:
         logger.info(
             "SystemScheduler skipped: %s backend does not support headless mode",
             agent_ctx.backend.name,
         )
-    logger.info("System scheduler started")
 
     # Start cron service
     if agent_ctx.cron_service:
@@ -3266,7 +3269,6 @@ async def post_init(application: Application) -> None:
         session_manager=agent_ctx.session_manager,
         session_map_file=agent_ctx.config.session_map_file,
         tmux_session_name=agent_ctx.config.tmux_session_name,
-        projects_path=agent_ctx.config.claude_projects_path,
         poll_interval=agent_ctx.config.monitor_poll_interval,
         state_file=agent_ctx.config.monitor_state_file,
         agent_name=agent_ctx.config.name,

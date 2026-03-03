@@ -515,7 +515,7 @@ async def _handle_restart(query: CallbackQuery, ctx: AgentContext, wid: str) -> 
     display = ctx.session_manager.get_display_name(wid)
     await query.answer("🔄 Restarting...")
 
-    success = await ctx.tmux_manager.restart_claude(wid)
+    success = await ctx.tmux_manager.restart_cli(wid)
     clear_window_health(wid)
     ctx.session_manager.clear_window_session(wid)
 

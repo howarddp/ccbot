@@ -105,7 +105,7 @@ class TestAgentConfig:
         assert cfg.platform == "telegram"
         assert cfg.mode == "forum"
         assert cfg.tmux_main_window_name == "__main__"
-        assert cfg.claude_command == "claude"
+        assert cfg.cli_command == "claude"
         assert cfg.monitor_poll_interval == 2.0
         assert cfg.whisper_model == "small"
         assert cfg.cron_default_tz == ""
@@ -146,7 +146,7 @@ bot_token_env = "MY_TOKEN"
         assert cfg.name == "baobao"
         assert cfg.bot_token == "123:abc"
         assert cfg.allowed_users == frozenset({111, 222})
-        assert cfg.claude_command == "claude --model opus"
+        assert cfg.cli_command == "claude --model opus"
         assert cfg.tmux_session_name == "baobaobot"  # always single session
         assert cfg.agent_dir == tmp_path / "agents" / "baobao"
 

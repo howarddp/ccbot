@@ -50,6 +50,36 @@ class GeminiParsedEntry:
     no_notify: bool = False
 
 
+def _extract_tool_result(tc: dict) -> str:
+    """Extract a readable result string from a Gemini toolCall entry."""
+    # Try resultDisplay first (human-friendly)
+    result_display = tc.get("resultDisplay")
+    if result_display and isinstance(result_display, str):
+        return result_display.strip()
+
+    # Fall back to result array (functionResponse format)
+    result = tc.get("result")
+    if not result:
+        return ""
+
+    parts: list[str] = []
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict):
+                fr = item.get("functionResponse", {})
+                resp = fr.get("response", {})
+                output = resp.get("output", "")
+                error = resp.get("error", "")
+                if error:
+                    parts.append(f"⚠️ {error}")
+                elif output:
+                    parts.append(str(output))
+    elif isinstance(result, str):
+        parts.append(result)
+
+    return "\n".join(parts).strip()
+
+
 def parse_gemini_message(msg: dict) -> list[GeminiParsedEntry]:
     """Parse a single Gemini message into GeminiParsedEntry list.
 
@@ -100,16 +130,74 @@ def parse_gemini_message(msg: dict) -> list[GeminiParsedEntry]:
             text = str(content)
 
         if text.strip():
-            # Check for [NO_NOTIFY]
-            no_notify = text.strip().startswith("[NO_NOTIFY]")
+            # Check for [NO_NOTIFY] and strip the tag from text
+            stripped = text.strip()
+            _NO_NOTIFY_TAG = "[NO_NOTIFY]"
+            no_notify = stripped.startswith(_NO_NOTIFY_TAG)
+            if no_notify:
+                stripped = stripped[len(_NO_NOTIFY_TAG) :].strip()
+            if stripped:
+                entries.append(
+                    GeminiParsedEntry(
+                        text=stripped,
+                        content_type="text",
+                        role="assistant",
+                        no_notify=no_notify,
+                    )
+                )
+
+        # Tool calls (Gemini embeds tool calls inside the gemini message)
+        tool_calls = msg.get("toolCalls", [])
+        for tc in tool_calls:
+            tool_name = tc.get("name", "unknown")
+            tool_id = tc.get("id", "")
+            args = tc.get("args", {})
+            status = tc.get("status", "")
+            display_name = tc.get("displayName", tool_name)
+            description = tc.get("description", "")
+
+            # Build tool_use summary text
+            tool_use_parts = [f"**{display_name}**"]
+            if description:
+                tool_use_parts.append(description)
+            # Show key args (compact)
+            for key, val in args.items():
+                val_str = str(val)
+                if len(val_str) > 200:
+                    val_str = val_str[:200] + "…"
+                tool_use_parts.append(f"`{key}`: {val_str}")
             entries.append(
                 GeminiParsedEntry(
-                    text=text.strip(),
-                    content_type="text",
+                    text="\n".join(tool_use_parts),
+                    content_type="tool_use",
                     role="assistant",
-                    no_notify=no_notify,
+                    tool_use_id=tool_id,
+                    tool_name=tool_name,
                 )
             )
+
+            # Tool result
+            result_text = _extract_tool_result(tc)
+            if result_text:
+                entries.append(
+                    GeminiParsedEntry(
+                        text=result_text,
+                        content_type="tool_result",
+                        role="assistant",
+                        tool_use_id=tool_id,
+                        tool_name=tool_name,
+                    )
+                )
+            elif status == "error":
+                entries.append(
+                    GeminiParsedEntry(
+                        text="⚠️ Error",
+                        content_type="tool_result",
+                        role="assistant",
+                        tool_use_id=tool_id,
+                        tool_name=tool_name,
+                    )
+                )
 
     return entries
 
@@ -159,7 +247,15 @@ class GeminiTranscriptParser:
         """
         parsed: list[GeminiParsedEntry] = []
         for msg in entries:
-            parsed.extend(parse_gemini_message(msg))
+            is_recheck = msg.get("_recheck", False) if isinstance(msg, dict) else False
+            all_entries = parse_gemini_message(msg)
+            if is_recheck:
+                # In-place update: only emit tool_use/tool_result (text already sent)
+                all_entries = [
+                    e for e in all_entries
+                    if e.content_type in ("tool_use", "tool_result")
+                ]
+            parsed.extend(all_entries)
 
         # Track NO_NOTIFY across polls
         for entry in parsed:

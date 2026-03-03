@@ -41,6 +41,8 @@ class ClaudeBackend(TmuxCliBackend):
     projects_path = Path.home() / ".claude" / "projects"
     settings_file = Path.home() / ".claude" / "settings.json"
     env_unset_var = "CLAUDECODE"
+    startup_ready_pattern = r"^>"  # Claude Code shows ">" prompt when ready
+    startup_timeout = 10.0
 
     # --- Capabilities ---
 

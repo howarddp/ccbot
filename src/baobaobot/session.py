@@ -118,8 +118,7 @@ class SessionManager:
         state_file: Path,
         session_map_file: Path,
         tmux_session_name: str,
-        claude_projects_path: Path | None = None,
-        backend: TmuxCliBackend | None = None,  # accepts Backend subclasses
+        backend: TmuxCliBackend | None = None,
         tmux_manager: TmuxManager,
         agent_name: str = "",
     ) -> None:
@@ -127,13 +126,12 @@ class SessionManager:
         self._session_map_file = session_map_file
         self._tmux_session_name = tmux_session_name
         self._backend = backend
-        # Use backend's projects_path, fall back to explicit arg or Claude default
-        if claude_projects_path is not None:
-            self._claude_projects_path = claude_projects_path
-        elif backend is not None:
-            self._claude_projects_path = backend.projects_path
-        else:
-            self._claude_projects_path = Path.home() / ".claude" / "projects"
+        # Derive projects_path from backend, fallback to Claude default
+        self._projects_path = (
+            backend.projects_path
+            if backend is not None
+            else Path.home() / ".claude" / "projects"
+        )
         self._tmux_manager = tmux_manager
         self._agent_name = agent_name
 
@@ -664,7 +662,7 @@ class SessionManager:
             return None
         # Fallback: Claude-specific path encoding
         encoded_cwd = cwd.replace("/", "-")
-        return self._claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
+        return self._projects_path / encoded_cwd / f"{session_id}.jsonl"
 
     async def _get_session_direct(
         self, session_id: str, cwd: str
@@ -675,7 +673,7 @@ class SessionManager:
         # Fallback: glob search if direct path doesn't exist
         if not file_path or not file_path.exists():
             pattern = f"*/{session_id}.jsonl"
-            matches = list(self._claude_projects_path.glob(pattern))
+            matches = list(self._projects_path.glob(pattern))
             if matches:
                 file_path = matches[0]
                 logger.debug("Found session via glob: %s", file_path)
@@ -1071,8 +1069,9 @@ class SessionManager:
     ) -> tuple[list[dict], int]:
         """Get user/assistant messages for a window's session.
 
-        Resolves window → session, then reads the JSONL.
-        Supports byte range filtering via start_byte/end_byte.
+        Resolves window → session, then reads the transcript file.
+        For Claude (JSONL): supports byte range filtering via start_byte/end_byte.
+        For Gemini (full JSON): reads the entire file, ignores byte range params.
         Returns (messages, total_count).
         """
         session = await self.resolve_session_for_window(window_id)
@@ -1083,7 +1082,11 @@ class SessionManager:
         if not file_path.exists():
             return [], 0
 
-        # Read JSONL entries (optionally filtered by byte range)
+        # Gemini backend: full JSON file
+        if self._backend is not None and self._backend.is_full_json:
+            return await self._get_recent_messages_gemini(file_path)
+
+        # Claude backend: JSONL (line-by-line)
         entries: list[dict] = []
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
@@ -1115,6 +1118,37 @@ class SessionManager:
                 "text": e.text,
                 "content_type": e.content_type,
                 "timestamp": e.timestamp,
+            }
+            for e in parsed_entries
+        ]
+
+        return all_messages, len(all_messages)
+
+    async def _get_recent_messages_gemini(
+        self, file_path: Path
+    ) -> tuple[list[dict], int]:
+        """Read messages from a Gemini full-JSON session file."""
+        from .backends.gemini_parser import GeminiTranscriptParser
+
+        try:
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+                raw = await f.read()
+        except OSError as e:
+            logger.error("Error reading Gemini session file %s: %s", file_path, e)
+            return [], 0
+
+        session_data = GeminiTranscriptParser.parse_session_json(raw)
+        if not session_data:
+            return [], 0
+
+        messages = session_data.get("messages", [])
+        parsed_entries, _, _ = GeminiTranscriptParser.parse_entries(messages)
+        all_messages = [
+            {
+                "role": e.role,
+                "text": e.text,
+                "content_type": e.content_type,
+                "timestamp": "",  # Gemini entries don't carry per-entry timestamp
             }
             for e in parsed_entries
         ]

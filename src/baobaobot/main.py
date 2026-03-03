@@ -368,7 +368,7 @@ mode = "{mode}"
     # Install hooks for all supported backends
     from .hook import install_all_hooks
 
-    install_all_hooks()
+    install_all_hooks(agent_types={agent_type})
 
     # Install voice transcription dependency
     if enable_voice:
@@ -777,6 +777,12 @@ def main() -> None:
     logger = logging.getLogger(__name__)
 
     _check_optional_deps(agent_configs)
+
+    # Install hooks for all backends used by agents
+    from .hook import install_all_hooks
+
+    agent_types = {cfg.agent_type for cfg in agent_configs}
+    install_all_hooks(agent_types=agent_types)
 
     agent_contexts: list[AgentContext] = []
 

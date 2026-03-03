@@ -13,7 +13,6 @@ def _make_mgr(tmp_path: Path) -> SessionManager:
         state_file=tmp_path / "state.json",
         session_map_file=tmp_path / "session_map.json",
         tmux_session_name="test",
-        claude_projects_path=tmp_path / "projects",
         tmux_manager=MagicMock(),
     )
 
