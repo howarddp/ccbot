@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _memory_common import connect_db, resolve_workspace, sync_workspace
+from _todo_common import connect_db as ensure_todos_table
 from _todo_common import format_todo_short
 from _todo_common import list_todos
 
@@ -75,6 +76,7 @@ def main() -> None:
 
     conn = connect_db(workspace)
     sync_workspace(conn, workspace)
+    ensure_todos_table(workspace).close()  # ensure todos table exists in same DB
 
     today = date.today()
 

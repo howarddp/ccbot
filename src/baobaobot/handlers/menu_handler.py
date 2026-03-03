@@ -115,8 +115,8 @@ def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
                     callback_data=f"{CB_MENU_SYSTEM}ls:{wid}"[:64],
                 ),
                 InlineKeyboardButton(
-                    "🔗 Browse",
-                    callback_data=f"{CB_MENU_SYSTEM}share:{wid}"[:64],
+                    "🔗 ShareLink",
+                    callback_data=f"{CB_MENU_SYSTEM}slink:{wid}"[:64],
                 ),
             ],
             [
@@ -147,6 +147,30 @@ def _build_config_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "📋 Important",
                     callback_data=f"{CB_MENU_CONFIG}important",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_sharelink_keyboard(wid: str) -> InlineKeyboardMarkup:
+    """Build ShareLink secondary menu: Browse / Upload / Terminal."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🌐 Browse",
+                    callback_data=f"{CB_MENU_SYSTEM}slbrowse:{wid}"[:64],
+                ),
+                InlineKeyboardButton(
+                    "📤 Upload",
+                    callback_data=f"{CB_MENU_SYSTEM}slupload:{wid}"[:64],
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "💻 Terminal",
+                    callback_data=f"{CB_MENU_SYSTEM}slterm:{wid}"[:64],
                 ),
             ],
         ]
@@ -309,6 +333,14 @@ async def _dispatch_system(
         await _handle_ls(query, update, context)
     elif action == "share":
         await _handle_share(query, ctx, wid)
+    elif action == "slink":
+        await _handle_sharelink(query, wid)
+    elif action == "slbrowse":
+        await _handle_share(query, ctx, wid)
+    elif action == "slupload":
+        await _handle_sl_upload(query, ctx, wid)
+    elif action == "slterm":
+        await _handle_sl_terminal(query, ctx, wid)
     elif action == "summary":
         await _handle_summary(query, ctx, wid)
     else:
@@ -765,6 +797,76 @@ async def _handle_share(
     url = f"{public_url}/p/{token}/"
 
     await safe_reply(query.message, f"🔗 [Browse {display_name}]({url})")
+
+
+async def _handle_sharelink(query: CallbackQuery, wid: str) -> None:
+    """Show ShareLink secondary menu (Browse / Upload / Terminal)."""
+    await query.answer()
+    if query.message:
+        keyboard = _build_sharelink_keyboard(wid)
+        await safe_reply(
+            query.message, "🔗 *ShareLink*", reply_markup=keyboard
+        )
+
+
+async def _handle_sl_upload(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Generate a web upload URL for the workspace of the given window."""
+    await query.answer()
+    if not query.message:
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        await safe_reply(query.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(query.message, "❌ Share server unavailable.")
+        return
+
+    from ..share_server import generate_token
+
+    ws_root = str(ws_dir.resolve())
+    display_name = ws_dir.name
+    token = generate_token(f"upload:{ws_root}", ttl=600, name=display_name)
+    url = f"{public_url}/u/{token}"
+
+    await safe_reply(query.message, f"📤 [Upload to {display_name}]({url})")
+
+
+async def _handle_sl_terminal(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Generate a web terminal URL for the workspace of the given window."""
+    await query.answer()
+    if not query.message:
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        await safe_reply(query.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(query.message, "❌ Share server unavailable.")
+        return
+
+    from ..share_server import generate_token
+
+    ws_root = str(ws_dir.resolve())
+    display_name = ws_dir.name
+    token = generate_token(f"term:{ws_root}", ttl=600, name=display_name)
+    url = f"{public_url}/term/{token}/"
+
+    await safe_reply(query.message, f"💻 [Terminal {display_name}]({url})")
 
 
 async def _handle_agentsoul(

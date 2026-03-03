@@ -608,6 +608,141 @@ async def browse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await safe_reply(update.message, f"🔗 [Browse {display_name}]({url})")
 
 
+async def terminal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a web terminal URL for the current topic's workspace.
+
+    Subcommands:
+      /terminal       — workspace shell (+ hints)
+      /terminal tmux  — attach to topic's tmux window
+      /terminal log   — attach to bot's main tmux window (live log)
+    """
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    ctx = _ctx(context)
+    if not public_url or not ctx.share_server:
+        await safe_reply(update.message, "❌ Share server unavailable.")
+        return
+
+    from .share_server import generate_token
+
+    subcmd = (context.args[0].lower() if context.args else "").strip()
+
+    if subcmd and subcmd not in ("tmux", "log"):
+        await safe_reply(
+            update.message,
+            "❌ Unknown parameter.\n💡 /terminal tmux — tmux window\n💡 /terminal log — bot log",
+        )
+        return
+
+    if subcmd == "tmux":
+        # Connect to the topic's tmux window
+        rk = _resolve_rk(update, context)
+        if rk is None:
+            await safe_reply(update.message, f"❌ {ctx.router.rejection_message()}")
+            return
+        wid = ctx.router.get_window(rk, ctx)
+        if not wid:
+            await safe_reply(update.message, "❌ No session bound to this topic.")
+            return
+        session_name = ctx.tmux_manager.session_name
+        payload = f"tmux:{session_name}:{wid}"
+        name = f"{session_name}:{wid}"
+        display = ctx.session_manager.get_display_name(wid)
+        token = generate_token(payload, ttl=600, name=name)
+        url = f"{public_url}/tmux/{token}/"
+        await safe_reply(update.message, f"🖥 [tmux {display}]({url})")
+        return
+
+    if subcmd == "log":
+        # Connect to the bot's main tmux window for live log
+        agent_name = ctx.config.tmux_session_name or ctx.config.name
+        payload = f"log:{agent_name}"
+        token = generate_token(payload, ttl=600, name=agent_name)
+        url = f"{public_url}/tmux/{token}/"
+        await safe_reply(update.message, f"📋 [Bot Log]({url})")
+        return
+
+    # Default: workspace shell + hints
+    workspace_dir = _resolve_workspace_dir(update, context)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ No workspace for this topic.")
+        return
+
+    # Resolve to workspace root
+    resolved = workspace_dir.resolve()
+    ws_roots = ctx.config.iter_workspace_dirs()
+    workspace_root = None
+    for root in ws_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            workspace_root = root
+            break
+        except ValueError:
+            continue
+    if workspace_root is None:
+        workspace_root = workspace_dir
+
+    ws_root = str(workspace_root.resolve())
+    display_name = workspace_root.name
+    token = generate_token(f"term:{ws_root}", ttl=600, name=display_name)
+    url = f"{public_url}/term/{token}/"
+
+    lines = [
+        f"💻 [Terminal {display_name}]({url})",
+        "💡 /terminal tmux — tmux window",
+        "💡 /terminal log — bot log",
+    ]
+    await safe_reply(update.message, "\n".join(lines))
+
+
+async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a web upload URL for the current topic's workspace."""
+    user = update.effective_user
+    if not user or not _is_user_allowed(context, user.id):
+        return
+    if not update.message:
+        return
+
+    workspace_dir = _resolve_workspace_dir(update, context)
+    if workspace_dir is None:
+        await safe_reply(update.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    ctx = _ctx(context)
+    if not public_url or not ctx.share_server:
+        await safe_reply(update.message, "❌ Share server unavailable.")
+        return
+
+    # Resolve to workspace root
+    resolved = workspace_dir.resolve()
+    ws_roots = ctx.config.iter_workspace_dirs()
+    workspace_root = None
+    for root in ws_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            workspace_root = root
+            break
+        except ValueError:
+            continue
+    if workspace_root is None:
+        workspace_root = workspace_dir
+
+    from .share_server import generate_token
+
+    ws_root = str(workspace_root.resolve())
+    display_name = workspace_root.name
+    token = generate_token(f"upload:{ws_root}", ttl=600, name=display_name)
+    url = f"{public_url}/u/{token}"
+
+    await safe_reply(update.message, f"📤 [Upload to {display_name}]({url})")
+
+
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually rebuild CLAUDE.md for the current topic's workspace."""
     user = update.effective_user
@@ -3241,6 +3376,8 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("workspace", workspace_command))
     application.add_handler(CommandHandler("ls", ls_command))
     application.add_handler(CommandHandler("browse", browse_command))
+    application.add_handler(CommandHandler("terminal", terminal_command))
+    application.add_handler(CommandHandler("upload", upload_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("verbosity", verbosity_command))

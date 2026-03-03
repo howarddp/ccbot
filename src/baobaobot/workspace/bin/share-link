@@ -103,15 +103,18 @@ def main() -> None:
         "--upload", action="store_true", help="Generate an upload link"
     )
     parser.add_argument(
-        "--ttl", default="30m", help="Time-to-live (default: 30m). Examples: 30m, 2h, 1d"
+        "--terminal", action="store_true", help="Generate a web terminal link (10m TTL)"
+    )
+    parser.add_argument(
+        "--ttl", default="", help="Time-to-live (default: 30m, 10m for terminal). Examples: 30m, 2h, 1d"
     )
     parser.add_argument(
         "--name", default="", help="Display name (e.g. topic name) embedded in token"
     )
     args = parser.parse_args()
 
-    if not args.upload and not args.path:
-        parser.error("Provide a path to share, or use --upload for an upload link")
+    if not args.upload and not args.terminal and not args.path:
+        parser.error("Provide a path to share, or use --upload/--terminal")
 
     secret = os.environ.get("SHARE_SECRET", "")
     if not secret:
@@ -123,7 +126,9 @@ def main() -> None:
         print("Error: SHARE_PUBLIC_URL not set (tunnel not running?)", file=sys.stderr)
         sys.exit(1)
 
-    ttl = _parse_ttl(args.ttl)
+    # Default TTL: 10m for terminal, 30m for others
+    default_ttl = "10m" if args.terminal else "30m"
+    ttl = _parse_ttl(args.ttl or default_ttl)
 
     # Determine workspace root from CWD or WORKSPACE_ROOTS
     ws_root = _find_workspace_root(Path.cwd())
@@ -133,7 +138,12 @@ def main() -> None:
 
     name = args.name or _get_tmux_window_name()
 
-    if args.upload:
+    if args.terminal:
+        # Web terminal link
+        token = _generate_token(f"term:{ws_root}", ttl, secret, name)
+        url = f"{public_url}/term/{token}/"
+        print(url)
+    elif args.upload:
         # Workspace-aware upload token: uploads go to THIS workspace
         token = _generate_token(f"upload:{ws_root}", ttl, secret, name)
         url = f"{public_url}/u/{token}"
