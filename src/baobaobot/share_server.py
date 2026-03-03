@@ -10,6 +10,8 @@ Routes:
   POST /u/{token}/upload     — receive uploaded files
   GET  /term/{token}/        — web terminal page (xterm.js)
   GET  /term/{token}/ws      — web terminal WebSocket (PTY bridge)
+  GET  /tmux/{token}/        — tmux attach page (xterm.js)
+  GET  /tmux/{token}/ws      — tmux attach WebSocket (grouped session)
 """
 
 from __future__ import annotations
@@ -263,6 +265,9 @@ class ShareServer:
         self._app.router.add_get("/term/{token}/ws", self._handle_terminal_ws)
         self._app.router.add_get("/term/{token}/", self._handle_terminal_page)
         self._app.router.add_get("/term/{token}", self._handle_terminal_page)
+        self._app.router.add_get("/tmux/{token}/ws", self._handle_tmux_ws)
+        self._app.router.add_get("/tmux/{token}/", self._handle_tmux_page)
+        self._app.router.add_get("/tmux/{token}", self._handle_tmux_page)
 
     def _find_file(self, rel_path: str, workspace: Path | None = None) -> Path | None:
         """Find a file in a specific workspace or across all roots."""
@@ -682,7 +687,20 @@ class ShareServer:
                 except OSError:
                     break
 
+        async def ping_sender() -> None:
+            """Send WebSocket ping every 20s to prevent idle timeout."""
+            while not ws.closed:
+                try:
+                    await asyncio.sleep(20)
+                    if not ws.closed:
+                        await ws.ping()
+                except (asyncio.CancelledError, ConnectionResetError):
+                    break
+                except Exception:
+                    break
+
         reader_task = asyncio.create_task(pty_reader())
+        ping_task = asyncio.create_task(ping_sender())
 
         try:
             async for msg in ws:
@@ -714,8 +732,13 @@ class ShareServer:
             except OSError:
                 pass
             reader_task.cancel()
+            ping_task.cancel()
             try:
                 await reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                await ping_task
             except (asyncio.CancelledError, Exception):
                 pass
             try:
@@ -728,6 +751,227 @@ class ShareServer:
                 except (OSError, subprocess.TimeoutExpired):
                     pass
             logger.info("Terminal session ended: PID %d", proc.pid)
+
+        return ws
+
+    # -- Tmux attach (web tmux) --
+
+    def _verify_tmux_token(self, token: str) -> tuple[str | None, str]:
+        """Verify tmux token and return (payload, status).
+
+        Token payload format: 'tmux:{session}:{window_id}' or 'log:{agent_name}'
+        Returns (payload, status).
+        """
+        # Extract the name part from the token to reconstruct the payload
+        try:
+            parts = token.split("-", 2)
+            name_part = parts[2] if len(parts) > 2 else ""
+        except (IndexError, ValueError):
+            return None, "invalid"
+        if not name_part:
+            return None, "invalid"
+        # Decode the name to get the payload
+        name = base64.urlsafe_b64decode(name_part + "==").decode()
+        # Try tmux payload
+        tmux_payload = f"tmux:{name}"
+        status = check_token(token, tmux_payload)
+        if status == "ok":
+            return tmux_payload, "ok"
+        if status == "expired":
+            return None, "expired"
+        # Try log payload
+        log_payload = f"log:{name}"
+        status = check_token(token, log_payload)
+        if status == "ok":
+            return log_payload, "ok"
+        if status == "expired":
+            return None, "expired"
+        return None, "invalid"
+
+    async def _handle_tmux_page(self, request: web.Request) -> web.Response:
+        """Serve the xterm.js terminal page for tmux attach."""
+        token = request.match_info["token"]
+        payload, status = self._verify_tmux_token(token)
+        if payload is None:
+            return _deny_response(status)
+        return web.Response(text=_TERMINAL_HTML, content_type="text/html")
+
+    async def _handle_tmux_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """WebSocket handler: bridge browser ↔ tmux attach via PTY."""
+        token = request.match_info["token"]
+        payload, status = self._verify_tmux_token(token)
+        if payload is None:
+            raise web.HTTPForbidden()
+
+        # Parse payload to determine tmux target
+        parts = payload.split(":", 2)
+        mode = parts[0]  # "tmux" or "log"
+
+        if mode == "tmux":
+            # payload: tmux:{session}:{window_id}
+            tmux_session = parts[1]
+            window_id = parts[2]
+        elif mode == "log":
+            # payload: log:{agent_name}
+            # Connect to the agent's main tmux window (__main__)
+            agent_name = parts[1]
+            tmux_session = agent_name
+            window_id = None  # will target main window
+        else:
+            raise web.HTTPForbidden()
+
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        # Create a grouped session for isolated attach
+        import secrets as _secrets
+
+        temp_session = f"web-{_secrets.token_hex(4)}"
+
+        # Build tmux new-session command that groups with the target session
+        # and selects the target window
+        cmd = ["tmux", "new-session", "-d", "-s", temp_session, "-t", tmux_session]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.error("Failed to create grouped tmux session: %s", exc)
+            await ws.close(message=b"Failed to create tmux session")
+            return ws
+
+        # Select the target window
+        if window_id:
+            try:
+                subprocess.run(
+                    ["tmux", "select-window", "-t", f"{temp_session}:{window_id}"],
+                    check=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                logger.warning("Failed to select window %s, using default", window_id)
+
+        # Create PTY and spawn tmux attach
+        master_fd, slave_fd = pty.openpty()
+        winsize = struct.pack("HHHH", 24, 80, 0, 0)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        proc = subprocess.Popen(
+            ["tmux", "attach-session", "-t", temp_session],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=env,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        logger.info(
+            "Tmux web session started: PID %d, session=%s, target=%s:%s",
+            proc.pid,
+            temp_session,
+            tmux_session,
+            window_id or "__main__",
+        )
+
+        # Set master_fd to non-blocking
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        loop = asyncio.get_event_loop()
+
+        async def pty_reader() -> None:
+            while not ws.closed:
+                readable = loop.create_future()
+                loop.add_reader(master_fd, readable.set_result, True)
+                try:
+                    await readable
+                except asyncio.CancelledError:
+                    with _suppress_os():
+                        loop.remove_reader(master_fd)
+                    raise
+                finally:
+                    with _suppress_os():
+                        loop.remove_reader(master_fd)
+                try:
+                    data = os.read(master_fd, 32768)
+                    if not data:
+                        break
+                    await ws.send_bytes(data)
+                except OSError:
+                    break
+
+        async def ping_sender() -> None:
+            while not ws.closed:
+                try:
+                    await asyncio.sleep(20)
+                    if not ws.closed:
+                        await ws.ping()
+                except (asyncio.CancelledError, ConnectionResetError):
+                    break
+                except Exception:
+                    break
+
+        reader_task = asyncio.create_task(pty_reader())
+        ping_task = asyncio.create_task(ping_sender())
+
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        if data.get("type") == "resize":
+                            cols = data.get("cols", 80)
+                            rows = data.get("rows", 24)
+                            ws_pack = struct.pack("HHHH", rows, cols, 0, 0)
+                            try:
+                                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, ws_pack)
+                                os.kill(proc.pid, signal.SIGWINCH)
+                            except OSError:
+                                pass
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                elif msg.type == WSMsgType.BINARY:
+                    try:
+                        os.write(master_fd, msg.data)
+                    except OSError:
+                        break
+                elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                    break
+        finally:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            reader_task.cancel()
+            ping_task.cancel()
+            try:
+                await reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                await ping_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            # Kill the temporary grouped session
+            try:
+                subprocess.run(
+                    ["tmux", "kill-session", "-t", temp_session],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                pass
+            logger.info("Tmux web session ended: PID %d, session=%s", proc.pid, temp_session)
 
         return ws
 
