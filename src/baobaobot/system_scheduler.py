@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 _TICK_INTERVAL_S = 60.0
 
 # How often to run summary per workspace
-_SUMMARY_INTERVAL_S = 10800  # 3 hours
+_SUMMARY_INTERVAL_S = 3600  # 1 hour
 
 # Subprocess timeout for claude -p
 _SUBPROCESS_TIMEOUT_S = 300
