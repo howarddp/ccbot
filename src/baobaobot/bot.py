@@ -975,6 +975,35 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await _send_typing(update.message.chat)
+
+    # Intercept /clear: run summary first to avoid losing unsummarized content
+    if cc_slash.strip().lower() == "/clear":
+        if ctx.system_scheduler:
+            ws_name = display.removeprefix(f"{ctx.config.name}/")
+            await safe_reply(
+                update.message, f"📝 [{display}] Summarizing before clear..."
+            )
+            try:
+                ran = await asyncio.wait_for(
+                    ctx.system_scheduler.trigger_summary(ws_name), timeout=120
+                )
+                if ran:
+                    logger.info("Pre-clear summary completed for %s", display)
+                else:
+                    logger.info(
+                        "Pre-clear summary skipped (no new content) for %s", display
+                    )
+            except Exception as e:
+                logger.warning("Pre-clear summary failed for %s: %s", display, e)
+        # Now send /clear
+        success, message = await ctx.session_manager.send_to_window(wid, "/clear")
+        if success:
+            await safe_reply(update.message, f"⚡ [{display}] /clear")
+            ctx.session_manager.clear_window_session(wid)
+        else:
+            await safe_reply(update.message, f"❌ {message}")
+        return
+
     success, message = await ctx.session_manager.send_to_window(wid, cc_slash)
     if success:
         # Extract the command name (e.g. "/model" → "model", "/model sonnet" → "model")
