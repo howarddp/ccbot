@@ -108,6 +108,7 @@ _SKILL_NAMES = [
     "youtube-summary",
     "youtube-channel",
     "youtube-search",
+    "dev-utils",
 ]
 
 
