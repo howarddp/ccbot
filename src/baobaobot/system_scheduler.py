@@ -17,7 +17,8 @@ import logging
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 _TICK_INTERVAL_S = 60.0
 
 # How often to run summary per workspace
-_SUMMARY_INTERVAL_S = 1800
+_SUMMARY_INTERVAL_S = 10800  # 3 hours
 
 # Subprocess timeout for claude -p
 _SUBPROCESS_TIMEOUT_S = 300
@@ -298,7 +299,7 @@ class SystemScheduler:
         """
         now = time.time()
         last_summary_time = self._get_last_summary_time(ws_dir)
-        today_date = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
+        today_date = datetime.fromtimestamp(now, tz=ZoneInfo(self._timezone)).strftime("%Y-%m-%d")
         summary_path = ws_dir / "memory" / "summaries" / f"{today_date}.md"
 
         from .utils import baobaobot_dir
@@ -341,13 +342,44 @@ class SystemScheduler:
         # Summary does not notify users — it's a silent housekeeping task.
         # The on_notify callback is preserved for other system tasks.
 
-        # Send /clear to the tmux window to free context after successful summary
-        await self._send_clear_to_window(workspace_name, window_id)
+        # Only /clear the live session when summary actually wrote content.
+        # This frees context for the user's next interaction.
+        # Bug 3's < 4KB defense in _has_new_content prevents the new empty
+        # session from triggering another summary cycle.
+        if action == "done":
+            await self._send_clear_to_window(workspace_name, window_id)
 
         logger.info(
             "SystemScheduler: summary done for %s → %s", workspace_name, action
         )
         return True
+
+    async def _send_clear_to_window(
+        self, workspace_name: str, window_id: str
+    ) -> None:
+        """Send /clear to the tmux window to free context for the user."""
+        if not self._tmux_manager:
+            return
+        try:
+            ok = await self._tmux_manager.send_keys(
+                window_id, "/clear", enter=True, literal=True
+            )
+            if ok:
+                logger.info(
+                    "SystemScheduler: sent /clear to window %s (%s)",
+                    window_id, workspace_name,
+                )
+            else:
+                logger.warning(
+                    "SystemScheduler: failed to send /clear to window %s (%s)",
+                    window_id, workspace_name,
+                )
+        except Exception:
+            logger.warning(
+                "SystemScheduler: error sending /clear to window %s (%s)",
+                window_id, workspace_name,
+                exc_info=True,
+            )
 
     async def _run_claude_p(self, prompt: str, cwd: Path) -> str:
         """Run `claude -p` as subprocess, return stdout."""
@@ -376,33 +408,6 @@ class SystemScheduler:
         return stdout_bytes.decode("utf-8", errors="replace")
 
     # --- Post-summary actions ---
-
-    async def _send_clear_to_window(
-        self, workspace_name: str, window_id: str
-    ) -> None:
-        """Send /clear to the tmux window after a successful summary."""
-        if not self._tmux_manager:
-            return
-        try:
-            ok = await self._tmux_manager.send_keys(
-                window_id, "/clear", enter=True, literal=True
-            )
-            if ok:
-                logger.info(
-                    "SystemScheduler: sent /clear to window %s (%s)",
-                    window_id, workspace_name,
-                )
-            else:
-                logger.warning(
-                    "SystemScheduler: failed to send /clear to window %s (%s)",
-                    window_id, workspace_name,
-                )
-        except Exception:
-            logger.warning(
-                "SystemScheduler: error sending /clear to window %s (%s)",
-                window_id, workspace_name,
-                exc_info=True,
-            )
 
     # --- Delivery ---
 
@@ -471,7 +476,7 @@ class SystemScheduler:
         self, ws_dir: Path, now: float, jsonl_path: Path
     ) -> None:
         """Update all state keys after a successful summary in one transaction."""
-        dt = datetime.fromtimestamp(now, tz=timezone.utc)
+        dt = datetime.fromtimestamp(now, tz=ZoneInfo(self._timezone))
         time_val = dt.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             size = jsonl_path.stat().st_size
@@ -521,8 +526,9 @@ class SystemScheduler:
             return True  # Assume new content on DB error
 
         # Session changed (new JSONL path) — reset offset
+        # but skip tiny files (< 4KB) that are just initialization junk
         if last_jsonl and last_jsonl != str(jsonl_path):
-            return True
+            return current_size >= 4096
 
         try:
             last_offset = int(last_offset_str)
