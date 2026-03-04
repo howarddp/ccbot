@@ -2,7 +2,7 @@
 
 Provides inline keyboard menus that group related bot actions:
   - /agent: Claude Code operations (Esc, Clear, Compact, Status)
-  - /system: System management (History, Screenshot, Restart, Rebuild, Cron, Verbosity, Files, Summary)
+  - /system: System management (History, Screenshot, Restart, Rebuild, Cron, Verbosity, Files, Summary, Heartbeat)
   - /config: Personal settings (Agent Soul, Profile)
 """
 
@@ -123,6 +123,10 @@ def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "📝 Summary",
                     callback_data=f"{CB_MENU_SYSTEM}summary:{wid}"[:64],
+                ),
+                InlineKeyboardButton(
+                    "💓 Heartbeat",
+                    callback_data=f"{CB_MENU_SYSTEM}heartbeat:{wid}"[:64],
                 ),
             ],
         ]
@@ -343,6 +347,8 @@ async def _dispatch_system(
         await _handle_sl_terminal(query, ctx, wid)
     elif action == "summary":
         await _handle_summary(query, ctx, wid)
+    elif action == "heartbeat":
+        await _handle_heartbeat(query, ctx, wid)
     else:
         await query.answer("Unknown action")
 
@@ -606,6 +612,42 @@ async def _handle_summary(
             await safe_reply(query.message, f"✅ [{display}] Summary done.")
         else:
             await safe_reply(query.message, f"ℹ️ [{display}] No new content to summarize.")
+
+
+async def _handle_heartbeat(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Show heartbeat toggle panel from /system menu."""
+    from .heartbeat_handler import _build_heartbeat_keyboard, _build_heartbeat_text
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    if not ctx.system_scheduler:
+        if query.message:
+            await safe_reply(query.message, "❌ System scheduler not available.")
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        if query.message:
+            await safe_reply(query.message, "❌ Cannot resolve workspace.")
+        return
+
+    display = ctx.session_manager.get_display_name(wid)
+    agent_prefix = f"{ctx.config.name}/"
+    ws_name = display.removeprefix(agent_prefix)
+
+    enabled = ctx.system_scheduler.get_heartbeat_enabled(ws_dir)
+    item_count = ctx.system_scheduler.get_heartbeat_item_count(ws_dir)
+    text = _build_heartbeat_text(enabled, ws_name, item_count)
+    keyboard = _build_heartbeat_keyboard(enabled, wid)
+    if query.message:
+        await safe_reply(query.message, text, reply_markup=keyboard)
 
 
 async def _handle_cron(

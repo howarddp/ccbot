@@ -75,3 +75,6 @@ CB_LS_CLOSE = "ls:close"  # close browser
 CB_MENU_AGENT = "mn:a:"  # mn:a:<action>:<window_id>
 CB_MENU_SYSTEM = "mn:s:"  # mn:s:<action>:<window_id>
 CB_MENU_CONFIG = "mn:c:"  # mn:c:<action>
+
+# Heartbeat toggle
+CB_HEARTBEAT = "hb:"  # hb:<window_id>:<on|off>
