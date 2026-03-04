@@ -2530,7 +2530,16 @@ async def handle_new_message(
         logger.info(f"No active users for session {msg.session_id}")
         return
 
+    # Deduplicate: in forum topics multiple users may resolve to the same
+    # (chat_id, thread_id) destination.  Deliver only once per destination,
+    # picking the first user_id as the queue key.
+    seen_destinations: set[tuple[int, int]] = set()
     for user_id, wid, thread_id in active_users:
+        chat_id = sm.resolve_chat_id(user_id, thread_id)
+        dest = (chat_id, thread_id)
+        if dest in seen_destinations:
+            continue
+        seen_destinations.add(dest)
         sm.touch_interaction(wid)
         await _deliver_message(msg, bot, agent_ctx, user_id, wid, thread_id=thread_id)
 
