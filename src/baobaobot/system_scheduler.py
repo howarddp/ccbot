@@ -83,6 +83,8 @@ def _parse_output(stdout: str) -> tuple[str, str | None]:
             return "silent", None
         if stripped == "[DONE]":
             return "done", None
+        if stripped == "[DONE_NOCLEAR]":
+            return "done_noclear", None
         if stripped == "[NOTIFY]":
             content = "\n".join(lines[i + 1:]).strip()
             return "notify", content if content else None
@@ -313,6 +315,7 @@ class SystemScheduler:
 
         from .utils import baobaobot_dir
         memory_save_bin = baobaobot_dir() / "shared" / "bin" / "memory-save"
+        continuation_path = ws_dir / "memory" / "continuations.md"
 
         prompt = self._summary_template.format(
             jsonl_path=str(jsonl_path),
@@ -323,6 +326,7 @@ class SystemScheduler:
             today_date=today_date,
             memory_save_bin=str(memory_save_bin),
             timezone=self._timezone,
+            continuation_path=str(continuation_path),
         )
 
         logger.info(
@@ -351,12 +355,23 @@ class SystemScheduler:
         # Summary does not notify users — it's a silent housekeeping task.
         # The on_notify callback is preserved for other system tasks.
 
-        # Only /clear the live session when summary actually wrote content.
-        # This frees context for the user's next interaction.
+        # Only /clear the live session when summary actually wrote content
+        # and no in-progress work was detected.
         # Bug 3's < 4KB defense in _has_new_content prevents the new empty
         # session from triggering another summary cycle.
         if action == "done":
             await self._send_clear_to_window(workspace_name, window_id)
+        elif action == "done_noclear":
+            # Session preserved — continuation file is redundant; remove if
+            # the claude -p subprocess wrote it despite the prompt instruction.
+            try:
+                continuation_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logger.info(
+                "SystemScheduler: skipping /clear for %s (in-progress work detected)",
+                workspace_name,
+            )
 
         logger.info(
             "SystemScheduler: summary done for %s → %s", workspace_name, action

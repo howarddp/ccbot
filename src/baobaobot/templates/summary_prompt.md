@@ -2,14 +2,15 @@ You are a personal assistant summarizing a Claude Code session.
 
 ## Task
 
-1. Read the JSONL transcript at `{jsonl_path}` — focus on entries **after** `{last_summary_time}`,
-   but you may read earlier entries when needed to understand incomplete context
+1. Read the JSONL transcript at `{jsonl_path}` — focus on entries **after** `{last_summary_time}` ({timezone} local time).
+   JSONL timestamps use UTC (ending in `Z`) — convert to {timezone} before comparing.
+   You may read earlier entries when needed to understand incomplete context
    (e.g. a conversation that started before the cutoff). Do NOT re-record content already in the summary.
 2. If `{summary_path}` already exists, read it to understand what was recorded today.
 3. Archive important files and text content found in the conversation (see **File Handling** below).
 4. Merge any new meaningful content with the existing summary (no duplication).
 5. Write the updated summary back to `{summary_path}`.
-6. Output `[DONE]` or `[SILENT]` as described below.
+6. Output `[DONE]`, `[DONE_NOCLEAR]`, or `[SILENT]` as described below.
 
 ## What to summarize
 
@@ -120,10 +121,64 @@ may use 3-5 lines to capture specific outcomes (files changed, deployment target
 No hard limit on total lines — include everything worth recording,
 but every bullet must have lasting value. Quality over brevity.
 
+## Continuation context
+
+**Only write this file when outputting `[DONE]`** (i.e., no in-progress work detected and session will be cleared).
+When outputting `[DONE_NOCLEAR]` or `[SILENT]`, skip this section entirely.
+
+Write a continuation context file at `{continuation_path}` in `{locale}`.
+This file is the **sole context** a fresh session has to resume previous work — make it thorough.
+
+**Structure**:
+
+```markdown
+## 對話摘要
+[2-3 sentences: what the conversation was about overall]
+
+## 進行中的事項
+[For each ongoing topic/task:]
+- **Topic/task name**: current status, what was decided, what remains
+  - Key details: specific files, commands, configurations involved
+  - User's position/preference on this topic
+
+## 待處理
+- Unanswered questions or pending decisions
+- Next steps the user indicated
+
+## 相關檔案
+- List of files created, modified, or referenced with brief descriptions
+
+## 使用者上下文
+- Any preferences, constraints, or background the user shared during the conversation
+```
+
+**Guidelines**:
+- Write enough detail that a new session can continue **without asking the user to repeat anything**
+- Include specific file paths, variable names, code decisions — not just vague summaries
+- If a plan or architecture was discussed, capture the key points and chosen approach
+- If code was written, mention what it does and what's left to do
+- No hard line limit — completeness over brevity (typically 20-60 lines)
+
+**Skip** if the conversation was only greetings, trivial Q&A, or all tasks fully completed with nothing pending.
+
+## In-progress work detection
+
+Before outputting the final marker, check for signs of **in-progress work** in the conversation:
+- Plan mode is active (user reviewing a plan, not yet approved/rejected)
+- An unanswered user question or request (Claude hasn't responded yet)
+- A multi-step task is partially complete (e.g., code written but not tested/deployed)
+- An ongoing discussion, architecture review, or debugging session
+- The user's last message suggests they will return to continue (e.g., "let me think about it", "I'll be back")
+
+If **any** of these are detected → output `[DONE_NOCLEAR]` instead of `[DONE]`.
+
 ## Output format (strict — no other text)
 
 If there is nothing new to add to the summary:
 [SILENT]
 
-If you wrote new content to the summary file:
+If you wrote new content and **no** in-progress work detected:
 [DONE]
+
+If you wrote new content and in-progress work **is** detected:
+[DONE_NOCLEAR]
