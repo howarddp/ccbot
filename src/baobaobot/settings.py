@@ -25,6 +25,42 @@ from .utils import baobaobot_dir
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# SchedulerConfig
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SchedulerConfig:
+    """Scheduler timing parameters for SystemScheduler and CronService.
+
+    Parsed from the [scheduler] section of settings.toml.
+    If the section is missing, all defaults are used (backward-compatible).
+    """
+
+    # Main loop
+    tick_interval: float = 60.0
+
+    # Summary
+    summary_interval: int = 10800       # 3 hours
+    summary_idle: int = 3600            # 60 min
+    subprocess_timeout: int = 300       # 5 min
+
+    # Heartbeat
+    heartbeat_interval: int = 1800      # 30 min
+    heartbeat_idle: int = 300           # 5 min
+    heartbeat_dedup: int = 7200         # 2 hours
+    heartbeat_active_start: str = "07:00"
+    heartbeat_active_end: str = "23:30"
+
+    # Memory consolidation (used by CronService)
+    consolidation_interval: int = 604800  # 7 days
+    consolidation_age_days: int = 21
+
+    # Tmp cleanup (used by CronService)
+    tmp_cleanup_interval: int = 86400     # 1 day
+
+
+# ---------------------------------------------------------------------------
 # AgentConfig
 # ---------------------------------------------------------------------------
 
@@ -72,6 +108,9 @@ class AgentConfig:
 
     # Locale (e.g. "zh-TW", "en-US", "ja-JP")
     locale: str = "en-US"
+
+    # Scheduler timing config
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
     # --- Derived path helpers (use agent_dir) ---
 
@@ -180,9 +219,13 @@ def load_settings(config_dir: Path | None = None) -> list[AgentConfig]:
     if not agents_list:
         raise ValueError("settings.toml must contain at least one [[agents]] entry.")
 
+    # Parse [scheduler] section (global only, not per-agent)
+    scheduler_raw = raw.get("scheduler", {})
+    scheduler_config = SchedulerConfig(**scheduler_raw) if scheduler_raw else SchedulerConfig()
+
     results: list[AgentConfig] = []
     for agent_raw in agents_list:
-        cfg = _build_agent_config(config_dir, global_section, agent_raw)
+        cfg = _build_agent_config(config_dir, global_section, agent_raw, scheduler_config)
         results.append(cfg)
 
     return results
@@ -192,6 +235,7 @@ def _build_agent_config(
     config_dir: Path,
     global_section: dict,
     agent_raw: dict,
+    scheduler_config: SchedulerConfig,
 ) -> AgentConfig:
     """Merge global + per-agent settings into an AgentConfig."""
     name = agent_raw.get("name")
@@ -250,4 +294,5 @@ def _build_agent_config(
         whisper_model=str(_get("whisper_model", "small")),
         cron_default_tz=str(_get("cron_default_tz", "")),
         locale=str(_get("locale", "en-US")),
+        scheduler=scheduler_config,
     )

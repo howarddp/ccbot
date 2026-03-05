@@ -91,6 +91,7 @@ from .handlers.callback_data import (
     CB_MENU_SYSTEM,
     CB_RESTART_SESSION,
     CB_SCREENSHOT_REFRESH,
+    CB_HEARTBEAT,
     CB_VERBOSITY,
     CB_VOICE_CANCEL,
     CB_VOICE_EDIT,
@@ -155,6 +156,7 @@ from .handlers.verbosity_handler import (
     should_skip_message,
     verbosity_command,
 )
+from .handlers.heartbeat_handler import heartbeat_command
 from .handlers.cron_handler import cron_command
 from .handlers.menu_handler import (
     agent_command,
@@ -975,6 +977,35 @@ async def forward_command_handler(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
     await _send_typing(update.message.chat)
+
+    # Intercept /clear: run summary first to avoid losing unsummarized content
+    if cc_slash.strip().lower() == "/clear":
+        if ctx.system_scheduler:
+            ws_name = display.removeprefix(f"{ctx.config.name}/")
+            await safe_reply(
+                update.message, f"📝 [{display}] Summarizing before clear..."
+            )
+            try:
+                ran = await asyncio.wait_for(
+                    ctx.system_scheduler.trigger_summary(ws_name), timeout=120
+                )
+                if ran:
+                    logger.info("Pre-clear summary completed for %s", display)
+                else:
+                    logger.info(
+                        "Pre-clear summary skipped (no new content) for %s", display
+                    )
+            except Exception as e:
+                logger.warning("Pre-clear summary failed for %s: %s", display, e)
+        # Now send /clear
+        success, message = await ctx.session_manager.send_to_window(wid, "/clear")
+        if success:
+            await safe_reply(update.message, f"⚡ [{display}] /clear")
+            ctx.session_manager.clear_window_session(wid)
+        else:
+            await safe_reply(update.message, f"❌ {message}")
+        return
+
     success, message = await ctx.session_manager.send_to_window(wid, cc_slash)
     if success:
         # Extract the command name (e.g. "/model" → "model", "/model sonnet" → "model")
@@ -2218,6 +2249,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data.startswith(CB_VERBOSITY):
         await handle_verbosity_callback(query, ctx)
 
+    # Heartbeat toggle
+    elif data.startswith(CB_HEARTBEAT):
+        from .handlers.heartbeat_handler import handle_heartbeat_callback
+        await handle_heartbeat_callback(query, ctx)
+
     # File browser: enter directory
     elif data.startswith(CB_LS_DIR):
         idx = int(data[len(CB_LS_DIR) :])
@@ -2520,6 +2556,7 @@ async def handle_new_message(
             logger.info(f"No active groups for session {msg.session_id}")
             return
         for chat_id, wid in active_groups:
+            sm.touch_interaction(wid)
             # In group mode, use chat_id as queue key
             # (group chat_ids are negative, so no collision with user_ids)
             await _deliver_message(msg, bot, agent_ctx, chat_id, wid, thread_id=None)
@@ -2532,7 +2569,17 @@ async def handle_new_message(
         logger.info(f"No active users for session {msg.session_id}")
         return
 
+    # Deduplicate: in forum topics multiple users may resolve to the same
+    # (chat_id, thread_id) destination.  Deliver only once per destination,
+    # picking the first user_id as the queue key.
+    seen_destinations: set[tuple[int, int]] = set()
     for user_id, wid, thread_id in active_users:
+        chat_id = sm.resolve_chat_id(user_id, thread_id)
+        dest = (chat_id, thread_id)
+        if dest in seen_destinations:
+            continue
+        seen_destinations.add(dest)
+        sm.touch_interaction(wid)
         await _deliver_message(msg, bot, agent_ctx, user_id, wid, thread_id=thread_id)
 
 
@@ -3166,6 +3213,7 @@ async def post_init(application: Application) -> None:
             on_notify=_on_summary_notify,
             tmux_manager=agent_ctx.tmux_manager,
             backend=agent_ctx.backend,
+            scheduler_config=agent_ctx.config.scheduler,
         )
         agent_ctx.system_scheduler = system_sched
         await system_sched.start()
@@ -3385,6 +3433,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("verbosity", verbosity_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CommandHandler("summary", summary_command))
+    application.add_handler(CommandHandler("heartbeat", heartbeat_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Register mode-specific lifecycle handlers (e.g. topic created/closed for forum)
     agent_ctx.router.register_lifecycle_handlers(application)

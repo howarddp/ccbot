@@ -67,6 +67,7 @@ _BIN_SCRIPTS = [
     "yt-channel",
     "yt-search",
     "session-init",
+    "diff2html",
 ]
 
 # Skills deployed to each per-topic workspace
@@ -107,6 +108,7 @@ _SKILL_NAMES = [
     "youtube-summary",
     "youtube-channel",
     "youtube-search",
+    "dev-utils",
 ]
 
 

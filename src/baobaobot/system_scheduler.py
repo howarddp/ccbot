@@ -13,17 +13,20 @@ State is stored in each workspace's memory.db `cron_meta` table.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 if TYPE_CHECKING:
     from .backends.base import TmuxCliBackend
     from .session import SessionManager
+    from .settings import SchedulerConfig
     from .tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
@@ -32,38 +35,34 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Check interval for the timer loop
-_TICK_INTERVAL_S = 60.0
-
-# How often to run summary per workspace
-_SUMMARY_INTERVAL_S = 1800
-
-# Subprocess timeout for claude -p
-_SUBPROCESS_TIMEOUT_S = 300
-
-# Max concurrent claude -p processes
+# Max concurrent claude -p processes (internal, not configurable)
 _MAX_CONCURRENT = 2
-
-# Idle threshold: JSONL must not have changed in the last N seconds
-_IDLE_THRESHOLD_S = 900  # 15 minutes
-
-# cron_meta key for last summary time
-_META_KEY_LAST_SUMMARY_TIME = "system_scheduler.last_summary_time"
-
-# cron_meta key for last summary JSONL path (to detect session changes)
-_META_KEY_LAST_SUMMARY_JSONL = "system_scheduler.last_summary_jsonl"
-
-# cron_meta key for last summary JSONL byte offset (to detect new content)
-_META_KEY_LAST_SUMMARY_OFFSET = "system_scheduler.last_summary_offset"
-
-# cron_meta key for next summary run timestamp
-_META_KEY_NEXT_SUMMARY_RUN = "system_scheduler.next_summary_run"
-
-# cron_meta key for consecutive error count
-_META_KEY_SUMMARY_ERRORS = "system_scheduler.summary_consecutive_errors"
 
 # Notify admin after this many consecutive errors
 _ADMIN_NOTIFY_THRESHOLD = 5
+
+# cron_meta keys
+_META_KEY_LAST_SUMMARY_TIME = "system_scheduler.last_summary_time"
+_META_KEY_LAST_SUMMARY_JSONL = "system_scheduler.last_summary_jsonl"
+_META_KEY_LAST_SUMMARY_OFFSET = "system_scheduler.last_summary_offset"
+_META_KEY_NEXT_SUMMARY_RUN = "system_scheduler.next_summary_run"
+_META_KEY_SUMMARY_ERRORS = "system_scheduler.summary_consecutive_errors"
+_META_KEY_HEARTBEAT_ENABLED = "system_scheduler.heartbeat_enabled"
+_META_KEY_HEARTBEAT_LAST_TIME = "system_scheduler.heartbeat_last_time"
+_META_KEY_HEARTBEAT_CONTENT_HASH = "system_scheduler.heartbeat_content_hash"
+_META_KEY_HEARTBEAT_NEXT_RUN = "system_scheduler.heartbeat_next_run"
+
+_HEARTBEAT_MESSAGE = (
+    "[System Heartbeat] Read HEARTBEAT.md and check if any items need action or user notification. "
+    "Remove completed items. If nothing needs action, reply with [NO_NOTIFY] as the FIRST text in your response — "
+    "do not output any analysis or reasoning before it."
+)
+
+
+def _parse_time(s: str) -> tuple[int, int]:
+    """Parse 'HH:MM' string into (hour, minute) tuple."""
+    h, m = s.split(":")
+    return int(h), int(m)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +136,10 @@ class SystemScheduler:
         on_notify: OnNotifyCallback,
         tmux_manager: TmuxManager | None = None,
         backend: TmuxCliBackend | None = None,
+        scheduler_config: SchedulerConfig | None = None,
     ) -> None:
+        from .settings import SchedulerConfig as _SC
+
         self._session_manager = session_manager
         self._iter_workspace_dirs = iter_workspace_dirs
         self._locale = locale
@@ -147,6 +149,11 @@ class SystemScheduler:
         self._on_notify = on_notify
         self._tmux_manager = tmux_manager
         self._backend = backend
+        self._cfg: _SC = scheduler_config or _SC()
+
+        # Pre-parse active hours from config strings
+        self._active_start = _parse_time(self._cfg.heartbeat_active_start)
+        self._active_end = _parse_time(self._cfg.heartbeat_active_end)
 
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
         self._running = False
@@ -239,7 +246,7 @@ class SystemScheduler:
             except Exception:
                 logger.exception("SystemScheduler timer loop error")
             try:
-                await asyncio.sleep(_TICK_INTERVAL_S)
+                await asyncio.sleep(self._cfg.tick_interval)
             except asyncio.CancelledError:
                 break
 
@@ -258,14 +265,19 @@ class SystemScheduler:
                 continue
             if not self._has_new_content(ws_dir, jsonl_path):
                 # No new content — reschedule and skip
-                self._set_next_run(ws_dir, now + _SUMMARY_INTERVAL_S)
+                self._set_next_run(ws_dir, now + self._cfg.summary_interval)
                 continue
             # Check idle: don't summarize while Claude is actively writing
             try:
                 mtime = jsonl_path.stat().st_mtime
-                if (now - mtime) < _IDLE_THRESHOLD_S:
+                if (now - mtime) < self._cfg.summary_idle:
                     continue
             except OSError:
+                continue
+
+            # Also check in-memory interaction time (user sends / Claude responses)
+            last_interact = self._session_manager.get_last_interaction_time(window_id)
+            if last_interact and (now - last_interact) < self._cfg.summary_idle:
                 continue
 
             tasks.append((ws_name, ws_dir, window_id, jsonl_path))
@@ -276,6 +288,9 @@ class SystemScheduler:
             )
             self._pending_tasks.add(task)
             task.add_done_callback(self._pending_tasks.discard)
+
+        # Check heartbeats after summary tasks are queued
+        await self._check_heartbeats(now)
 
     async def _run_with_semaphore(
         self,
@@ -302,7 +317,7 @@ class SystemScheduler:
         """
         now = time.time()
         last_summary_time = self._get_last_summary_time(ws_dir)
-        today_date = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
+        today_date = datetime.fromtimestamp(now, tz=ZoneInfo(self._timezone)).strftime("%Y-%m-%d")
         summary_path = ws_dir / "memory" / "summaries" / f"{today_date}.md"
 
         from .utils import baobaobot_dir
@@ -346,8 +361,12 @@ class SystemScheduler:
         # Summary does not notify users — it's a silent housekeeping task.
         # The on_notify callback is preserved for other system tasks.
 
-        # Send /clear to the tmux window to free context after successful summary
-        await self._send_clear_to_window(workspace_name, window_id)
+        # Only /clear the live session when summary actually wrote content.
+        # This frees context for the user's next interaction.
+        # Bug 3's < 4KB defense in _has_new_content prevents the new empty
+        # session from triggering another summary cycle.
+        if action == "done":
+            await self._send_clear_to_window(workspace_name, window_id)
 
         logger.info("SystemScheduler: summary done for %s → %s", workspace_name, action)
         return True
@@ -389,8 +408,10 @@ class SystemScheduler:
 
     # --- Post-summary actions ---
 
-    async def _send_clear_to_window(self, workspace_name: str, window_id: str) -> None:
-        """Send /clear to the tmux window after a successful summary."""
+    async def _send_clear_to_window(
+        self, workspace_name: str, window_id: str
+    ) -> None:
+        """Send /clear to the tmux window to free context for the user."""
         if not self._tmux_manager:
             return
         try:
@@ -416,6 +437,34 @@ class SystemScheduler:
                 workspace_name,
                 exc_info=True,
             )
+
+    async def _run_claude_p(self, prompt: str, cwd: Path) -> str:
+        """Run `claude -p` as subprocess, return stdout."""
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
+        proc = await asyncio.create_subprocess_exec(
+            "claude",
+            "-p", prompt,
+            "--dangerously-skip-permissions",
+            "--output-format", "text",
+            "--no-session-persistence",
+            cwd=str(cwd),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=self._cfg.subprocess_timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise
+
+        return stdout_bytes.decode("utf-8", errors="replace")
+
+    # --- Post-summary actions ---
 
     # --- Delivery ---
 
@@ -489,7 +538,7 @@ class SystemScheduler:
         self, ws_dir: Path, now: float, jsonl_path: Path
     ) -> None:
         """Update all state keys after a successful summary in one transaction."""
-        dt = datetime.fromtimestamp(now, tz=timezone.utc)
+        dt = datetime.fromtimestamp(now, tz=ZoneInfo(self._timezone))
         time_val = dt.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             size = jsonl_path.stat().st_size
@@ -501,9 +550,7 @@ class SystemScheduler:
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_TIME, time_val)
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_JSONL, str(jsonl_path))
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_OFFSET, str(size))
-                _set_meta(
-                    conn, _META_KEY_NEXT_SUMMARY_RUN, str(now + _SUMMARY_INTERVAL_S)
-                )
+                _set_meta(conn, _META_KEY_NEXT_SUMMARY_RUN, str(now + self._cfg.summary_interval))
                 _set_meta(conn, _META_KEY_SUMMARY_ERRORS, "0")
                 conn.commit()
             finally:
@@ -541,8 +588,9 @@ class SystemScheduler:
             return True  # Assume new content on DB error
 
         # Session changed (new JSONL path) — reset offset
+        # but skip tiny files (< 4KB) that are just initialization junk
         if last_jsonl and last_jsonl != str(jsonl_path):
-            return True
+            return current_size >= 4096
 
         try:
             last_offset = int(last_offset_str)
@@ -659,6 +707,268 @@ class SystemScheduler:
             if jsonl_file.exists():
                 return jsonl_file
         return None
+
+    # --- Heartbeat logic ---
+
+    def _is_within_active_hours(self) -> bool:
+        """Check if current time is within active hours."""
+        try:
+            now_dt = datetime.now(tz=ZoneInfo(self._timezone))
+            now_hm = (now_dt.hour, now_dt.minute)
+            return self._active_start <= now_hm < self._active_end
+        except Exception:
+            return False
+
+    def _read_heartbeat_content(self, ws_dir: Path) -> str:
+        """Read HEARTBEAT.md, return empty string if only headers/whitespace."""
+        hb_path = ws_dir / "HEARTBEAT.md"
+        if not hb_path.exists():
+            return ""
+        try:
+            text = hb_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        # Filter: lines that are only # headings or blank = empty
+        meaningful_lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#") and not stripped.lstrip("#").strip():
+                continue
+            meaningful_lines.append(stripped)
+        return "\n".join(meaningful_lines)
+
+    @staticmethod
+    def _compute_content_hash(content: str) -> str:
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+    def _get_heartbeat_state(self, ws_dir: Path) -> dict[str, str]:
+        """Read all heartbeat meta keys in a single DB connection."""
+        defaults = {
+            "enabled": "1",
+            "next_run": "0",
+            "last_time": "0",
+            "content_hash": "",
+        }
+        try:
+            conn = _connect(ws_dir)
+            try:
+                defaults["enabled"] = _get_meta(conn, _META_KEY_HEARTBEAT_ENABLED, "1")
+                defaults["next_run"] = _get_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, "0")
+                defaults["last_time"] = _get_meta(conn, _META_KEY_HEARTBEAT_LAST_TIME, "0")
+                defaults["content_hash"] = _get_meta(conn, _META_KEY_HEARTBEAT_CONTENT_HASH, "")
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return defaults
+
+    def _is_heartbeat_enabled(self, ws_dir: Path) -> bool:
+        """Check heartbeat enabled (standalone, used by public API)."""
+        try:
+            conn = _connect(ws_dir)
+            try:
+                val = _get_meta(conn, _META_KEY_HEARTBEAT_ENABLED, "1")
+                return val == "1"
+            finally:
+                conn.close()
+        except Exception:
+            return True
+
+    def _update_heartbeat_state(
+        self, ws_dir: Path, now: float, content_hash: str
+    ) -> None:
+        try:
+            conn = _connect(ws_dir)
+            try:
+                _set_meta(conn, _META_KEY_HEARTBEAT_LAST_TIME, str(now))
+                _set_meta(conn, _META_KEY_HEARTBEAT_CONTENT_HASH, content_hash)
+                _set_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, str(now + self._cfg.heartbeat_interval))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("Failed to update heartbeat state for %s", ws_dir)
+
+    def set_heartbeat_enabled(self, ws_dir: Path, enabled: bool) -> None:
+        """Public API: enable/disable heartbeat for a workspace."""
+        try:
+            conn = _connect(ws_dir)
+            try:
+                _set_meta(conn, _META_KEY_HEARTBEAT_ENABLED, "1" if enabled else "0")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("Failed to set heartbeat enabled for %s", ws_dir)
+
+    def get_heartbeat_enabled(self, ws_dir: Path) -> bool:
+        """Public API: check if heartbeat is enabled for a workspace."""
+        return self._is_heartbeat_enabled(ws_dir)
+
+    async def _check_heartbeats(self, now: float) -> None:
+        """Check all workspaces for pending heartbeats."""
+        if not self._is_within_active_hours():
+            return
+        if not self._tmux_manager:
+            return
+
+        for ws_dir in self._iter_workspace_dirs():
+            ws_name = ws_dir.name.removeprefix("workspace_")
+            try:
+                await self._check_single_heartbeat(ws_name, ws_dir, now)
+            except Exception:
+                logger.warning(
+                    "Heartbeat check failed for %s", ws_name, exc_info=True
+                )
+
+    async def _check_single_heartbeat(
+        self, ws_name: str, ws_dir: Path, now: float
+    ) -> None:
+        # Read all heartbeat state in one DB connection
+        state = self._get_heartbeat_state(ws_dir)
+
+        if state["enabled"] != "1":
+            return
+        try:
+            if now < float(state["next_run"]):
+                return
+        except ValueError:
+            pass
+
+        content = self._read_heartbeat_content(ws_dir)
+        if not content:
+            # No content — reschedule
+            self._set_heartbeat_next_run(ws_dir, now + self._cfg.heartbeat_interval)
+            return
+
+        content_hash = self._compute_content_hash(content)
+
+        # Dedup: skip if hash unchanged AND last heartbeat < 2h ago
+        if content_hash == state["content_hash"]:
+            try:
+                last_time = float(state["last_time"])
+                if (now - last_time) < self._cfg.heartbeat_dedup:
+                    self._set_heartbeat_next_run(ws_dir, now + self._cfg.heartbeat_interval)
+                    return
+            except ValueError:
+                pass
+
+        window_id = self._resolve_window(ws_name)
+        if not window_id:
+            return
+
+        # Idle check: JSONL mtime
+        jsonl_path = self._get_jsonl_path(window_id, ws_dir)
+        if jsonl_path:
+            try:
+                mtime = jsonl_path.stat().st_mtime
+                if (now - mtime) < self._cfg.heartbeat_idle:
+                    return
+            except OSError:
+                pass
+
+        # Idle check: last interaction
+        last_interact = self._session_manager.get_last_interaction_time(window_id)
+        if last_interact and (now - last_interact) < self._cfg.heartbeat_idle:
+            return
+
+        # Skip if summary is pending for this workspace (avoid collision)
+        if self._is_summary_due(ws_dir, now) and self._has_new_content_for_heartbeat_check(ws_dir, window_id):
+            return
+
+        await self._send_heartbeat(ws_name, ws_dir, window_id, content_hash, now)
+
+    def _has_new_content_for_heartbeat_check(self, ws_dir: Path, window_id: str) -> bool:
+        """Check if summary has pending new content (to avoid heartbeat/summary collision)."""
+        jsonl_path = self._get_jsonl_path(window_id, ws_dir)
+        if not jsonl_path:
+            return False
+        return self._has_new_content(ws_dir, jsonl_path)
+
+    async def _send_heartbeat(
+        self,
+        ws_name: str,
+        ws_dir: Path,
+        window_id: str,
+        content_hash: str,
+        now: float,
+    ) -> None:
+        """Send heartbeat message to the live tmux session."""
+        if not self._tmux_manager:
+            return
+        try:
+            ok = await self._tmux_manager.send_keys(
+                window_id, _HEARTBEAT_MESSAGE, enter=True, literal=True
+            )
+            if ok:
+                self._update_heartbeat_state(ws_dir, now, content_hash)
+                logger.info(
+                    "SystemScheduler: sent heartbeat to window %s (%s)",
+                    window_id, ws_name,
+                )
+            else:
+                logger.warning(
+                    "SystemScheduler: failed to send heartbeat to window %s (%s)",
+                    window_id, ws_name,
+                )
+        except Exception:
+            logger.warning(
+                "SystemScheduler: error sending heartbeat to window %s (%s)",
+                window_id, ws_name,
+                exc_info=True,
+            )
+
+    def _set_heartbeat_next_run(self, ws_dir: Path, next_run: float) -> None:
+        try:
+            conn = _connect(ws_dir)
+            try:
+                _set_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, str(next_run))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    async def trigger_heartbeat(self, workspace_name: str) -> bool:
+        """Trigger an immediate heartbeat for a workspace.
+
+        Ignores scheduled next_run — always sends if there's content.
+        Returns True if heartbeat was sent, False if skipped.
+        """
+        ws_dir = self._find_workspace_dir(workspace_name)
+        if not ws_dir:
+            logger.warning("trigger_heartbeat: workspace dir not found for %r", workspace_name)
+            return False
+
+        window_id = self._resolve_window(workspace_name)
+        if not window_id:
+            logger.warning("trigger_heartbeat: window not found for %r", workspace_name)
+            return False
+
+        content = self._read_heartbeat_content(ws_dir)
+        if not content:
+            logger.info("trigger_heartbeat: no content in HEARTBEAT.md for %r", workspace_name)
+            return False
+
+        content_hash = self._compute_content_hash(content)
+        now = time.time()
+        await self._send_heartbeat(workspace_name, ws_dir, window_id, content_hash, now)
+        return True
+
+    def get_heartbeat_item_count(self, ws_dir: Path) -> int:
+        """Count meaningful items in HEARTBEAT.md (for display)."""
+        content = self._read_heartbeat_content(ws_dir)
+        if not content:
+            return 0
+        # Count non-heading lines as items
+        count = 0
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                count += 1
+        return count
 
     @property
     def is_running(self) -> bool:
