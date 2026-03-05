@@ -137,7 +137,7 @@ bot_token_env = "TEST_TOKEN"
         import os
         import tomllib
 
-        from baobaobot.settings import _build_agent_config
+        from baobaobot.settings import SchedulerConfig, _build_agent_config
 
         os.environ["TEST_TOKEN"] = "fake-token"
         try:
@@ -146,6 +146,7 @@ bot_token_env = "TEST_TOKEN"
                 tmp_path,
                 raw.get("global", {}),
                 raw["agents"][0],
+                SchedulerConfig(),
             )
             assert cfg.mode == "forum"
         finally:
@@ -156,7 +157,7 @@ bot_token_env = "TEST_TOKEN"
         import os
         import tomllib
 
-        from baobaobot.settings import _build_agent_config
+        from baobaobot.settings import SchedulerConfig, _build_agent_config
 
         toml_content = """
 [global]
@@ -174,6 +175,7 @@ mode = "group"
                 tmp_path,
                 raw.get("global", {}),
                 raw["agents"][0],
+                SchedulerConfig(),
             )
             assert cfg.mode == "group"
         finally:

@@ -9,19 +9,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from baobaobot.settings import SchedulerConfig
 from baobaobot.system_scheduler import (
     SystemScheduler,
     _connect,
     _get_meta,
     _set_meta,
-    _HEARTBEAT_INTERVAL_S,
-    _HEARTBEAT_DEDUP_S,
-    _HEARTBEAT_IDLE_THRESHOLD_S,
     _META_KEY_HEARTBEAT_CONTENT_HASH,
     _META_KEY_HEARTBEAT_ENABLED,
     _META_KEY_HEARTBEAT_LAST_TIME,
     _META_KEY_HEARTBEAT_NEXT_RUN,
 )
+
+_CFG = SchedulerConfig()
 
 
 @pytest.fixture
@@ -48,6 +48,7 @@ def scheduler() -> SystemScheduler:
         timezone="UTC",
         iter_workspace_dirs=lambda: [],
         on_notify=AsyncMock(),
+        scheduler_config=SchedulerConfig(),
     )
     return sched
 
@@ -154,7 +155,7 @@ class TestCheckSingleHeartbeat:
         conn = _connect(ws_dir)
         next_run = float(_get_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, "0"))
         conn.close()
-        assert next_run >= now + _HEARTBEAT_INTERVAL_S - 1
+        assert next_run >= now + _CFG.heartbeat_interval - 1
 
     @pytest.mark.asyncio
     async def test_skip_dedup_same_hash_recent(
@@ -224,7 +225,7 @@ class TestCheckSingleHeartbeat:
         _set_meta(conn, _META_KEY_HEARTBEAT_CONTENT_HASH, content_hash)
         _set_meta(
             conn, _META_KEY_HEARTBEAT_LAST_TIME,
-            str(now - _HEARTBEAT_DEDUP_S - 100),  # > 2h ago
+            str(now - _CFG.heartbeat_dedup - 100),  # > 2h ago
         )
         _set_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, "0")
         conn.commit()

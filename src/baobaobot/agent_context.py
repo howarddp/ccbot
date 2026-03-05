@@ -116,6 +116,7 @@ def create_agent_context(config: AgentConfig) -> AgentContext:
         workspace_dir_for=config.workspace_dir_for,
         iter_workspace_dirs=config.iter_workspace_dirs,
         agent_name=config.name,
+        scheduler_config=config.scheduler,
     )
 
     return AgentContext(

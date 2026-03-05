@@ -25,6 +25,7 @@ from .types import CronJob, CronJobState, CronSchedule, CronStoreFile, Workspace
 
 if TYPE_CHECKING:
     from ..session import SessionManager
+    from ..settings import SchedulerConfig
     from ..tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
@@ -44,17 +45,8 @@ _MIN_TICK_INTERVAL = 5.0
 # System job name for weekly memory consolidation
 _SYSTEM_CONSOLIDATION_JOB_NAME = "_system:weekly_consolidation"
 
-# Weekly interval in seconds (7 days)
-_CONSOLIDATION_INTERVAL_S = 7 * 24 * 3600
-
-# Daily memories older than this many days are candidates for consolidation
-_CONSOLIDATION_AGE_DAYS = 21
-
 # System job name for tmp directory cleanup
 _SYSTEM_TMP_CLEANUP_JOB_NAME = "_system:tmp_cleanup"
-
-# Tmp cleanup interval: once per day
-_TMP_CLEANUP_INTERVAL_S = 86400
 
 # Voice files older than 7 days
 _TMP_VOICE_MAX_AGE_S = 7 * 86400
@@ -121,7 +113,10 @@ class CronService:
         workspace_dir_for: Callable[[str], Path],
         iter_workspace_dirs: Callable[[], list[Path]],
         agent_name: str = "",
+        scheduler_config: SchedulerConfig | None = None,
     ) -> None:
+        from ..settings import SchedulerConfig as _SC
+
         self._session_manager = session_manager
         self._tmux_manager = tmux_manager
         self._cron_default_tz = cron_default_tz
@@ -130,6 +125,7 @@ class CronService:
         self._workspace_dir_for = workspace_dir_for
         self._iter_workspace_dirs = iter_workspace_dirs
         self._agent_name = agent_name
+        self._cfg: _SC = scheduler_config or _SC()
 
         self._stores: dict[str, CronStoreFile] = {}  # workspace_name → store
         self._workspace_dirs: dict[str, Path] = {}  # workspace_name → dir
@@ -514,7 +510,7 @@ class CronService:
         if not ws_dir:
             return False
 
-        cutoff = date.today() - timedelta(days=_CONSOLIDATION_AGE_DAYS)
+        cutoff = date.today() - timedelta(days=self._cfg.consolidation_age_days)
 
         # Check daily memories
         daily_dir = ws_dir / "memory" / "daily"
@@ -717,11 +713,11 @@ class CronService:
             )
             if not has_consolidation:
                 schedule = CronSchedule(
-                    kind="every", every_seconds=_CONSOLIDATION_INTERVAL_S
+                    kind="every", every_seconds=self._cfg.consolidation_interval
                 )
                 next_run = compute_next_run(schedule, now, self._cron_default_tz)
                 prompt = _CONSOLIDATION_PROMPT.format(
-                    age_days=_CONSOLIDATION_AGE_DAYS, locale=self._locale
+                    age_days=self._cfg.consolidation_age_days, locale=self._locale
                 )
                 job = CronJob(
                     id=uuid.uuid4().hex[:8],
@@ -748,7 +744,7 @@ class CronService:
             )
             if not has_tmp_cleanup:
                 schedule = CronSchedule(
-                    kind="every", every_seconds=_TMP_CLEANUP_INTERVAL_S
+                    kind="every", every_seconds=self._cfg.tmp_cleanup_interval
                 )
                 next_run = compute_next_run(schedule, now, self._cron_default_tz)
                 job = CronJob(

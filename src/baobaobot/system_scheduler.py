@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 
 if TYPE_CHECKING:
     from .session import SessionManager
+    from .settings import SchedulerConfig
     from .tmux_manager import TmuxManager
 
 logger = logging.getLogger(__name__)
@@ -33,48 +34,18 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Check interval for the timer loop
-_TICK_INTERVAL_S = 60.0
-
-# How often to run summary per workspace
-_SUMMARY_INTERVAL_S = 10800  # 3 hours
-
-# Subprocess timeout for claude -p
-_SUBPROCESS_TIMEOUT_S = 300
-
-# Max concurrent claude -p processes
+# Max concurrent claude -p processes (internal, not configurable)
 _MAX_CONCURRENT = 2
-
-# Idle threshold for summary: JSONL must not have changed in the last N seconds
-_SUMMARY_IDLE_THRESHOLD_S = 3600  # 60 minutes
-
-# Idle threshold for heartbeat
-_HEARTBEAT_IDLE_THRESHOLD_S = 300  # 5 minutes
-
-# cron_meta key for last summary time
-_META_KEY_LAST_SUMMARY_TIME = "system_scheduler.last_summary_time"
-
-# cron_meta key for last summary JSONL path (to detect session changes)
-_META_KEY_LAST_SUMMARY_JSONL = "system_scheduler.last_summary_jsonl"
-
-# cron_meta key for last summary JSONL byte offset (to detect new content)
-_META_KEY_LAST_SUMMARY_OFFSET = "system_scheduler.last_summary_offset"
-
-# cron_meta key for next summary run timestamp
-_META_KEY_NEXT_SUMMARY_RUN = "system_scheduler.next_summary_run"
-
-# cron_meta key for consecutive error count
-_META_KEY_SUMMARY_ERRORS = "system_scheduler.summary_consecutive_errors"
 
 # Notify admin after this many consecutive errors
 _ADMIN_NOTIFY_THRESHOLD = 5
 
-# Heartbeat constants
-_HEARTBEAT_INTERVAL_S = 1800         # 30 minutes
-_HEARTBEAT_DEDUP_S = 7200            # 2 hours
-_HEARTBEAT_ACTIVE_START = 9         # 09:00
-_HEARTBEAT_ACTIVE_END = 23          # 23:00
-
+# cron_meta keys
+_META_KEY_LAST_SUMMARY_TIME = "system_scheduler.last_summary_time"
+_META_KEY_LAST_SUMMARY_JSONL = "system_scheduler.last_summary_jsonl"
+_META_KEY_LAST_SUMMARY_OFFSET = "system_scheduler.last_summary_offset"
+_META_KEY_NEXT_SUMMARY_RUN = "system_scheduler.next_summary_run"
+_META_KEY_SUMMARY_ERRORS = "system_scheduler.summary_consecutive_errors"
 _META_KEY_HEARTBEAT_ENABLED = "system_scheduler.heartbeat_enabled"
 _META_KEY_HEARTBEAT_LAST_TIME = "system_scheduler.heartbeat_last_time"
 _META_KEY_HEARTBEAT_CONTENT_HASH = "system_scheduler.heartbeat_content_hash"
@@ -85,6 +56,12 @@ _HEARTBEAT_MESSAGE = (
     "Remove completed items. If nothing needs action, reply with [NO_NOTIFY] as the FIRST text in your response — "
     "do not output any analysis or reasoning before it."
 )
+
+
+def _parse_time(s: str) -> tuple[int, int]:
+    """Parse 'HH:MM' string into (hour, minute) tuple."""
+    h, m = s.split(":")
+    return int(h), int(m)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +135,10 @@ class SystemScheduler:
         admin_user_ids: list[int] | None = None,
         on_notify: OnNotifyCallback,
         tmux_manager: TmuxManager | None = None,
+        scheduler_config: SchedulerConfig | None = None,
     ) -> None:
+        from .settings import SchedulerConfig as _SC
+
         self._session_manager = session_manager
         self._iter_workspace_dirs = iter_workspace_dirs
         self._locale = locale
@@ -167,6 +147,11 @@ class SystemScheduler:
         self._admin_user_ids = admin_user_ids or []
         self._on_notify = on_notify
         self._tmux_manager = tmux_manager
+        self._cfg: _SC = scheduler_config or _SC()
+
+        # Pre-parse active hours from config strings
+        self._active_start = _parse_time(self._cfg.heartbeat_active_start)
+        self._active_end = _parse_time(self._cfg.heartbeat_active_end)
 
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
         self._running = False
@@ -252,7 +237,7 @@ class SystemScheduler:
             except Exception:
                 logger.exception("SystemScheduler timer loop error")
             try:
-                await asyncio.sleep(_TICK_INTERVAL_S)
+                await asyncio.sleep(self._cfg.tick_interval)
             except asyncio.CancelledError:
                 break
 
@@ -271,19 +256,19 @@ class SystemScheduler:
                 continue
             if not self._has_new_content(ws_dir, jsonl_path):
                 # No new content — reschedule and skip
-                self._set_next_run(ws_dir, now + _SUMMARY_INTERVAL_S)
+                self._set_next_run(ws_dir, now + self._cfg.summary_interval)
                 continue
             # Check idle: don't summarize while Claude is actively writing
             try:
                 mtime = jsonl_path.stat().st_mtime
-                if (now - mtime) < _SUMMARY_IDLE_THRESHOLD_S:
+                if (now - mtime) < self._cfg.summary_idle:
                     continue
             except OSError:
                 continue
 
             # Also check in-memory interaction time (user sends / Claude responses)
             last_interact = self._session_manager.get_last_interaction_time(window_id)
-            if last_interact and (now - last_interact) < _SUMMARY_IDLE_THRESHOLD_S:
+            if last_interact and (now - last_interact) < self._cfg.summary_idle:
                 continue
 
             tasks.append((ws_name, ws_dir, window_id, jsonl_path))
@@ -422,7 +407,7 @@ class SystemScheduler:
         )
         try:
             stdout_bytes, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=_SUBPROCESS_TIMEOUT_S
+                proc.communicate(), timeout=self._cfg.subprocess_timeout
             )
         except asyncio.TimeoutError:
             proc.kill()
@@ -512,7 +497,7 @@ class SystemScheduler:
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_TIME, time_val)
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_JSONL, str(jsonl_path))
                 _set_meta(conn, _META_KEY_LAST_SUMMARY_OFFSET, str(size))
-                _set_meta(conn, _META_KEY_NEXT_SUMMARY_RUN, str(now + _SUMMARY_INTERVAL_S))
+                _set_meta(conn, _META_KEY_NEXT_SUMMARY_RUN, str(now + self._cfg.summary_interval))
                 _set_meta(conn, _META_KEY_SUMMARY_ERRORS, "0")
                 conn.commit()
             finally:
@@ -668,10 +653,11 @@ class SystemScheduler:
     # --- Heartbeat logic ---
 
     def _is_within_active_hours(self) -> bool:
-        """Check if current time is within active hours (09:00-23:00)."""
+        """Check if current time is within active hours."""
         try:
             now_dt = datetime.now(tz=ZoneInfo(self._timezone))
-            return _HEARTBEAT_ACTIVE_START <= now_dt.hour < _HEARTBEAT_ACTIVE_END
+            now_hm = (now_dt.hour, now_dt.minute)
+            return self._active_start <= now_hm < self._active_end
         except Exception:
             return False
 
@@ -740,7 +726,7 @@ class SystemScheduler:
             try:
                 _set_meta(conn, _META_KEY_HEARTBEAT_LAST_TIME, str(now))
                 _set_meta(conn, _META_KEY_HEARTBEAT_CONTENT_HASH, content_hash)
-                _set_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, str(now + _HEARTBEAT_INTERVAL_S))
+                _set_meta(conn, _META_KEY_HEARTBEAT_NEXT_RUN, str(now + self._cfg.heartbeat_interval))
                 conn.commit()
             finally:
                 conn.close()
@@ -796,7 +782,7 @@ class SystemScheduler:
         content = self._read_heartbeat_content(ws_dir)
         if not content:
             # No content — reschedule
-            self._set_heartbeat_next_run(ws_dir, now + _HEARTBEAT_INTERVAL_S)
+            self._set_heartbeat_next_run(ws_dir, now + self._cfg.heartbeat_interval)
             return
 
         content_hash = self._compute_content_hash(content)
@@ -805,8 +791,8 @@ class SystemScheduler:
         if content_hash == state["content_hash"]:
             try:
                 last_time = float(state["last_time"])
-                if (now - last_time) < _HEARTBEAT_DEDUP_S:
-                    self._set_heartbeat_next_run(ws_dir, now + _HEARTBEAT_INTERVAL_S)
+                if (now - last_time) < self._cfg.heartbeat_dedup:
+                    self._set_heartbeat_next_run(ws_dir, now + self._cfg.heartbeat_interval)
                     return
             except ValueError:
                 pass
@@ -820,14 +806,14 @@ class SystemScheduler:
         if jsonl_path:
             try:
                 mtime = jsonl_path.stat().st_mtime
-                if (now - mtime) < _HEARTBEAT_IDLE_THRESHOLD_S:
+                if (now - mtime) < self._cfg.heartbeat_idle:
                     return
             except OSError:
                 pass
 
         # Idle check: last interaction
         last_interact = self._session_manager.get_last_interaction_time(window_id)
-        if last_interact and (now - last_interact) < _HEARTBEAT_IDLE_THRESHOLD_S:
+        if last_interact and (now - last_interact) < self._cfg.heartbeat_idle:
             return
 
         # Skip if summary is pending for this workspace (avoid collision)

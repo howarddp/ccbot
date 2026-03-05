@@ -3207,6 +3207,7 @@ async def post_init(application: Application) -> None:
         admin_user_ids=list(agent_ctx.config.allowed_users),
         on_notify=_on_summary_notify,
         tmux_manager=agent_ctx.tmux_manager,
+        scheduler_config=agent_ctx.config.scheduler,
     )
     agent_ctx.system_scheduler = system_sched
     await system_sched.start()
