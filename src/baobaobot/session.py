@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import aiofiles
 
@@ -52,11 +52,14 @@ class WindowState:
         session_id: Associated Claude session ID (empty if not yet detected)
         cwd: Working directory for direct file path construction
         window_name: Display name of the window
+        agent_type: Backend type override for this window (e.g. "claude", "gemini").
+                    Empty string means use agent-level default.
     """
 
     session_id: str = ""
     cwd: str = ""
     window_name: str = ""
+    agent_type: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -65,6 +68,8 @@ class WindowState:
         }
         if self.window_name:
             d["window_name"] = self.window_name
+        if self.agent_type:
+            d["agent_type"] = self.agent_type
         return d
 
     @classmethod
@@ -73,6 +78,7 @@ class WindowState:
             session_id=data.get("session_id", ""),
             cwd=data.get("cwd", ""),
             window_name=data.get("window_name", ""),
+            agent_type=data.get("agent_type", ""),
         )
 
 
@@ -135,6 +141,8 @@ class SessionManager:
         )
         self._tmux_manager = tmux_manager
         self._agent_name = agent_name
+        # Per-window backend resolver (set after AgentContext is built)
+        self._backend_resolver: Callable[[str], TmuxCliBackend | None] | None = None
 
         self.window_states: dict[str, WindowState] = {}
         self.user_window_offsets: dict[int, dict[str, int]] = {}
@@ -167,6 +175,20 @@ class SessionManager:
         for uid, bindings in self.thread_bindings.items():
             for tid, wid in bindings.items():
                 self._window_to_thread[(uid, wid)] = tid
+
+    # --- Per-window backend resolution ---
+
+    def set_backend_resolver(
+        self, fn: Callable[[str], TmuxCliBackend | None]
+    ) -> None:
+        """Set a callback that resolves the backend for a given window_id."""
+        self._backend_resolver = fn
+
+    def _resolve_window_backend(self, window_id: str) -> TmuxCliBackend | None:
+        """Resolve the backend for a window, falling back to the default."""
+        if self._backend_resolver is not None:
+            return self._backend_resolver(window_id)
+        return self._backend
 
     # --- Interaction tracking (in-memory, for idle detection) ---
 
@@ -663,15 +685,21 @@ class SessionManager:
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
 
-    def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
+    def _build_session_file_path(
+        self, session_id: str, cwd: str, window_id: str = ""
+    ) -> Path | None:
         """Build the direct file path for a session from session_id and cwd.
 
         Delegates to backend.find_session_file() when available.
+        Uses per-window backend if window_id is provided and resolver is set.
         """
         if not session_id:
             return None
-        if self._backend is not None:
-            return self._backend.find_session_file(session_id, cwd)
+        backend = (
+            self._resolve_window_backend(window_id) if window_id else self._backend
+        )
+        if backend is not None:
+            return backend.find_session_file(session_id, cwd)
         if not cwd:
             return None
         # Fallback: Claude-specific path encoding
@@ -679,10 +707,10 @@ class SessionManager:
         return self._projects_path / encoded_cwd / f"{session_id}.jsonl"
 
     async def _get_session_direct(
-        self, session_id: str, cwd: str
+        self, session_id: str, cwd: str, window_id: str = ""
     ) -> ClaudeSession | None:
         """Get a ClaudeSession directly from session_id and cwd (no scanning)."""
-        file_path = self._build_session_file_path(session_id, cwd)
+        file_path = self._build_session_file_path(session_id, cwd, window_id=window_id)
 
         # Fallback: glob search if direct path doesn't exist
         if not file_path or not file_path.exists():
@@ -745,7 +773,9 @@ class SessionManager:
         if not state.session_id or not state.cwd:
             return None
 
-        session = await self._get_session_direct(state.session_id, state.cwd)
+        session = await self._get_session_direct(
+            state.session_id, state.cwd, window_id=window_id
+        )
         if session:
             return session
 
@@ -1097,8 +1127,11 @@ class SessionManager:
         if not file_path.exists():
             return [], 0
 
+        # Use per-window backend for is_full_json check
+        window_backend = self._resolve_window_backend(window_id)
+
         # Gemini backend: full JSON file
-        if self._backend is not None and self._backend.is_full_json:
+        if window_backend is not None and window_backend.is_full_json:
             return await self._get_recent_messages_gemini(file_path)
 
         # Claude backend: JSONL (line-by-line)

@@ -1,11 +1,11 @@
-"""SystemScheduler — runs system tasks via `claude -p` subprocesses.
+"""SystemScheduler — runs system tasks via headless CLI subprocesses.
 
-Handles tasks that require a Claude Code session (summary, consolidation,
-heartbeat) by spawning one-shot `claude -p` subprocesses rather than
-sending messages to live tmux windows.
+Handles tasks that require a CLI session (summary, consolidation,
+heartbeat) by spawning one-shot headless subprocesses (e.g. `claude -p`,
+`gemini -p`) rather than sending messages to live tmux windows.
 
 Current tasks:
-  - Hourly summary: reads JSONL transcript, writes to memory/summaries/
+  - Hourly summary: reads transcript, writes to memory/summaries/
 
 State is stored in each workspace's memory.db `cron_meta` table.
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Max concurrent claude -p processes (internal, not configurable)
+# Max concurrent headless CLI processes (internal, not configurable)
 _MAX_CONCURRENT = 2
 
 # Notify admin after this many consecutive errors
@@ -71,7 +71,7 @@ def _parse_time(s: str) -> tuple[int, int]:
 
 
 def _parse_output(stdout: str) -> tuple[str, str | None]:
-    """Parse claude -p stdout.
+    """Parse headless CLI stdout.
 
     Returns:
         ("silent", None) — nothing new
@@ -124,7 +124,7 @@ OnNotifyCallback = Callable[[int, int, int, str], Awaitable[None]]
 
 
 class SystemScheduler:
-    """Runs system tasks via `claude -p` subprocesses."""
+    """Runs system tasks via headless CLI subprocesses."""
 
     def __init__(
         self,
@@ -138,6 +138,7 @@ class SystemScheduler:
         on_notify: OnNotifyCallback,
         tmux_manager: TmuxManager | None = None,
         backend: TmuxCliBackend | None = None,
+        get_window_backend: Callable[[str], TmuxCliBackend | None] | None = None,
         scheduler_config: SchedulerConfig | None = None,
     ) -> None:
         from .settings import SchedulerConfig as _SC
@@ -151,6 +152,7 @@ class SystemScheduler:
         self._on_notify = on_notify
         self._tmux_manager = tmux_manager
         self._backend = backend
+        self._get_window_backend = get_window_backend
         self._cfg: _SC = scheduler_config or _SC()
 
         # Pre-parse active hours from config strings
@@ -313,7 +315,7 @@ class SystemScheduler:
         window_id: str,
         jsonl_path: Path,
     ) -> bool:
-        """Run claude -p for summary, parse output, deliver notifications.
+        """Run headless CLI for summary, parse output, deliver notifications.
 
         Returns True on success (even if [SILENT]), False on error.
         """
@@ -346,7 +348,8 @@ class SystemScheduler:
         )
 
         try:
-            stdout = await self._run_claude_p(prompt, cwd=ws_dir)
+            wb = self._effective_backend(window_id)
+            stdout = await self._run_headless(prompt, cwd=ws_dir, backend=wb)
         except asyncio.TimeoutError:
             logger.warning("Summary timeout for %s", workspace_name)
             self._record_error(ws_dir, "timeout")
@@ -386,13 +389,24 @@ class SystemScheduler:
         logger.info("SystemScheduler: summary done for %s → %s", workspace_name, action)
         return True
 
-    async def _run_claude_p(self, prompt: str, cwd: Path) -> str:
+    def _effective_backend(self, window_id: str | None = None) -> TmuxCliBackend | None:
+        """Resolve the backend for a window, falling back to agent default."""
+        if window_id and self._get_window_backend:
+            wb = self._get_window_backend(window_id)
+            if wb is not None:
+                return wb
+        return self._backend
+
+    async def _run_headless(
+        self, prompt: str, cwd: Path, *, backend: TmuxCliBackend | None = None
+    ) -> str:
         """Run headless CLI task, return stdout.
 
         Uses backend.run_headless() when available.
         """
-        if self._backend is not None and self._backend.supports_headless:
-            return await self._backend.run_headless(prompt, cwd)
+        effective = backend or self._backend
+        if effective is not None and effective.supports_headless:
+            return await effective.run_headless(prompt, cwd)
 
         # Fallback: direct claude -p call
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -678,9 +692,10 @@ class SystemScheduler:
         if not state.session_id:
             return None
 
-        # Delegate to backend if available
-        if self._backend is not None:
-            return self._backend.find_session_file(state.session_id, state.cwd)
+        # Delegate to per-window backend if available
+        effective = self._effective_backend(window_id)
+        if effective is not None:
+            return effective.find_session_file(state.session_id, state.cwd)
 
         # Fallback: scan Claude projects dir
         projects_dir = Path.home() / ".claude" / "projects"

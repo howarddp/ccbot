@@ -384,34 +384,39 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_get_pid)
 
-    async def restart_cli(self, window_id: str) -> bool:
+    async def restart_cli(
+        self, window_id: str, backend: TmuxCliBackend | None = None
+    ) -> bool:
         """Kill the CLI process in a window and restart it.
 
-        Finds the CLI child process of the shell (using the backend's
-        ``process_pattern``), sends SIGTERM, waits up to 3s, then SIGKILL
-        if still alive.  Finally sends the launch command to restart.
+        Kills ALL child processes of the shell (backend-agnostic), then
+        sends the new backend's launch command.
+
+        Args:
+            window_id: The tmux window ID.
+            backend: Optional per-window backend override.  If None, uses
+                     the manager's default backend.
 
         Returns:
             True if restart was initiated, False on failure.
         """
+        effective_backend = backend or self._backend
         shell_pid = await self.get_pane_pid(window_id)
         if shell_pid is None:
             logger.error("Cannot restart: no shell PID for window %s", window_id)
             return False
 
-        process_pattern = self._backend.process_pattern if self._backend else "claude"
-
         def _kill_process() -> bool:
+            """Kill all child processes of the shell PID."""
             try:
                 result = subprocess.run(
-                    ["pgrep", "-P", str(shell_pid), "-f", process_pattern],
+                    ["pgrep", "-P", str(shell_pid)],
                     capture_output=True,
                     text=True,
                 )
                 if result.returncode != 0 or not result.stdout.strip():
                     logger.info(
-                        "No %s child process found under PID %d",
-                        process_pattern,
+                        "No child process found under PID %d",
                         shell_pid,
                     )
                     return True  # Nothing to kill, proceed to restart
@@ -425,7 +430,7 @@ class TmuxManager:
                         logger.warning("SIGTERM failed for PID %d: %s", pid, e)
                 return True
             except Exception as e:
-                logger.error("Failed to find/kill %s process: %s", process_pattern, e)
+                logger.error("Failed to find/kill child processes: %s", e)
                 return False
 
         killed = await asyncio.to_thread(_kill_process)
@@ -439,7 +444,7 @@ class TmuxManager:
         def _force_kill() -> None:
             try:
                 result = subprocess.run(
-                    ["pgrep", "-P", str(shell_pid), "-f", process_pattern],
+                    ["pgrep", "-P", str(shell_pid)],
                     capture_output=True,
                     text=True,
                 )
@@ -457,10 +462,31 @@ class TmuxManager:
         await asyncio.to_thread(_force_kill)
         await asyncio.sleep(0.5)
 
-        # Restart the CLI
-        success = await self.send_keys(
-            window_id, self.cli_command, enter=True, literal=True
+        # Restart the CLI using the effective backend's launch command
+        launch_cmd = (
+            effective_backend.get_launch_command()
+            if effective_backend
+            else f"unset CLAUDECODE && {self.cli_command}"
         )
+
+        def _send_launch() -> bool:
+            session = self.get_session()
+            if not session:
+                return False
+            try:
+                window = session.windows.get(window_id=window_id)
+                if not window:
+                    return False
+                pane = window.active_pane
+                if not pane:
+                    return False
+                pane.send_keys(launch_cmd, enter=True)
+                return True
+            except Exception as e:
+                logger.error("Failed to restart CLI in window %s: %s", window_id, e)
+                return False
+
+        success = await asyncio.to_thread(_send_launch)
         if success:
             logger.info("Restarted CLI in window %s", window_id)
         else:
@@ -492,13 +518,16 @@ class TmuxManager:
         work_dir: str,
         window_name: str | None = None,
         start_claude: bool = True,
+        backend: TmuxCliBackend | None = None,
     ) -> tuple[bool, str, str, str]:
-        """Create a new tmux window and optionally start Claude Code.
+        """Create a new tmux window and optionally start a CLI.
 
         Args:
             work_dir: Working directory for the new window
             window_name: Optional window name (defaults to directory name)
-            start_claude: Whether to start claude command
+            start_claude: Whether to start the CLI command
+            backend: Optional per-window backend override.  If None, uses
+                     the manager's default backend.
 
         Returns:
             Tuple of (success, message, window_name, window_id)
@@ -521,6 +550,8 @@ class TmuxManager:
             counter += 1
 
         # Create window in thread
+        effective_backend = backend or self._backend
+
         def _create_and_start() -> tuple[bool, str, str, str]:
             session = self.get_or_create_session()
             try:
@@ -532,14 +563,14 @@ class TmuxManager:
 
                 wid = window.window_id or ""
 
-                # Start Claude Code if requested
+                # Start CLI if requested
                 if start_claude:
                     pane = window.active_pane
                     if pane:
                         # Use backend's launch command (handles env unset etc.)
                         launch_cmd = (
-                            self._backend.get_launch_command()
-                            if self._backend
+                            effective_backend.get_launch_command()
+                            if effective_backend
                             else f"unset CLAUDECODE && {self.cli_command}"
                         )
                         pane.send_keys(launch_cmd, enter=True)
@@ -563,20 +594,27 @@ class TmuxManager:
 
         return await asyncio.to_thread(_create_and_start)
 
-    async def wait_for_cli_ready(self, window_id: str) -> bool:
+    async def wait_for_cli_ready(
+        self, window_id: str, backend: TmuxCliBackend | None = None
+    ) -> bool:
         """Wait for the CLI's TUI to be ready in the given tmux window.
 
         Polls the pane output for the backend's startup_ready_pattern.
         Returns True if ready, False on timeout.
+
+        Args:
+            window_id: The tmux window ID.
+            backend: Optional per-window backend override.
         """
         import re as _re
         import time
 
-        if not self._backend or not self._backend.startup_ready_pattern:
+        effective_backend = backend or self._backend
+        if not effective_backend or not effective_backend.startup_ready_pattern:
             return True
 
-        pattern = _re.compile(self._backend.startup_ready_pattern)
-        timeout = self._backend.startup_timeout
+        pattern = _re.compile(effective_backend.startup_ready_pattern)
+        timeout = effective_backend.startup_timeout
         start = time.monotonic()
 
         while time.monotonic() - start < timeout:

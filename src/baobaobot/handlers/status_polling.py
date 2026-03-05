@@ -164,8 +164,8 @@ async def update_status_message(
     interactive_window = get_interactive_window(agent_ctx, user_id, thread_id)
     should_check_new_ui = True
 
-    # Use backend-specific UI patterns (Gemini vs Claude)
-    ui_patterns = agent_ctx.backend.get_ui_patterns()
+    # Use per-window backend UI patterns (Gemini vs Claude)
+    ui_patterns = agent_ctx.get_window_backend(window_id).get_ui_patterns()
 
     if interactive_window == window_id:
         # User is in interactive mode for THIS window

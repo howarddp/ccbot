@@ -83,11 +83,14 @@ class GeminiBackend(TmuxCliBackend):
         # Cache: session_id → file path (avoids reading every JSON)
         self._session_file_cache: dict[str, Path] = {}
 
+    # Subprocess timeout for gemini -p
+    _SUBPROCESS_TIMEOUT_S = 300
+
     # --- Capabilities ---
 
     @property
     def supports_headless(self) -> bool:
-        return False
+        return True
 
     @property
     def supports_hooks(self) -> bool:
@@ -267,6 +270,38 @@ class GeminiBackend(TmuxCliBackend):
 
     def get_status_spinners(self) -> frozenset[str]:
         return _GEMINI_STATUS_SPINNERS
+
+    # --- Headless execution ---
+
+    async def run_headless(self, prompt: str, cwd: Path) -> str:
+        """Run a one-shot headless task via ``gemini -p``.
+
+        Uses ``--yolo`` for auto-approval (equivalent to Claude's
+        ``--dangerously-skip-permissions``).
+        """
+        import asyncio as _asyncio
+
+        proc = await _asyncio.create_subprocess_exec(
+            self.cli_command,
+            "-p",
+            prompt,
+            "--yolo",
+            "--output-format",
+            "text",
+            cwd=str(cwd),
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, _ = await _asyncio.wait_for(
+                proc.communicate(), timeout=self._SUBPROCESS_TIMEOUT_S
+            )
+        except _asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise
+
+        return stdout_bytes.decode("utf-8", errors="replace")
 
     # --- Hook ---
 

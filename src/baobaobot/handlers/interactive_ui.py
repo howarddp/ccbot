@@ -181,8 +181,8 @@ async def handle_interactive_ui(
         logger.debug("No pane text captured for window_id %s", window_id)
         return False
 
-    # Use backend-specific UI patterns (Gemini vs Claude)
-    ui_patterns = agent_ctx.backend.get_ui_patterns()
+    # Use per-window backend UI patterns (Gemini vs Claude)
+    ui_patterns = agent_ctx.get_window_backend(window_id).get_ui_patterns()
 
     # Quick check if it looks like an interactive UI
     if not is_interactive_ui(pane_text, patterns=ui_patterns):

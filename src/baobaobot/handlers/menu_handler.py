@@ -75,62 +75,78 @@ def _build_agent_keyboard(wid: str) -> InlineKeyboardMarkup:
     )
 
 
-def _build_system_keyboard(wid: str) -> InlineKeyboardMarkup:
-    """Build /system menu: 8 buttons in 5 rows."""
-    return InlineKeyboardMarkup(
+def _build_system_keyboard(
+    wid: str, backend_label: str = ""
+) -> InlineKeyboardMarkup:
+    """Build /system menu.
+
+    Args:
+        wid: tmux window ID.
+        backend_label: Current backend display name (e.g. "Claude", "Gemini").
+    """
+    rows = [
         [
+            InlineKeyboardButton(
+                "📋 History",
+                callback_data=f"{CB_MENU_SYSTEM}history:{wid}"[:64],
+            ),
+            InlineKeyboardButton(
+                "📸 Screenshot",
+                callback_data=f"{CB_MENU_SYSTEM}screenshot:{wid}"[:64],
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 Restart",
+                callback_data=f"{CB_MENU_SYSTEM}restart:{wid}"[:64],
+            ),
+            InlineKeyboardButton(
+                "🔧 Rebuild",
+                callback_data=f"{CB_MENU_SYSTEM}rebuild:{wid}"[:64],
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "⏰ Cron",
+                callback_data=f"{CB_MENU_SYSTEM}cron:{wid}"[:64],
+            ),
+            InlineKeyboardButton(
+                "📊 Verbosity",
+                callback_data=f"{CB_MENU_SYSTEM}verbosity:{wid}"[:64],
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📂 Files",
+                callback_data=f"{CB_MENU_SYSTEM}ls:{wid}"[:64],
+            ),
+            InlineKeyboardButton(
+                "🔗 ShareLink",
+                callback_data=f"{CB_MENU_SYSTEM}slink:{wid}"[:64],
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📝 Summary",
+                callback_data=f"{CB_MENU_SYSTEM}summary:{wid}"[:64],
+            ),
+            InlineKeyboardButton(
+                "💓 Heartbeat",
+                callback_data=f"{CB_MENU_SYSTEM}heartbeat:{wid}"[:64],
+            ),
+        ],
+    ]
+    # Backend switch button
+    if backend_label:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    "📋 History",
-                    callback_data=f"{CB_MENU_SYSTEM}history:{wid}"[:64],
+                    f"🤖 Backend: {backend_label}",
+                    callback_data=f"{CB_MENU_SYSTEM}backend:{wid}"[:64],
                 ),
-                InlineKeyboardButton(
-                    "📸 Screenshot",
-                    callback_data=f"{CB_MENU_SYSTEM}screenshot:{wid}"[:64],
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔄 Restart",
-                    callback_data=f"{CB_MENU_SYSTEM}restart:{wid}"[:64],
-                ),
-                InlineKeyboardButton(
-                    "🔧 Rebuild",
-                    callback_data=f"{CB_MENU_SYSTEM}rebuild:{wid}"[:64],
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "⏰ Cron",
-                    callback_data=f"{CB_MENU_SYSTEM}cron:{wid}"[:64],
-                ),
-                InlineKeyboardButton(
-                    "📊 Verbosity",
-                    callback_data=f"{CB_MENU_SYSTEM}verbosity:{wid}"[:64],
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "📂 Files",
-                    callback_data=f"{CB_MENU_SYSTEM}ls:{wid}"[:64],
-                ),
-                InlineKeyboardButton(
-                    "🔗 ShareLink",
-                    callback_data=f"{CB_MENU_SYSTEM}slink:{wid}"[:64],
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "📝 Summary",
-                    callback_data=f"{CB_MENU_SYSTEM}summary:{wid}"[:64],
-                ),
-                InlineKeyboardButton(
-                    "💓 Heartbeat",
-                    callback_data=f"{CB_MENU_SYSTEM}heartbeat:{wid}"[:64],
-                ),
-            ],
-        ]
-    )
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
 
 
 def _build_config_keyboard() -> InlineKeyboardMarkup:
@@ -234,7 +250,8 @@ async def system_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
-    keyboard = _build_system_keyboard(wid)
+    backend_label = ctx.get_window_backend(wid).name
+    keyboard = _build_system_keyboard(wid, backend_label=backend_label)
     await safe_reply(update.message, "🔧 *System*", reply_markup=keyboard)
 
 
@@ -349,6 +366,10 @@ async def _dispatch_system(
         await _handle_summary(query, ctx, wid)
     elif action == "heartbeat":
         await _handle_heartbeat(query, ctx, wid)
+    elif action == "backend":
+        await _handle_backend(query, ctx, wid)
+    elif action.startswith("bsw_"):
+        await _handle_bswitch(query, ctx, wid, action)
     else:
         await query.answer("Unknown action")
 
@@ -448,6 +469,85 @@ async def _handle_status(query: CallbackQuery, ctx: AgentContext, wid: str) -> N
         await query.answer(f"❌ {message}", show_alert=True)
 
 
+async def _handle_backend(query: CallbackQuery, ctx: AgentContext, wid: str) -> None:
+    """Show backend selection keyboard."""
+    await query.answer()
+    if not query.message:
+        return
+
+    current_type = ctx.get_window_backend(wid).agent_type
+
+    # Build selection keyboard: Claude / Gemini
+    from .callback_data import CB_MENU_SYSTEM
+
+    buttons = []
+    for at, label in [("claude", "Claude"), ("gemini", "Gemini")]:
+        mark = " ✓" if at == current_type else ""
+        buttons.append(
+            InlineKeyboardButton(
+                f"{label}{mark}",
+                callback_data=f"{CB_MENU_SYSTEM}bsw_{at}:{wid}"[:64],
+            )
+        )
+    keyboard = InlineKeyboardMarkup([buttons])
+    await safe_reply(query.message, "🤖 *Select Backend*", reply_markup=keyboard)
+
+
+async def _handle_bswitch(
+    query: CallbackQuery, ctx: AgentContext, wid: str, action: str
+) -> None:
+    """Switch the backend for a window.
+
+    action format: "bsw_<agent_type>" (e.g. "bsw_gemini")
+    """
+    new_agent_type = action.removeprefix("bsw_")
+    current_backend = ctx.get_window_backend(wid)
+
+    if new_agent_type == current_backend.agent_type:
+        await query.answer("Already using this backend")
+        return
+
+    await query.answer(f"Switching to {new_agent_type}...")
+
+    # Update WindowState
+    state = ctx.session_manager.get_window_state(wid)
+    # If switching to the agent-level default, clear the override
+    if new_agent_type == ctx.backend.agent_type:
+        state.agent_type = ""
+    else:
+        state.agent_type = new_agent_type
+    ctx.session_manager.window_states[wid] = state
+    ctx.session_manager._save_state()
+
+    # Resolve the new backend
+    from .status_polling import clear_window_health
+
+    new_backend = ctx.get_window_backend(wid)
+
+    # Get TmuxCliBackend for restart if possible
+    from ..backends.base import TmuxCliBackend
+
+    tmux_backend = new_backend if isinstance(new_backend, TmuxCliBackend) else None
+
+    # Restart the CLI with the new backend
+    success = await ctx.tmux_manager.restart_cli(wid, backend=tmux_backend)
+    clear_window_health(wid)
+    ctx.session_manager.clear_window_session(wid)
+
+    display = ctx.session_manager.get_display_name(wid)
+    if query.message:
+        if success:
+            await safe_reply(
+                query.message,
+                f"✅ [{display}] Switched to *{new_backend.name}*. Restarting...",
+            )
+        else:
+            await safe_reply(
+                query.message,
+                f"❌ [{display}] Failed to switch backend.",
+            )
+
+
 async def _handle_history(query: CallbackQuery, ctx: AgentContext, wid: str) -> None:
     """Show message history."""
     await query.answer()
@@ -517,20 +617,21 @@ async def _handle_screenshot(
 
 
 async def _handle_restart(query: CallbackQuery, ctx: AgentContext, wid: str) -> None:
-    """Kill & restart Claude process."""
+    """Kill & restart CLI process using per-window backend."""
     display = ctx.session_manager.get_display_name(wid)
+    wb = ctx.get_window_backend(wid)
     await query.answer("🔄 Restarting...")
 
-    success = await ctx.tmux_manager.restart_cli(wid)
+    success = await ctx.tmux_manager.restart_cli(wid, backend=wb)  # type: ignore[arg-type]
     clear_window_health(wid)
     ctx.session_manager.clear_window_session(wid)
 
     if query.message:
         if success:
-            await safe_reply(query.message, f"✅ Claude restarted in *{display}*.")
+            await safe_reply(query.message, f"✅ {wb.name} restarted in *{display}*.")
         else:
             await safe_reply(
-                query.message, f"❌ Failed to restart Claude in *{display}*."
+                query.message, f"❌ Failed to restart {wb.name} in *{display}*."
             )
 
 

@@ -451,7 +451,7 @@ def hook_main() -> None:
 
     if args.install:
         logger.info("Hook install requested")
-        sys.exit(_install_hook())
+        sys.exit(install_all_hooks())
 
     # Detect hook mode: Gemini CLI uses env vars, Claude Code uses stdin JSON.
     # GEMINI_PROJECT_DIR is set by Gemini CLI for hook subprocesses.

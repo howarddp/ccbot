@@ -79,6 +79,36 @@ class AgentContext:
     queue_state: MessageQueueState = field(default_factory=MessageQueueState)
     ui_state: InteractiveUIState = field(default_factory=InteractiveUIState)
 
+    # Backend cache for per-window backend resolution
+    _backend_cache: dict[str, Backend] = field(default_factory=dict)
+
+    def get_backend(self, agent_type: str) -> Backend:
+        """Get or create a Backend instance for the given agent_type.
+
+        Results are cached so the same Backend instance is reused.
+        If agent_type matches the agent-level default, returns self.backend.
+        """
+        if agent_type == self.backend.agent_type:
+            return self.backend
+        cached = self._backend_cache.get(agent_type)
+        if cached is not None:
+            return cached
+        from .backends import create_backend
+
+        backend = create_backend(agent_type=agent_type)
+        self._backend_cache[agent_type] = backend
+        return backend
+
+    def get_window_backend(self, window_id: str) -> Backend:
+        """Resolve the Backend for a specific window.
+
+        Checks WindowState.agent_type; falls back to agent-level default.
+        """
+        state = self.session_manager.get_window_state(window_id)
+        if state.agent_type:
+            return self.get_backend(state.agent_type)
+        return self.backend
+
 
 def create_agent_context(config: AgentConfig) -> AgentContext:
     """Build an AgentContext from an AgentConfig.

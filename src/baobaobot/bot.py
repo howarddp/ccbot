@@ -64,6 +64,7 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from .agent_context import AgentContext
+from .backends.base import TmuxCliBackend
 from .router import RoutingKey
 from .handlers.callback_data import (
     CB_ASK_DOWN,
@@ -2083,13 +2084,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         display = ctx.session_manager.get_display_name(window_id)
-        success = await ctx.tmux_manager.restart_cli(window_id)
+        wb = ctx.get_window_backend(window_id)
+        restart_backend = wb if isinstance(wb, TmuxCliBackend) else None
+        success = await ctx.tmux_manager.restart_cli(window_id, backend=restart_backend)
         clear_window_health(window_id)
         ctx.session_manager.clear_window_session(window_id)
 
         if success:
             try:
-                await query.edit_message_text(f"✅ Claude restarted in {display}.")
+                await query.edit_message_text(f"✅ {wb.name} restarted in {display}.")
             except Exception:
                 pass
             await query.answer("Restarted")
@@ -3182,7 +3185,12 @@ async def post_init(application: Application) -> None:
         if refreshed:
             logger.info("Refreshed skills for %d workspace(s) on startup", refreshed)
 
-    # Create and start system scheduler (summary via claude -p)
+    # Per-window backend resolver (used by SessionManager, SessionMonitor, SystemScheduler)
+    def _resolve_cli_backend(wid: str) -> TmuxCliBackend | None:
+        b = agent_ctx.get_window_backend(wid)
+        return b if isinstance(b, TmuxCliBackend) else None
+
+    # Create and start system scheduler (summary via headless CLI)
     from .system_scheduler import SystemScheduler
     from .handlers.message_sender import safe_send
 
@@ -3213,6 +3221,7 @@ async def post_init(application: Application) -> None:
             on_notify=_on_summary_notify,
             tmux_manager=agent_ctx.tmux_manager,
             backend=agent_ctx.backend,
+            get_window_backend=_resolve_cli_backend,
             scheduler_config=agent_ctx.config.scheduler,
         )
         agent_ctx.system_scheduler = system_sched
@@ -3312,6 +3321,9 @@ async def post_init(application: Application) -> None:
         except Exception:
             logger.exception("Failed to start share server / tunnel (non-fatal)")
 
+    # Wire per-window backend resolver into SessionManager
+    agent_ctx.session_manager.set_backend_resolver(_resolve_cli_backend)
+
     monitor = SessionMonitor(
         tmux_manager=agent_ctx.tmux_manager,
         session_manager=agent_ctx.session_manager,
@@ -3321,6 +3333,7 @@ async def post_init(application: Application) -> None:
         state_file=agent_ctx.config.monitor_state_file,
         agent_name=agent_ctx.config.name,
         backend=agent_ctx.backend,
+        get_window_backend=_resolve_cli_backend,
     )
 
     async def message_callback(msg: NewMessage) -> None:

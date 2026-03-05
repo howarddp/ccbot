@@ -114,6 +114,7 @@ class SessionMonitor:
         state_file: Path,
         agent_name: str = "",
         backend: TmuxCliBackend | None = None,
+        get_window_backend: Callable[[str], TmuxCliBackend | None] | None = None,
     ):
         self._tmux_manager = tmux_manager
         self._session_manager = session_manager
@@ -127,6 +128,7 @@ class SessionMonitor:
         self.poll_interval = poll_interval
         self._agent_name = agent_name
         self._backend = backend
+        self._get_window_backend = get_window_backend
 
         self.state = MonitorState(state_file=state_file)
         self.state.load()
@@ -164,22 +166,57 @@ class SessionMonitor:
                 cwds.add(w.cwd)
         return cwds
 
+    def _collect_active_backends(self) -> list[TmuxCliBackend]:
+        """Collect all unique active backends across windows.
+
+        When per-window backends are configured, multiple backend types may
+        be active simultaneously (e.g. Claude + Gemini windows).
+        """
+        from .backends.base import TmuxCliBackend as _TmuxCliBackend
+
+        seen_types: set[str] = set()
+        backends: list[TmuxCliBackend] = []
+
+        # Always include the default backend
+        if self._backend is not None:
+            seen_types.add(self._backend.agent_type)
+            backends.append(self._backend)
+
+        # Add per-window backends if resolver is available
+        if self._get_window_backend is not None:
+            for wid, state in self._session_manager.window_states.items():
+                if state.agent_type and state.agent_type not in seen_types:
+                    wb = self._get_window_backend(wid)
+                    if wb is not None and isinstance(wb, _TmuxCliBackend):
+                        seen_types.add(state.agent_type)
+                        backends.append(wb)
+
+        return backends
+
     async def scan_projects(self) -> list[SessionInfo]:
         """Scan projects that have active tmux windows.
 
-        Delegates to backend.scan_session_files() when a backend is set.
+        When per-window backends are configured, scans all active backend
+        types to discover session files from multiple CLI tools.
         """
         active_cwds = await self._get_active_cwds()
         if not active_cwds:
             return []
 
-        # Delegate to backend if available
-        if self._backend is not None:
-            backend_results = await self._backend.scan_session_files(active_cwds)
-            return [
-                SessionInfo(session_id=r.session_id, file_path=r.file_path)
-                for r in backend_results
-            ]
+        # Collect all active backends and scan each
+        backends = self._collect_active_backends()
+        if backends:
+            all_sessions: list[SessionInfo] = []
+            seen_ids: set[str] = set()
+            for be in backends:
+                backend_results = await be.scan_session_files(active_cwds)
+                for r in backend_results:
+                    if r.session_id not in seen_ids:
+                        seen_ids.add(r.session_id)
+                        all_sessions.append(
+                            SessionInfo(session_id=r.session_id, file_path=r.file_path)
+                        )
+            return all_sessions
 
         # Fallback: original Claude-specific scanning (for backward compat)
         sessions: list[SessionInfo] = []
@@ -269,12 +306,21 @@ class SessionMonitor:
         return sessions
 
     async def _read_new_lines(
-        self, session: TrackedSession, file_path: Path
+        self,
+        session: TrackedSession,
+        file_path: Path,
+        backend: TmuxCliBackend | None = None,
     ) -> list[dict]:
         """Read new lines from a session file using byte offset for efficiency.
 
         Detects file truncation (e.g. after /clear) and resets offset.
+
+        Args:
+            session: The tracked session state.
+            file_path: Path to the transcript file.
+            backend: Backend to use for line parsing (defaults to self._backend).
         """
+        effective_backend = backend if backend is not None else self._backend
         new_entries = []
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
@@ -301,8 +347,8 @@ class SessionMonitor:
                 # successfully. A non-empty line that fails JSON parsing is
                 # likely a partial write; stop and retry next cycle.
                 parse_line = (
-                    self._backend.parse_transcript_line
-                    if self._backend is not None
+                    effective_backend.parse_transcript_line
+                    if effective_backend is not None
                     else TranscriptParser.parse_line
                 )
                 safe_offset = session.last_byte_offset
@@ -390,6 +436,19 @@ class SessionMonitor:
             logger.error("Error reading full-JSON session file %s: %s", file_path, e)
         return new_entries
 
+    def _resolve_backend_for_session(
+        self,
+        session_id: str,
+    ) -> TmuxCliBackend | None:
+        """Find the backend for a session_id by tracing session_map → window → backend."""
+        if self._get_window_backend is not None:
+            for window_key, sid in self._last_session_map.items():
+                if sid == session_id:
+                    wb = self._get_window_backend(window_key)
+                    if wb is not None:
+                        return wb
+        return self._backend
+
     async def check_for_updates(self, active_session_ids: set[str]) -> list[NewMessage]:
         """Check all sessions for new assistant messages.
 
@@ -409,6 +468,10 @@ class SessionMonitor:
             if session_info.session_id not in active_session_ids:
                 continue
             try:
+                # Resolve the correct backend for this session
+                session_backend = self._resolve_backend_for_session(
+                    session_info.session_id
+                )
                 tracked = self.state.get_session(session_info.session_id)
 
                 if tracked is None:
@@ -417,8 +480,8 @@ class SessionMonitor:
                     # For full-JSON backends: offset = message count
                     # For JSONL backends: offset = file size in bytes
                     is_full_json = (
-                        getattr(self._backend, "is_full_json", False)
-                        if self._backend is not None
+                        getattr(session_backend, "is_full_json", False)
+                        if session_backend is not None
                         else False
                     )
                     try:
@@ -454,8 +517,8 @@ class SessionMonitor:
 
                 # File changed, read new content
                 is_full_json = (
-                    getattr(self._backend, "is_full_json", False)
-                    if self._backend is not None
+                    getattr(session_backend, "is_full_json", False)
+                    if session_backend is not None
                     else False
                 )
                 if is_full_json:
@@ -464,7 +527,7 @@ class SessionMonitor:
                     )
                 else:
                     new_entries = await self._read_new_lines(
-                        tracked, session_info.file_path
+                        tracked, session_info.file_path, backend=session_backend
                     )
                 self._file_mtimes[session_info.session_id] = current_mtime
 
@@ -478,8 +541,8 @@ class SessionMonitor:
                 carry = self._pending_tools.get(session_info.session_id, {})
                 nn_active = self._no_notify_active.get(session_info.session_id, False)
                 parse_entries_fn = (
-                    self._backend.parse_transcript_entries
-                    if self._backend is not None
+                    session_backend.parse_transcript_entries
+                    if session_backend is not None
                     else TranscriptParser.parse_entries
                 )
                 parsed_entries, remaining, nn_active = parse_entries_fn(
