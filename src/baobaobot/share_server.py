@@ -600,8 +600,7 @@ class ShareServer:
         # Build item list with metadata for the file manager template
         items_data = []
         for item in sorted(dir_path.iterdir()):
-            if item.name.startswith("."):
-                continue
+            is_hidden = item.name.startswith(".")
             try:
                 stat = item.stat()
                 items_data.append({
@@ -609,9 +608,10 @@ class ShareServer:
                     "is_dir": item.is_dir(),
                     "size": stat.st_size if not item.is_dir() else None,
                     "mtime": int(stat.st_mtime),
+                    "hidden": is_hidden,
                 })
             except OSError:
-                items_data.append({"name": item.name, "is_dir": item.is_dir(), "size": None, "mtime": None})
+                items_data.append({"name": item.name, "is_dir": item.is_dir(), "size": None, "mtime": None, "hidden": is_hidden})
 
         # Display name embedded in token
         source_name = extract_token_name(token)

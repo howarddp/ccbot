@@ -120,6 +120,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .modal-nav.prev { left: 12px; }
 .modal-nav.next { right: 12px; }
 
+/* Hidden files dimmed */
+.file-list .item.hidden-file { opacity: 0.5; }
+
+/* Context menu */
+.ctx-menu { display: none; position: fixed; z-index: 300; background: var(--card);
+            border: 1px solid var(--border); border-radius: 10px; padding: 4px 0;
+            min-width: 180px; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+.ctx-menu.open { display: block; }
+.ctx-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px;
+                   border: none; background: none; cursor: pointer; font-size: 0.9em;
+                   color: var(--text); text-align: left; }
+.ctx-menu button:hover { background: var(--hover); }
+.ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
+
 /* RWD */
 @media (max-width: 767px) {
   .file-list.grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
@@ -146,6 +160,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
     <h1 id="title"></h1>
     <div class="toolbar">
       <button id="searchToggle" title="Search">🔍</button>
+      <button id="hiddenToggle" title="Show hidden files">👁</button>
       <button id="viewList" title="List view">☰</button>
       <button id="viewGrid" title="Grid view">⊞</button>
     </div>
@@ -174,6 +189,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   <div class="modal-body" id="modalBody"></div>
   <button class="modal-nav prev" id="modalPrev">‹</button>
   <button class="modal-nav next" id="modalNext">›</button>
+</div>
+
+<!-- Context menu -->
+<div class="ctx-menu" id="ctxMenu">
+  <button id="ctxOpen">📂 Open</button>
+  <button id="ctxPreview">👁 Preview</button>
+  <div class="sep"></div>
+  <button id="ctxDownload">⬇ Download</button>
+  <button id="ctxCopyUrl">🔗 Copy Link</button>
+  <div class="sep"></div>
+  <button id="ctxCopyName">📋 Copy Name</button>
+  <button id="ctxCopyPath">📋 Copy Path</button>
 </div>
 
 <script>
@@ -244,15 +271,18 @@ function fileUrl(item) {
 
 // State
 let viewMode = localStorage.getItem('fm_view') || (window.innerWidth >= 768 ? 'grid' : 'list');
+let showHidden = localStorage.getItem('fm_hidden') === '1';
 let sortKey = 'name';
 let sortAsc = true;
 let searchQuery = '';
 let currentPreviewIndex = -1;
 let previewableItems = [];
+let ctxItem = null; // item for context menu
 
 // Render
 function getFilteredItems() {
   let items = DATA.items.slice();
+  if (!showHidden) items = items.filter(i => !i.hidden);
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     items = items.filter(i => i.name.toLowerCase().includes(q));
@@ -300,7 +330,9 @@ function render() {
       : '';
     const hasThumbClass = (isImage && viewMode === 'grid') ? ' has-thumb' : '';
 
-    return `<a class="item${hasThumbClass}" href="${url}" data-idx="${idx}" data-type="${type}"
+    const hiddenClass = item.hidden ? ' hidden-file' : '';
+    return `<a class="item${hasThumbClass}${hiddenClass}" href="${url}" data-idx="${idx}" data-type="${type}"
+               data-name="${escHtml(item.name)}" data-is-dir="${item.is_dir?1:0}"
                ${canPreview ? 'data-preview="1"' : ''}>
       ${thumbHtml}
       <span class="icon">${icon}</span>
@@ -460,6 +492,77 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closePreview();
   if (e.key === 'ArrowLeft') navPreview(-1);
   if (e.key === 'ArrowRight') navPreview(1);
+});
+
+// Hidden files toggle
+const hiddenBtn = document.getElementById('hiddenToggle');
+function updateHiddenButton() {
+  hiddenBtn.classList.toggle('active', showHidden);
+  hiddenBtn.title = showHidden ? 'Hide hidden files' : 'Show hidden files';
+}
+hiddenBtn.addEventListener('click', () => {
+  showHidden = !showHidden;
+  localStorage.setItem('fm_hidden', showHidden ? '1' : '0');
+  updateHiddenButton();
+  render();
+});
+updateHiddenButton();
+
+// Context menu
+const ctxMenu = document.getElementById('ctxMenu');
+function closeCtxMenu() { ctxMenu.classList.remove('open'); ctxItem = null; }
+document.addEventListener('click', closeCtxMenu);
+document.addEventListener('scroll', closeCtxMenu, true);
+
+document.getElementById('fileList').addEventListener('contextmenu', e => {
+  const el = e.target.closest('.item');
+  if (!el) return;
+  e.preventDefault();
+  const idx = parseInt(el.dataset.idx);
+  const items = getFilteredItems();
+  ctxItem = items[idx];
+  if (!ctxItem) return;
+
+  const type = getFileType(ctxItem.name, ctxItem.is_dir);
+  const canPreview = !ctxItem.is_dir && PREVIEW_TYPES.has(type);
+  document.getElementById('ctxPreview').style.display = canPreview ? '' : 'none';
+  document.getElementById('ctxOpen').textContent = ctxItem.is_dir ? '📂 Open' : '📄 Open';
+
+  // Position
+  const x = Math.min(e.clientX, window.innerWidth - 200);
+  const y = Math.min(e.clientY, window.innerHeight - 250);
+  ctxMenu.style.left = x + 'px';
+  ctxMenu.style.top = y + 'px';
+  ctxMenu.classList.add('open');
+});
+
+document.getElementById('ctxOpen').addEventListener('click', () => {
+  if (ctxItem) window.location.href = itemUrl(ctxItem);
+});
+document.getElementById('ctxPreview').addEventListener('click', () => {
+  if (!ctxItem) return;
+  const pIdx = previewableItems.indexOf(ctxItem);
+  if (pIdx >= 0) openPreview(pIdx);
+  closeCtxMenu();
+});
+document.getElementById('ctxDownload').addEventListener('click', () => {
+  if (ctxItem) {
+    const a = document.createElement('a');
+    a.href = fileUrl(ctxItem);
+    a.download = ctxItem.name;
+    a.click();
+  }
+});
+document.getElementById('ctxCopyUrl').addEventListener('click', () => {
+  if (ctxItem) navigator.clipboard.writeText(window.location.origin + itemUrl(ctxItem));
+});
+document.getElementById('ctxCopyName').addEventListener('click', () => {
+  if (ctxItem) navigator.clipboard.writeText(ctxItem.name);
+});
+document.getElementById('ctxCopyPath').addEventListener('click', () => {
+  if (!ctxItem) return;
+  const p = DATA.path ? DATA.path + '/' + ctxItem.name : ctxItem.name;
+  navigator.clipboard.writeText(p);
 });
 
 // Touch swipe for preview
