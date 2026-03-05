@@ -46,7 +46,7 @@ _HTML_TEMPLATE = """\
   .d2h-wrapper {{
     font-size: 12px;
   }}
-  .d2h-code-line, .d2h-code-side-line {{
+  .d2h-code-line-ctn, .d2h-code-side-line-ctn {{
     white-space: pre-wrap;
     word-break: break-all;
   }}
