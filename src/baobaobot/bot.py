@@ -3163,8 +3163,10 @@ def _write_runtime_env(agent_ctx: AgentContext, public_url: str) -> None:
 
 async def _send_restart_complete(bot: Bot, agent_ctx: AgentContext) -> None:
     """Send 'Restart complete' to the agent's primary chat after startup."""
-    sm = agent_ctx.session_manager
     cfg = agent_ctx.config
+    if not cfg.restart_notify:
+        return
+    sm = agent_ctx.session_manager
     targets: list[tuple[int, int | None]] = []  # (chat_id, thread_id | None)
 
     if cfg.mode == "group":

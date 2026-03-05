@@ -1176,6 +1176,13 @@ class ShareServer:
         target_url = f"http://127.0.0.1:{port}/{path}"
         if request.query_string:
             target_url += f"?{request.query_string}"
+        elif not path:
+            # Initial page load: redirect browser to include ?folder= in the URL.
+            # VS Code's JS reads window.location.search to determine which folder
+            # to open, so the param must be in the browser URL, not just upstream.
+            from urllib.parse import quote
+            folder_qs = f"?folder={quote(str(workspace), safe='')}"
+            raise web.HTTPFound(f"/code/{token}/{folder_qs}")
 
         # WebSocket upgrade
         if request.headers.get("Upgrade", "").lower() == "websocket":

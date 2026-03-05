@@ -109,6 +109,9 @@ class AgentConfig:
     # Locale (e.g. "zh-TW", "en-US", "ja-JP")
     locale: str = "en-US"
 
+    # Notifications
+    restart_notify: bool = True
+
     # Scheduler timing config
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
@@ -294,5 +297,6 @@ def _build_agent_config(
         whisper_model=str(_get("whisper_model", "small")),
         cron_default_tz=str(_get("cron_default_tz", "")),
         locale=str(_get("locale", "en-US")),
+        restart_notify=bool(_get("restart_notify", True)),
         scheduler=scheduler_config,
     )

@@ -1069,8 +1069,20 @@ async def _handle_sl_code(
 
     from ..share_server import generate_token
 
-    dir_path = str(ws_dir.resolve())
-    display_name = ws_dir.name
+    # Find workspace root (workspace_* directory under agent_dir)
+    # ws_dir may be a subdirectory (e.g. workspace_fun/projects/baobaobot)
+    agent_dir = ctx.config.agent_dir.resolve()
+    ws_root = ws_dir.resolve()
+    for parent in [ws_root, *ws_root.parents]:
+        if parent.parent == agent_dir and parent.name.startswith("workspace_"):
+            ws_root = parent
+            break
+
+    # Default to projects/ subdirectory if it exists
+    projects_dir = ws_root / "projects"
+    target_dir = projects_dir if projects_dir.is_dir() else ws_root
+    dir_path = str(target_dir)
+    display_name = ws_root.name
     token = generate_token(f"code:{dir_path}", ttl=1800, name=dir_path)
     url = f"{public_url}/code/{token}/"
 

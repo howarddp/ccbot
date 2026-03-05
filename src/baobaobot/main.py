@@ -127,6 +127,8 @@ def _send_restart_notifications(
     import httpx
 
     for cfg in agent_configs:
+        if not cfg.restart_notify:
+            continue
         state_file = cfg.state_file
         if not state_file.is_file():
             continue
