@@ -468,8 +468,9 @@ def _process_gemini_hook(cwd: str) -> None:
 
     Gemini CLI sends JSON via stdin (same fields as Claude Code: session_id,
     cwd, hook_event_name) AND sets env vars (GEMINI_PROJECT_DIR, TMUX_PANE).
-    We try stdin first for the session_id; fall back to file discovery.
-    Gemini expects JSON output on stdout.
+    We prefer the session_id from the actual transcript file over the stdin
+    value because Gemini's runtime session_id may differ from the file's
+    ``sessionId``.  Gemini expects JSON output on stdout.
     """
     logger.debug("Processing Gemini hook event (cwd=%s)", cwd)
 
@@ -479,26 +480,64 @@ def _process_gemini_hook(cwd: str) -> None:
         return
 
     # Try to read session_id from stdin JSON (Gemini does send it)
-    session_id = ""
+    stdin_session_id = ""
     try:
         payload = json.load(sys.stdin)
-        session_id = payload.get("session_id", "")
+        stdin_session_id = payload.get("session_id", "")
         # Also pick up cwd from stdin if env var was missing
         if not cwd:
             cwd = payload.get("cwd", cwd)
-        logger.debug("Gemini stdin payload: session_id=%s, cwd=%s", session_id, cwd)
+        logger.debug(
+            "Gemini stdin payload: session_id=%s, cwd=%s", stdin_session_id, cwd
+        )
     except (json.JSONDecodeError, ValueError, OSError) as e:
         logger.debug("Failed to read Gemini stdin JSON (expected): %s", e)
 
-    # Fall back to discovering session_id from Gemini session files (with retry)
-    if not session_id:
-        import time
+    # Determine session_id: prefer stdin (runtime session_id from Gemini CLI),
+    # but verify against actual transcript files.  If stdin's session_id has
+    # a matching file, use it.  Otherwise fall back to file discovery (latest
+    # file) so the monitor can at least track existing content.
+    import time
 
+    session_id = ""
+
+    if stdin_session_id:
+        # Try to find a file matching the stdin session_id (with retries,
+        # because the file may not be created yet at session start)
+        for attempt in range(4):
+            discovered = _discover_gemini_session_id(cwd)
+            if discovered == stdin_session_id:
+                session_id = stdin_session_id
+                break
+            if not discovered:
+                logger.debug(
+                    "Gemini session discovery attempt %d/4: no files yet",
+                    attempt + 1,
+                )
+            else:
+                logger.debug(
+                    "Gemini session discovery attempt %d/4: found %s (want %s)",
+                    attempt + 1,
+                    discovered[:8],
+                    stdin_session_id[:8],
+                )
+            time.sleep(1)
+
+        if not session_id:
+            # Stdin session_id's file not found yet; use stdin anyway.
+            # The monitor will handle file resolution via fallback.
+            session_id = stdin_session_id
+            logger.info(
+                "Gemini file for stdin session_id=%s not found; "
+                "using stdin ID (monitor will resolve file later)",
+                stdin_session_id[:8],
+            )
+    else:
+        # No stdin — pure file discovery
         for attempt in range(4):
             session_id = _discover_gemini_session_id(cwd)
             if session_id:
                 break
-            # Session file may not be written yet; wait briefly
             logger.debug(
                 "Gemini session discovery attempt %d/4 failed, retrying...",
                 attempt + 1,

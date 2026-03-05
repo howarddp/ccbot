@@ -206,6 +206,45 @@ class GeminiBackend(TmuxCliBackend):
             return cached
         return None
 
+    def find_latest_session_file(self, cwd: str) -> tuple[str, Path] | None:
+        """Find the most recently modified session file for a cwd.
+
+        Returns ``(session_id, file_path)`` or ``None``.
+        Used as a fallback when the session_id from the hook doesn't match
+        any file (e.g. race condition at Gemini startup).
+        """
+        if not cwd:
+            return None
+
+        latest_file: Path | None = None
+        latest_mtime = 0.0
+
+        for project_dir in self._find_project_dirs(cwd):
+            chats_dir = project_dir / "chats"
+            if not chats_dir.is_dir():
+                continue
+            for f in chats_dir.glob("*.json"):
+                try:
+                    mtime = f.stat().st_mtime
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                        latest_file = f
+                except OSError:
+                    continue
+
+        if not latest_file:
+            return None
+
+        try:
+            data = json.loads(latest_file.read_text())
+            sid = data.get("sessionId", "")
+            if sid:
+                self._session_file_cache[sid] = latest_file
+                return (sid, latest_file)
+        except (json.JSONDecodeError, OSError):
+            pass
+        return None
+
     async def scan_session_files(self, active_cwds: set[str]) -> list[SessionFileInfo]:
         sessions: list[SessionFileInfo] = []
 

@@ -465,6 +465,46 @@ class SessionMonitor:
         # Scan projects to get available session files
         sessions = await self.scan_projects()
 
+        # Fallback for Gemini: if a session_id from session_map has no
+        # matching file (race condition at startup), find the latest file
+        # for the window's cwd and add it to the sessions list.
+        found_sids = {s.session_id for s in sessions}
+        for missing_sid in active_session_ids - found_sids:
+            backend = self._resolve_backend_for_session(missing_sid)
+            if backend is None or not getattr(backend, "is_full_json", False):
+                continue
+            if not hasattr(backend, "find_latest_session_file"):
+                continue
+            # Look up the cwd from window_states
+            cwd = ""
+            for wkey, sid in self._last_session_map.items():
+                if sid == missing_sid:
+                    ws = self._session_manager.window_states.get(wkey)
+                    if ws:
+                        cwd = ws.cwd
+                    break
+            if not cwd:
+                continue
+            result = backend.find_latest_session_file(cwd)
+            if result is not None:
+                file_sid, file_path = result
+                if file_sid != missing_sid:
+                    # Only log once per session (avoid spamming every poll)
+                    fallback_key = f"_fallback_logged_{missing_sid}"
+                    if not getattr(self, fallback_key, False):
+                        logger.info(
+                            "Gemini fallback: session %s not found, using "
+                            "latest file %s (session_id=%s)",
+                            missing_sid[:8],
+                            file_path.name,
+                            file_sid[:8],
+                        )
+                        setattr(self, fallback_key, True)
+                # Add with the ORIGINAL session_id so routing works
+                sessions.append(
+                    SessionInfo(session_id=missing_sid, file_path=file_path)
+                )
+
         # Only process sessions that are in session_map
         for session_info in sessions:
             if session_info.session_id not in active_session_ids:
@@ -475,6 +515,23 @@ class SessionMonitor:
                     session_info.session_id
                 )
                 tracked = self.state.get_session(session_info.session_id)
+
+                # Detect file path change (e.g., Gemini fallback resolved
+                # to a newer file). Reset offset to avoid stale data.
+                if (
+                    tracked is not None
+                    and tracked.file_path
+                    and str(session_info.file_path) != tracked.file_path
+                ):
+                    logger.info(
+                        "Session %s file changed: %s -> %s, resetting offset",
+                        session_info.session_id[:8],
+                        Path(tracked.file_path).name,
+                        session_info.file_path.name,
+                    )
+                    tracked.file_path = str(session_info.file_path)
+                    tracked.last_byte_offset = 0
+                    self._file_mtimes.pop(session_info.session_id, None)
 
                 if tracked is None:
                     # For new sessions, initialize offset to end to avoid
@@ -695,6 +752,10 @@ class SessionMonitor:
             for session_id in sessions_to_remove:
                 self.state.remove_session(session_id)
                 self._file_mtimes.pop(session_id, None)
+                # Clear fallback log flag
+                fallback_key = f"_fallback_logged_{session_id}"
+                if hasattr(self, fallback_key):
+                    delattr(self, fallback_key)
             self.state.save_if_dirty()
 
         # Update last known map
