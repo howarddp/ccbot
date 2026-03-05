@@ -120,6 +120,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .modal-nav.prev { left: 12px; }
 .modal-nav.next { right: 12px; }
 
+/* Delete dialog */
+.delete-dialog { background: var(--card); border-radius: 14px; padding: 24px; margin: auto;
+                 max-width: 340px; width: 90%; text-align: center; }
+.delete-dialog h3 { font-size: 1.1em; margin-bottom: 8px; word-break: break-all; }
+.delete-dialog p { font-size: 0.9em; color: var(--text2); margin-bottom: 14px; }
+.delete-dialog input { width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+                       border-radius: 8px; font-size: 0.95em; text-align: center; outline: none; }
+.delete-dialog input:focus { border-color: var(--accent); }
+.delete-actions { display: flex; gap: 10px; margin-top: 16px; }
+.delete-actions button { flex: 1; padding: 10px; border-radius: 8px; border: none;
+                         font-size: 0.95em; cursor: pointer; font-weight: 500; }
+.delete-actions #deleteCancel { background: var(--bg); color: var(--text); }
+.delete-actions #deleteConfirm { background: #ff3b30; color: #fff; opacity: 0.4; }
+.delete-actions #deleteConfirm:not(:disabled) { opacity: 1; }
+
 /* Hidden files dimmed */
 .file-list .item.hidden-file { opacity: 0.5; }
 
@@ -201,6 +216,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   <div class="sep"></div>
   <button id="ctxCopyName">📋 Copy Name</button>
   <button id="ctxCopyPath">📋 Copy Path</button>
+  <div class="sep"></div>
+  <button id="ctxDelete" style="color:#ff3b30">🗑 Delete</button>
+</div>
+
+<!-- Delete confirmation dialog -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="delete-dialog">
+    <h3>Delete <span id="deleteTarget"></span>?</h3>
+    <p>Type <strong>delete</strong> to confirm</p>
+    <input type="text" id="deleteInput" placeholder="delete" autocomplete="off">
+    <div class="delete-actions">
+      <button id="deleteCancel">Cancel</button>
+      <button id="deleteConfirm" disabled>Delete</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -488,6 +518,11 @@ document.getElementById('modal').addEventListener('click', e => {
   if (e.target === document.getElementById('modal') || e.target === document.getElementById('modalBody')) closePreview();
 });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && deleteModal.classList.contains('open')) {
+    deleteModal.classList.remove('open');
+    deleteItem = null;
+    return;
+  }
   if (!document.getElementById('modal').classList.contains('open')) return;
   if (e.key === 'Escape') closePreview();
   if (e.key === 'ArrowLeft') navPreview(-1);
@@ -563,6 +598,62 @@ document.getElementById('ctxCopyPath').addEventListener('click', () => {
   if (!ctxItem) return;
   const p = DATA.path ? DATA.path + '/' + ctxItem.name : ctxItem.name;
   navigator.clipboard.writeText(p);
+});
+
+// Delete
+let deleteItem = null;
+const deleteModal = document.getElementById('deleteModal');
+const deleteInput = document.getElementById('deleteInput');
+const deleteConfirm = document.getElementById('deleteConfirm');
+
+document.getElementById('ctxDelete').addEventListener('click', () => {
+  if (!ctxItem) return;
+  deleteItem = ctxItem;
+  document.getElementById('deleteTarget').textContent = ctxItem.name;
+  deleteInput.value = '';
+  deleteConfirm.disabled = true;
+  deleteModal.classList.add('open');
+  setTimeout(() => deleteInput.focus(), 100);
+});
+
+deleteInput.addEventListener('input', () => {
+  deleteConfirm.disabled = deleteInput.value.trim().toLowerCase() !== 'delete';
+});
+
+document.getElementById('deleteCancel').addEventListener('click', () => {
+  deleteModal.classList.remove('open');
+  deleteItem = null;
+});
+
+deleteConfirm.addEventListener('click', async () => {
+  if (!deleteItem || deleteInput.value.trim().toLowerCase() !== 'delete') return;
+  deleteConfirm.disabled = true;
+  deleteConfirm.textContent = 'Deleting...';
+  try {
+    const p = DATA.path ? DATA.path + '/' + deleteItem.name : deleteItem.name;
+    const url = `/p/${encodeURIComponent(DATA.token)}/${p.split('/').map(encodeURIComponent).join('/')}`;
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    // Remove from data and re-render
+    DATA.items = DATA.items.filter(i => i.name !== deleteItem.name);
+    render();
+    deleteModal.classList.remove('open');
+    deleteConfirm.textContent = 'Delete';
+    deleteItem = null;
+  } catch (e) {
+    // Stay in modal so user can retry
+    deleteConfirm.textContent = 'Delete';
+    deleteConfirm.disabled = false;
+    deleteInput.value = '';
+    deleteInput.placeholder = 'Failed — type delete to retry';
+  }
+});
+
+deleteModal.addEventListener('click', e => {
+  if (e.target === deleteModal) {
+    deleteModal.classList.remove('open');
+    deleteItem = null;
+  }
 });
 
 // Touch swipe for preview

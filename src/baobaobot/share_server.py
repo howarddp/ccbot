@@ -29,6 +29,7 @@ import logging
 import mimetypes
 import os
 import pty
+import shutil
 import signal
 import struct
 import subprocess
@@ -405,6 +406,7 @@ class ShareServer:
     def _setup_routes(self) -> None:
         self._app.router.add_get("/f/{token}/{path:.*}", self._handle_file)
         self._app.router.add_get("/p/{token}/{path:.*}", self._handle_preview)
+        self._app.router.add_delete("/p/{token}/{path:.*}", self._handle_delete)
         self._app.router.add_get("/u/{token}", self._handle_upload_page)
         self._app.router.add_post("/u/{token}/upload", self._handle_upload)
         self._app.router.add_get("/term/{token}/ws", self._handle_terminal_ws)
@@ -635,6 +637,51 @@ class ShareServer:
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    # -- Delete handler --
+
+    async def _handle_delete(self, request: web.Request) -> web.StreamResponse:
+        """Delete a file or directory within a browse token's scope."""
+        token = request.match_info["token"]
+        path = request.match_info.get("path", "")
+
+        if not path:
+            return web.Response(text="Cannot delete root", status=400)
+
+        # Require workspace-aware token — reject legacy tokens for destructive ops
+        workspace, worst_status = self._verify_with_workspace(token, "p", path)
+        if workspace is None:
+            parent = path
+            while "/" in parent:
+                parent = parent.rsplit("/", 1)[0]
+                workspace, st = self._verify_with_workspace(token, "p", parent)
+                if st == "expired":
+                    worst_status = "expired"
+                if workspace:
+                    break
+            if workspace is None and path:
+                workspace, st = self._verify_with_workspace(token, "p", "")
+                if st == "expired":
+                    worst_status = "expired"
+        if workspace is None:
+            # Do NOT fall back to legacy tokens for delete — require workspace scope
+            return _deny_response(worst_status)
+
+        # Resolve target path (workspace is guaranteed non-None)
+        target = self._find_file(path, workspace) or self._find_dir(path, workspace)
+        if not target or not target.exists():
+            return web.Response(text="Not found", status=404)
+
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            logger.info("Deleted via browse: %s", target)
+            return web.Response(text="OK", status=200)
+        except OSError as e:
+            logger.error("Delete failed: %s — %s", target, e)
+            return web.Response(text="Delete failed", status=500)
 
     # -- Upload page --
 
