@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from baobaobot.main import _check_optional_deps, main
 
@@ -16,6 +16,8 @@ _BOT_STARTUP_PATCHES = (
     "baobaobot.workspace.manager.WorkspaceManager",
     "baobaobot.agent_context.create_agent_context",
     "baobaobot.bot.create_bot",
+    "baobaobot.bot.post_init",
+    "baobaobot.bot.post_shutdown",
 )
 
 
@@ -26,15 +28,36 @@ def _enter_bot_patches():
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "settings.toml").write_text("[global]\n[[agents]]\nname = 'test'\n")
 
+    # Targets that need AsyncMock (called with await)
+    _ASYNC_TARGETS = {"baobaobot.bot.post_init", "baobaobot.bot.post_shutdown"}
     mocks = {}
     exits = []
     for target in _BOT_STARTUP_PATCHES:
-        p = patch(target)
+        if target in _ASYNC_TARGETS:
+            p = patch(target, new_callable=AsyncMock)
+        else:
+            p = patch(target)
         m = p.start()
         mocks[target] = m
         exits.append(p)
-    # create_bot must return a mock application
-    mocks["baobaobot.bot.create_bot"].return_value = MagicMock()
+    # create_bot must return a mock application with async methods
+    mock_app = MagicMock()
+    mock_app.initialize = AsyncMock()
+    mock_app.start = AsyncMock()
+    mock_app.stop = AsyncMock()
+    mock_app.shutdown = AsyncMock()
+    mock_app.running = False
+    mock_updater = MagicMock()
+    mock_updater.start_polling = AsyncMock()
+    mock_updater.stop = AsyncMock()
+    mock_app.updater = mock_updater
+    # Make start_polling send SIGINT to break _run_bot's stop_event.wait()
+    async def _trigger_stop(*args, **kwargs):
+        import signal as _sig
+        os.kill(os.getpid(), _sig.SIGINT)
+
+    mock_updater.start_polling = AsyncMock(side_effect=_trigger_stop)
+    mocks["baobaobot.bot.create_bot"].return_value = mock_app
     # load_settings must return a list with a mock AgentConfig
     mock_cfg = MagicMock()
     mock_cfg.shared_dir = config_dir / "shared"

@@ -53,6 +53,16 @@ _GEMINI_UI_PATTERNS: list[UIPattern] = [
         bottom=(re.compile(r"\(y/n\)"),),
         min_gap=1,
     ),
+    # Gemini's "Answer Questions" multi-choice dialog (e.g. from AskUserQuestion)
+    UIPattern(
+        name="GeminiAnswerQuestions",
+        top=(re.compile(r"Answer Questions"),),
+        bottom=(
+            re.compile(r"Enter to select"),
+            re.compile(r"Esc to cancel"),
+        ),
+        min_gap=3,
+    ),
 ]
 
 # Gemini uses these spinner characters
@@ -270,6 +280,12 @@ class GeminiBackend(TmuxCliBackend):
 
     def get_status_spinners(self) -> frozenset[str]:
         return _GEMINI_STATUS_SPINNERS
+
+    # --- Launch ---
+
+    def get_launch_command(self) -> str:
+        prefix = f"unset {self.env_unset_var} && " if self.env_unset_var else ""
+        return f"{prefix}{self.cli_command} --yolo"
 
     # --- Headless execution ---
 

@@ -93,7 +93,7 @@ class TestSkills:
     def test_installs_skills(self, manager: WorkspaceManager) -> None:
         manager.init_shared()
         manager.init_workspace()
-        skills_dir = manager.workspace_dir / ".claude" / "skills"
+        skills_dir = manager.workspace_dir / ".agents" / "skills"
         assert skills_dir.is_dir()
         for name in [
             "memory-search",
@@ -108,7 +108,7 @@ class TestSkills:
         manager.init_shared()
         manager.init_workspace()
         skill_file = (
-            manager.workspace_dir / ".claude" / "skills" / "memory-search" / "SKILL.md"
+            manager.workspace_dir / ".agents" / "skills" / "memory-search" / "SKILL.md"
         )
         content = skill_file.read_text()
         assert "{{BIN_DIR}}" not in content
@@ -118,7 +118,7 @@ class TestSkills:
         manager.init_shared()
         manager.init_workspace()
         skill_file = (
-            manager.workspace_dir / ".claude" / "skills" / "memory-search" / "SKILL.md"
+            manager.workspace_dir / ".agents" / "skills" / "memory-search" / "SKILL.md"
         )
         skill_file.write_text("old content")
 
@@ -129,9 +129,23 @@ class TestSkills:
         manager.init_shared()
         manager.init_workspace()
         skill_file = (
-            manager.workspace_dir / ".claude" / "skills" / "memory-search" / "SKILL.md"
+            manager.workspace_dir / ".agents" / "skills" / "memory-search" / "SKILL.md"
         )
         content = skill_file.read_text()
         assert content.startswith("---\n")
         assert "name: memory-search" in content
         assert "description:" in content
+
+    def test_migrates_legacy_claude_skills(self, manager: WorkspaceManager) -> None:
+        """Installing skills removes legacy .claude/skills/ directory."""
+        manager.init_shared()
+        # Create legacy .claude/skills/ structure
+        legacy_dir = manager.workspace_dir / ".claude" / "skills" / "memory-search"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        (legacy_dir / "SKILL.md").write_text("legacy")
+
+        manager.init_workspace()
+        # New location should exist
+        assert (manager.workspace_dir / ".agents" / "skills" / "memory-search" / "SKILL.md").is_file()
+        # Legacy should be gone
+        assert not (manager.workspace_dir / ".claude" / "skills").exists()

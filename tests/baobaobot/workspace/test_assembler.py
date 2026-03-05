@@ -87,11 +87,46 @@ class TestAssemble:
 
 
 class TestWrite:
-    def test_creates_claude_md(self, dirs: tuple[Path, Path]) -> None:
+    def test_no_agent_type_creates_both(self, dirs: tuple[Path, Path]) -> None:
+        """No agent_type (startup) → write both CLAUDE.md and GEMINI.md."""
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
         assert (workspace / "CLAUDE.md").is_file()
+        assert (workspace / "GEMINI.md").is_file()
+
+    def test_no_agent_type_both_match(self, dirs: tuple[Path, Path]) -> None:
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        assert (workspace / "CLAUDE.md").read_text() == (workspace / "GEMINI.md").read_text()
+
+    def test_claude_agent_type_only_claude(self, dirs: tuple[Path, Path]) -> None:
+        """agent_type='claude' → write CLAUDE.md only."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace, agent_type="claude")
+        assembler.write()
+        assert (workspace / "CLAUDE.md").is_file()
+        assert not (workspace / "GEMINI.md").exists()
+
+    def test_gemini_agent_type_only_gemini(self, dirs: tuple[Path, Path]) -> None:
+        """agent_type='gemini' → write GEMINI.md only."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace, agent_type="gemini")
+        assembler.write()
+        assert (workspace / "GEMINI.md").is_file()
+        assert not (workspace / "CLAUDE.md").exists()
+
+    def test_switch_deletes_old_file(self, dirs: tuple[Path, Path]) -> None:
+        """Switching from claude to gemini deletes CLAUDE.md."""
+        shared, workspace = dirs
+        # First write as claude
+        ClaudeMdAssembler(shared, workspace, agent_type="claude").write()
+        assert (workspace / "CLAUDE.md").is_file()
+        # Switch to gemini
+        ClaudeMdAssembler(shared, workspace, agent_type="gemini").write()
+        assert (workspace / "GEMINI.md").is_file()
+        assert not (workspace / "CLAUDE.md").exists()
 
     def test_claude_md_has_full_content(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs
@@ -102,7 +137,7 @@ class TestWrite:
         assert "Agent Soul" in content
 
     def test_no_baobaobot_md(self, dirs: tuple[Path, Path]) -> None:
-        """BAOBAOBOT.md should not be created — everything goes in CLAUDE.md."""
+        """BAOBAOBOT.md should not be created."""
         shared, workspace = dirs
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
@@ -130,6 +165,23 @@ class TestNeedsRebuild:
         assembler = ClaudeMdAssembler(shared, workspace)
         assembler.write()
         assert assembler.needs_rebuild() is False
+
+    def test_true_when_gemini_md_missing_no_agent_type(self, dirs: tuple[Path, Path]) -> None:
+        """No agent_type: missing GEMINI.md triggers rebuild."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace)
+        assembler.write()
+        (workspace / "GEMINI.md").unlink()
+        assert assembler.needs_rebuild() is True
+
+    def test_false_when_only_target_exists(self, dirs: tuple[Path, Path]) -> None:
+        """agent_type='claude': only CLAUDE.md needed, GEMINI.md irrelevant."""
+        shared, workspace = dirs
+        assembler = ClaudeMdAssembler(shared, workspace, agent_type="claude")
+        assembler.write()
+        assert assembler.needs_rebuild() is False
+        # GEMINI.md doesn't exist and shouldn't matter
+        assert not (workspace / "GEMINI.md").exists()
 
     def test_true_after_shared_source_change(self, dirs: tuple[Path, Path]) -> None:
         shared, workspace = dirs

@@ -165,7 +165,7 @@ class WorkspaceManager:
         """Initialize per-topic workspace directory structure.
 
         Safe to call multiple times — only creates missing directories and files.
-        Skill files (.claude/skills/) are always overwritten to stay current.
+        Skill files (.agents/skills/) are always overwritten to stay current.
         """
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         (self.workspace_dir / "projects").mkdir(exist_ok=True)
@@ -188,7 +188,11 @@ class WorkspaceManager:
         logger.debug("Workspace initialized at %s", self.workspace_dir)
 
     def _install_skills(self) -> None:
-        """Deploy skill files to workspace/.claude/skills/ with resolved paths.
+        """Deploy skill files to workspace/.agents/skills/ with resolved paths.
+
+        Uses the cross-platform .agents/skills/ directory (supported by
+        Claude Code, Gemini CLI, and Codex).  Migrates from legacy
+        .claude/skills/ on first run.
 
         Deploys SKILL.md (with template variable replacement) and any extra
         files (e.g. .html templates) from each skill directory.
@@ -201,7 +205,7 @@ class WorkspaceManager:
             if not src.exists():
                 logger.warning("Skill template not found: %s", src)
                 continue
-            dest_dir = self.workspace_dir / ".claude" / "skills" / skill_name
+            dest_dir = self.workspace_dir / ".agents" / "skills" / skill_name
             dest_dir.mkdir(parents=True, exist_ok=True)
             # Deploy SKILL.md with template variable replacement
             content = src.read_text(encoding="utf-8")
@@ -215,6 +219,17 @@ class WorkspaceManager:
                 shutil.copy2(extra, dest_dir / extra.name)
                 logger.debug("Installed skill extra: %s/%s", skill_name, extra.name)
             logger.debug("Installed skill: %s", dest)
+
+        # Migrate: remove legacy .claude/skills/ if present
+        legacy_skills = self.workspace_dir / ".claude" / "skills"
+        if legacy_skills.is_dir():
+            shutil.rmtree(legacy_skills)
+            logger.info("Migrated skills: removed legacy %s", legacy_skills)
+            # Clean up empty .claude/ directory
+            claude_dir = self.workspace_dir / ".claude"
+            if claude_dir.is_dir() and not any(claude_dir.iterdir()):
+                claude_dir.rmdir()
+                logger.info("Removed empty %s", claude_dir)
 
     def refresh_skills(self) -> None:
         """Re-deploy skills to an existing workspace (skips directory init)."""

@@ -1,11 +1,15 @@
-"""CLAUDE.md assembly — composes the workspace CLAUDE.md from shared files.
+"""CLAUDE.md / GEMINI.md assembly — composes workspace instruction files.
 
-Reads AGENTS.md and AGENTSOUL.md from shared_dir, then writes a single
-assembled CLAUDE.md in the workspace root.  A dynamic "Memory Context"
-section lists available experience/ topic files so Claude Code knows what
-long-term memory exists.  User profiles are embedded directly so Claude Code
-doesn't need to read them from disk.  Daily memories are NOT embedded —
-Claude Code reads those on demand via skills (memory-list, memory-search).
+Reads AGENTS.md and AGENTSOUL.md from shared_dir, then writes the assembled
+instruction file in the workspace root.  The output filename depends on the
+backend: CLAUDE.md for Claude Code, GEMINI.md for Gemini CLI.  When the
+backend is unknown (e.g. startup), both files are written.  Switching
+backends writes the new file and deletes the old one.
+
+A dynamic "Memory Context" section lists available experience/ topic files
+so the AI agent knows what long-term memory exists.  User profiles are
+embedded directly.  Daily memories are NOT embedded — the agent reads
+those on demand via skills (memory-list, memory-search).
 
 Key class: ClaudeMdAssembler.
 """
@@ -19,7 +23,13 @@ from baobaobot.memory.utils import strip_frontmatter
 
 logger = logging.getLogger(__name__)
 
-# Section order in the assembled CLAUDE.md
+# Backend type → instruction filename
+_BACKEND_FILENAMES: dict[str, str] = {
+    "claude": "CLAUDE.md",
+    "gemini": "GEMINI.md",
+}
+
+# Section order in the assembled instruction file
 # (filename, section_title, source)  — source is "shared" or "workspace"
 _SECTION_ORDER = [
     ("AGENTS.md", "Work Instructions (AGENTS)", "shared"),
@@ -35,7 +45,7 @@ _HEADER = """\
 
 
 class ClaudeMdAssembler:
-    """Reads shared persona files, assembles CLAUDE.md."""
+    """Reads shared persona files, assembles instruction file (CLAUDE.md / GEMINI.md)."""
 
     def __init__(
         self,
@@ -43,13 +53,20 @@ class ClaudeMdAssembler:
         workspace_dir: Path,
         locale: str = "en-US",
         allowed_users: frozenset[int] | None = None,
+        agent_type: str = "",
     ) -> None:
         self.shared_dir = shared_dir
         self.workspace_dir = workspace_dir
         self.locale = locale
         self.allowed_users = allowed_users
-        self.output_path = workspace_dir / "CLAUDE.md"
+        self.agent_type = agent_type  # "" = unknown (write both at startup)
         self._source_mtimes: dict[str, float] = {}
+
+    @property
+    def output_path(self) -> Path:
+        """Primary output file path based on agent_type."""
+        filename = _BACKEND_FILENAMES.get(self.agent_type, "CLAUDE.md")
+        return self.workspace_dir / filename
 
     def _read_file(self, path: Path) -> str:
         """Read a file, stripping frontmatter, returning empty string if missing."""
@@ -154,10 +171,30 @@ class ClaudeMdAssembler:
         return result
 
     def write(self) -> None:
-        """Assemble and write CLAUDE.md to the workspace root."""
+        """Assemble and write the instruction file to the workspace root.
+
+        - agent_type set → write only that backend's file, delete the other
+        - agent_type empty → write both (startup fallback)
+        """
         content = self.assemble()
-        self.output_path.write_text(content, encoding="utf-8")
-        logger.info("Assembled CLAUDE.md at %s", self.output_path)
+
+        if self.agent_type and self.agent_type in _BACKEND_FILENAMES:
+            # Write the target file
+            target = self.workspace_dir / _BACKEND_FILENAMES[self.agent_type]
+            target.write_text(content, encoding="utf-8")
+            logger.info("Assembled %s at %s", target.name, self.workspace_dir)
+            # Delete the other backend's file
+            for at, fn in _BACKEND_FILENAMES.items():
+                if at != self.agent_type:
+                    other = self.workspace_dir / fn
+                    if other.exists():
+                        other.unlink()
+                        logger.info("Removed %s (switched to %s)", fn, self.agent_type)
+        else:
+            # Unknown backend — write both
+            for fn in _BACKEND_FILENAMES.values():
+                (self.workspace_dir / fn).write_text(content, encoding="utf-8")
+            logger.info("Assembled CLAUDE.md + GEMINI.md at %s", self.workspace_dir)
 
         # Clean up legacy BAOBAOBOT.md if present
         legacy = self.workspace_dir / "BAOBAOBOT.md"
@@ -224,8 +261,15 @@ class ClaudeMdAssembler:
 
     def needs_rebuild(self) -> bool:
         """Check if any source file, experience dir, or profile has changed."""
-        if not self.output_path.exists():
-            return True
+        if self.agent_type and self.agent_type in _BACKEND_FILENAMES:
+            # Specific backend — only check that file
+            if not self.output_path.exists():
+                return True
+        else:
+            # Unknown backend — need all files present
+            for fn in _BACKEND_FILENAMES.values():
+                if not (self.workspace_dir / fn).exists():
+                    return True
 
         if not self._source_mtimes:
             # No cached mtimes — need rebuild
@@ -326,7 +370,7 @@ def rebuild_all_workspaces(
     locale: str = "en-US",
     allowed_users: frozenset[int] | None = None,
 ) -> int:
-    """Rebuild CLAUDE.md for all workspaces where sources have changed.
+    """Rebuild CLAUDE.md + GEMINI.md for all workspaces where sources changed.
 
     Returns the number of workspaces rebuilt.
     """

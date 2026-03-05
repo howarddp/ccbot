@@ -36,10 +36,10 @@ class TestSaveAttachment:
         assert rel is not None
         today = date.today().isoformat()
         # Preserves original filename in date subdirectory
-        assert rel == f"memory/attachments/{today}/photo.jpg"
+        assert rel == f"attachments/{today}/photo.jpg"
 
-        # File was copied
-        att_path = workspace / rel
+        # File was copied (rel is relative to memory/)
+        att_path = workspace / "memory" / rel
         assert att_path.exists()
         assert att_path.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg"
 
@@ -80,7 +80,7 @@ class TestSaveAttachment:
         assert rel is not None
         assert not rel.startswith("/")
         today = date.today().isoformat()
-        assert rel == f"memory/attachments/{today}/data.csv"
+        assert rel == f"attachments/{today}/data.csv"
 
     def test_collision_adds_numeric_suffix(self, workspace: Path) -> None:
         src = workspace / "tmp" / "file.txt"
@@ -89,19 +89,19 @@ class TestSaveAttachment:
         rel1 = save_attachment(workspace, src, "first copy")
         assert rel1 is not None
         today = date.today().isoformat()
-        assert rel1 == f"memory/attachments/{today}/file.txt"
+        assert rel1 == f"attachments/{today}/file.txt"
 
         # Save again — same source filename
         src.write_bytes(b"second")
         rel2 = save_attachment(workspace, src, "second copy")
         assert rel2 is not None
-        assert rel2 == f"memory/attachments/{today}/file_2.txt"
+        assert rel2 == f"attachments/{today}/file_2.txt"
 
         # Third time
         src.write_bytes(b"third")
         rel3 = save_attachment(workspace, src, "third copy")
         assert rel3 is not None
-        assert rel3 == f"memory/attachments/{today}/file_3.txt"
+        assert rel3 == f"attachments/{today}/file_3.txt"
 
     def test_strips_tmp_timestamp_prefix(self, workspace: Path) -> None:
         # Simulate file downloaded by bot.py with YYYYMMDD_HHMMSS_ prefix
@@ -112,7 +112,7 @@ class TestSaveAttachment:
         assert rel is not None
         today = date.today().isoformat()
         # Prefix should be stripped
-        assert rel == f"memory/attachments/{today}/Resume.pdf"
+        assert rel == f"attachments/{today}/Resume.pdf"
 
     def test_preserves_name_without_tmp_prefix(self, workspace: Path) -> None:
         # File without tmp prefix should be unchanged
@@ -122,7 +122,7 @@ class TestSaveAttachment:
         rel = save_attachment(workspace, src, "report")
         assert rel is not None
         today = date.today().isoformat()
-        assert rel == f"memory/attachments/{today}/my_report_2026.pdf"
+        assert rel == f"attachments/{today}/my_report_2026.pdf"
 
 
 class TestAttachmentCleanup:

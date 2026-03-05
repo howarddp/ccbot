@@ -1,6 +1,7 @@
 """Tests for cron-add, cron-list, cron-remove bin scripts."""
 
 import json
+import sqlite3
 import subprocess
 import sys
 import time
@@ -28,12 +29,39 @@ def run_script(
 
 
 def load_jobs(workspace: Path) -> list[dict]:
-    """Load jobs from cron/jobs.json."""
-    path = workspace / "cron" / "jobs.json"
-    if not path.is_file():
+    """Load jobs from memory.db (SQLite)."""
+    db_path = workspace / "memory.db"
+    if not db_path.is_file():
         return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data.get("jobs", [])
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM cron_jobs ORDER BY created_at").fetchall()
+        jobs = []
+        for r in rows:
+            jobs.append({
+                "id": r["id"],
+                "name": r["name"],
+                "message": r["message"],
+                "enabled": bool(r["enabled"]),
+                "delete_after_run": bool(r["delete_after_run"]),
+                "schedule": {
+                    "kind": r["schedule_kind"],
+                    "expr": r["schedule_expr"],
+                    "tz": r["schedule_tz"],
+                    "every_seconds": r["schedule_every_s"],
+                    "at": r["schedule_at"],
+                },
+                "state": {
+                    "next_run_at": r["next_run_at"],
+                    "last_run_at": r["last_run_at"],
+                },
+            })
+        return jobs
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +170,7 @@ class TestCronAdd:
         assert jobs[0]["state"]["next_run_at"] is None
 
     def test_add_preserves_workspace_meta(self, tmp_path: Path):
-        """Adding to existing jobs.json preserves workspace_meta."""
+        """Adding to existing jobs.json migrates and preserves workspace_meta."""
         cron_dir = tmp_path / "cron"
         cron_dir.mkdir()
         existing = {
@@ -154,10 +182,19 @@ class TestCronAdd:
 
         run_script("cron-add", ["every:1h", "new job"], tmp_path)
 
-        data = json.loads((cron_dir / "jobs.json").read_text())
-        assert data["workspace_meta"]["user_id"] == 42
-        assert data["workspace_meta"]["thread_id"] == 99
-        assert len(data["jobs"]) == 1
+        # After migration, data is in SQLite
+        jobs = load_jobs(tmp_path)
+        assert len(jobs) == 1
+
+        # Workspace meta should be migrated to cron_meta table
+        conn = sqlite3.connect(str(tmp_path / "memory.db"))
+        conn.row_factory = sqlite3.Row
+        meta = conn.execute(
+            "SELECT value FROM cron_meta WHERE key = 'workspace_meta.user_id'"
+        ).fetchone()
+        conn.close()
+        assert meta is not None
+        assert meta["value"] == "42"
 
     def test_add_default_name_from_message(self, tmp_path: Path):
         """Default name is derived from message when --name not given."""
@@ -171,12 +208,12 @@ class TestCronAdd:
         jobs = load_jobs(tmp_path)
         assert len(jobs[0]["name"]) <= 30
 
-    def test_add_creates_cron_dir(self, tmp_path: Path):
-        """cron/ directory is created if it doesn't exist."""
+    def test_add_creates_db(self, tmp_path: Path):
+        """memory.db is created if it doesn't exist."""
         (tmp_path / "memory").mkdir()
-        assert not (tmp_path / "cron").exists()
+        assert not (tmp_path / "memory.db").exists()
         run_script("cron-add", ["every:1h", "test"], tmp_path)
-        assert (tmp_path / "cron" / "jobs.json").is_file()
+        assert (tmp_path / "memory.db").is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -296,11 +333,12 @@ class TestResolveWorkspace:
         (tmp_path / "memory").mkdir()
         run_script("cron-add", ["every:1h", "test"], tmp_path)
         # Verify it used the explicit workspace
-        assert (tmp_path / "cron" / "jobs.json").is_file()
+        assert (tmp_path / "memory.db").is_file()
 
-    def test_cwd_with_cron_dir(self, tmp_path: Path, monkeypatch):
-        """Script detects workspace from cwd with cron/ dir."""
-        (tmp_path / "cron").mkdir()
+    def test_cwd_with_memory_db(self, tmp_path: Path, monkeypatch):
+        """Script detects workspace from cwd with memory.db."""
+        # Create memory.db so resolve_workspace finds it
+        (tmp_path / "memory.db").touch()
         monkeypatch.chdir(tmp_path)
 
         script = BIN_DIR / "cron-list"
@@ -341,4 +379,4 @@ class TestResolveWorkspace:
             cwd=str(subdir),
         )
         assert result.returncode == 0
-        assert (tmp_path / "cron" / "jobs.json").is_file()
+        assert (tmp_path / "memory.db").is_file()

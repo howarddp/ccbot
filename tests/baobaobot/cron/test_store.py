@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from baobaobot.cron.store import load_store, save_store, store_mtime, store_path
+from baobaobot.cron.store import load_store, save_store, store_mtime
 from baobaobot.cron.types import (
     CronJob,
     CronSchedule,
@@ -19,12 +19,6 @@ def workspace_dir(tmp_path: Path) -> Path:
     ws = tmp_path / "workspace_test"
     ws.mkdir()
     return ws
-
-
-class TestStorePath:
-    def test_path(self, workspace_dir: Path):
-        p = store_path(workspace_dir)
-        assert p == workspace_dir / "cron" / "jobs.json"
 
 
 class TestLoadStore:
@@ -82,10 +76,10 @@ class TestSaveStore:
         assert len(reloaded.jobs) == 1
         assert reloaded.jobs[0].message == "morning"
 
-    def test_creates_directory(self, workspace_dir: Path):
+    def test_creates_db(self, workspace_dir: Path):
         store = CronStoreFile()
         save_store(workspace_dir, store)
-        assert (workspace_dir / "cron" / "jobs.json").is_file()
+        assert (workspace_dir / "memory.db").is_file()
 
 
 class TestStoreMtime:

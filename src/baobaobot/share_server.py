@@ -1127,6 +1127,12 @@ class ShareServer:
         # Get or start code-server
         try:
             port = await self._code_manager.get_or_start(workspace)
+        except FileNotFoundError:
+            return web.Response(
+                text="code-server is not installed. "
+                "Install it with: curl -fsSL https://code-server.dev/install.sh | sh",
+                status=503,
+            )
         except RuntimeError as e:
             return web.Response(text=str(e), status=503)
 

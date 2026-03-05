@@ -12,7 +12,7 @@ Plan multi-day travel itineraries or look up individual places with reviews from
 - **AskUserQuestion**: MUST use the `AskUserQuestion` tool for all clarification questions. NEVER type questions as plain text.
 - **Reviews**: At least 3 web sources per place (`web-search` skill) + MUST call `tripadvisor-reviews` for every destination.
 - **YouTube**: MUST search YouTube for every place — see Step 3a below.
-- **Route map**: When generating a route map, MUST use `.claude/skills/travel/route_map.html` template. NEVER use Google Static Maps API PNGs as substitute.
+- **Route map**: When generating a route map, MUST use `.agents/skills/travel/route_map.html` template. NEVER use Google Static Maps API PNGs as substitute.
 - **Multi mode**: For multi-day route maps, MUST use `mode: "multi"` → ONE combined HTML with tab switching.
 - **Share link**: MUST use `share-link` skill to host HTML maps and send the URL.
 - **Route map is optional**: For Mode 2 (itinerary planning), output the itinerary FIRST, then ask the user if they want an interactive route map. Only generate the map if they say yes.
@@ -174,7 +174,7 @@ Options:
 
 ### Step 9 — Generate interactive route map (only if user requested)
 
-**MUST use `.claude/skills/travel/route_map.html` template. NEVER use Static Maps API PNGs.**
+**MUST use `.agents/skills/travel/route_map.html` template. NEVER use Static Maps API PNGs.**
 
 **9a. Optimize route**: Use `google-directions` skill with `optimizeWaypointOrder: true` for each day. MUST request per-leg polylines (include `routes.legs.polyline.encodedPolyline` in the FieldMask). **CRITICAL: Every leg MUST have a `"polyline"` field with the encoded polyline from Google Directions. Without it, the map renders ugly straight lines instead of real road paths. NEVER skip this step.**
 
@@ -219,7 +219,7 @@ Template features: tab bar (Overview + per-day), collapsible panel, Leaflet map,
 **9d. Inject and save**:
 ```python
 import json, os
-TEMPLATE = ".claude/skills/travel/route_map.html"
+TEMPLATE = ".agents/skills/travel/route_map.html"
 OUTPUT = "tmp/trip_route.html"
 with open(TEMPLATE) as f:
     html = f.read()

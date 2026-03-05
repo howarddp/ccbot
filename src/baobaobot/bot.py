@@ -329,16 +329,17 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     display = ctx.session_manager.get_display_name(wid)
-    await safe_reply(update.message, f"🔄 Restarting Claude in *{display}*…")
+    wb = ctx.get_window_backend(wid)
+    await safe_reply(update.message, f"🔄 Restarting {wb.name} in *{display}*…")
 
-    success = await ctx.tmux_manager.restart_cli(wid)
+    success = await ctx.tmux_manager.restart_cli(wid, backend=wb)  # type: ignore[arg-type]
     clear_window_health(wid)
     ctx.session_manager.clear_window_session(wid)
 
     if success:
-        await safe_reply(update.message, f"✅ Claude restarted in *{display}*.")
+        await safe_reply(update.message, f"✅ {wb.name} restarted in *{display}*.")
     else:
-        await safe_reply(update.message, f"❌ Failed to restart Claude in *{display}*.")
+        await safe_reply(update.message, f"❌ Failed to restart {wb.name} in *{display}*.")
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -748,29 +749,34 @@ async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def rebuild_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manually rebuild CLAUDE.md for the current topic's workspace."""
+    """Manually rebuild instruction file for the current topic's workspace."""
     user = update.effective_user
     if not user or not _is_user_allowed(context, user.id):
         return
     if not update.message:
         return
 
+    ctx = _ctx(context)
+    rk = ctx.router.extract_routing_key(update)
+    wid = ctx.router.get_window(rk, ctx) if rk else None
     workspace_dir = _resolve_workspace_dir(update, context)
     if workspace_dir is None:
         await safe_reply(update.message, "❌ No workspace for this topic.")
         return
 
-    ctx = _ctx(context)
+    agent_type = ctx.get_window_backend(wid).agent_type if wid else ""
     assembler = ClaudeMdAssembler(
         ctx.config.shared_dir,
         workspace_dir,
         locale=ctx.config.locale,
         allowed_users=ctx.config.allowed_users,
+        agent_type=agent_type,
     )
     assembler.write()
+    fname = assembler.output_path.name
     await safe_reply(
         update.message,
-        "✅ CLAUDE.md rebuilt. Send /clear to apply new settings to the current session.",
+        f"✅ {fname} rebuilt. Send /clear to apply new settings.",
     )
 
 
@@ -3204,7 +3210,7 @@ async def post_init(application: Application) -> None:
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await agent_ctx.session_manager.resolve_stale_ids()
 
-    # Rebuild CLAUDE.md and refresh skills for existing workspaces
+    # Rebuild CLAUDE.md + GEMINI.md and refresh skills for existing workspaces
     workspace_dirs = agent_ctx.config.iter_workspace_dirs()
     if workspace_dirs:
         rebuilt = rebuild_all_workspaces(
@@ -3215,7 +3221,7 @@ async def post_init(application: Application) -> None:
         )
         if rebuilt:
             logger.info(
-                "Auto-rebuilt CLAUDE.md for %d workspace(s) on startup", rebuilt
+                "Auto-rebuilt CLAUDE.md + GEMINI.md for %d workspace(s)", rebuilt
             )
         refreshed = refresh_all_skills(agent_ctx.config.shared_dir, workspace_dirs)
         if refreshed:

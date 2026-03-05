@@ -126,10 +126,10 @@ class TestBuildAgentKeyboard:
 
 
 class TestBuildSystemKeyboard:
-    def test_has_seven_buttons(self):
+    def test_has_expected_buttons(self):
         kb = _build_system_keyboard("@1")
         buttons = [btn for row in kb.inline_keyboard for btn in row]
-        assert len(buttons) == 7
+        assert len(buttons) == 10
 
     def test_button_labels(self):
         kb = _build_system_keyboard("@1")
@@ -142,6 +142,9 @@ class TestBuildSystemKeyboard:
             "⏰ Cron",
             "📊 Verbosity",
             "📂 Files",
+            "🔗 ShareLink",
+            "📝 Summary",
+            "💓 Heartbeat",
         ]
         for label in expected:
             assert label in labels
@@ -393,7 +396,9 @@ class TestHandleMenuCallbackRestart:
                 update, _make_context(agent_ctx), query, query.data, agent_ctx
             )
 
-            agent_ctx.tmux_manager.restart_cli.assert_called_once_with("@1")
+            agent_ctx.tmux_manager.restart_cli.assert_called_once()
+            call_args = agent_ctx.tmux_manager.restart_cli.call_args
+            assert call_args[0][0] == "@1"
             text = mock_reply.call_args[0][1]
             assert "restarted" in text
 

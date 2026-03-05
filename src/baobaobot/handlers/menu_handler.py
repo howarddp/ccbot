@@ -538,6 +538,21 @@ async def _handle_bswitch(
 
     new_backend = ctx.get_window_backend(wid)
 
+    # Rebuild instruction file for the new backend (CLAUDE.md ↔ GEMINI.md)
+    if state.cwd:
+        workspace_dir = Path(state.cwd)
+        if workspace_dir.is_dir():
+            from ..workspace.assembler import ClaudeMdAssembler
+
+            assembler = ClaudeMdAssembler(
+                ctx.config.shared_dir,
+                workspace_dir,
+                locale=ctx.config.locale,
+                allowed_users=ctx.config.allowed_users,
+                agent_type=new_agent_type,
+            )
+            assembler.write()
+
     # Get TmuxCliBackend for restart if possible
     from ..backends.base import TmuxCliBackend
 
@@ -671,18 +686,21 @@ async def _handle_rebuild(
             await safe_reply(query.message, "❌ Workspace directory not found.")
         return
 
+    backend = ctx.get_window_backend(wid)
     assembler = ClaudeMdAssembler(
         ctx.config.shared_dir,
         workspace_dir,
         locale=ctx.config.locale,
         allowed_users=ctx.config.allowed_users,
+        agent_type=backend.agent_type,
     )
     assembler.write()
 
+    fname = assembler.output_path.name
     if query.message:
         await safe_reply(
             query.message,
-            "✅ CLAUDE.md rebuilt. Send /clear to apply new settings.",
+            f"✅ {fname} rebuilt. Send /clear to apply new settings.",
         )
 
 
@@ -948,9 +966,12 @@ async def _handle_share(
 
     from ..share_server import generate_token
 
-    ws_root = str(ws_dir.resolve())
+    # Default to projects/ subdirectory if it exists
+    projects_dir = ws_dir / "projects"
+    browse_dir = projects_dir if projects_dir.is_dir() else ws_dir
+    browse_root = str(browse_dir.resolve())
     display_name = ws_dir.name
-    token = generate_token(f"p:{ws_root}:", ttl=600, name=display_name)
+    token = generate_token(f"p:{browse_root}:", ttl=600, name=display_name)
     url = f"{public_url}/p/{token}/"
 
     await safe_reply(query.message, f"🔗 [Browse {display_name}]({url})")

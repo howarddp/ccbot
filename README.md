@@ -384,7 +384,7 @@ claude
         ├── cron/jobs.json           # 排程任務
         ├── projects/                # 符號連結的專案目錄
         ├── tmp/                     # 下載的檔案
-        └── .claude/skills/          # Claude Code Skills
+        └── .agents/skills/          # Agent Skills (Claude/Gemini/Codex)
 ```
 
 ## 檔案結構
@@ -416,7 +416,7 @@ src/baobaobot/
 │   ├── manager.py           # 目錄初始化、專案連結、bin/skills 部署
 │   ├── assembler.py         # CLAUDE.md 從源檔案組裝
 │   ├── bin/                 # 部署到 shared/bin/ 的腳本
-│   ├── skills/              # 部署到 .claude/skills/ 的 SKILL.md
+│   ├── skills/              # 部署到 .agents/skills/ 的 SKILL.md
 │   └── templates/           # 預設模板（AGENTSOUL/AGENTS/USER.md）
 ├── persona/                 # 人格系統
 │   ├── agentsoul.py         # AGENTSOUL.md 讀寫解析
