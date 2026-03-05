@@ -12,6 +12,8 @@ Routes:
   GET  /term/{token}/ws      — web terminal WebSocket (PTY bridge)
   GET  /tmux/{token}/        — tmux attach page (xterm.js)
   GET  /tmux/{token}/ws      — tmux attach WebSocket (grouped session)
+  GET  /code/{token}/        — VS Code Web (code-server reverse proxy)
+  *    /code/{token}/{path}  — code-server HTTP/WebSocket proxy
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from pathlib import Path
 
 from contextlib import contextmanager
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 
@@ -219,6 +222,105 @@ _TERMINAL_HTML = (_TEMPLATES_DIR / "terminal.html").read_text(encoding="utf-8")
 # ---------------------------------------------------------------------------
 
 
+class CodeServerManager:
+    """Manages code-server processes for VS Code Web access.
+
+    Each directory gets its own code-server instance on a unique port.
+    Uses code-server's built-in idle timeout for auto-shutdown.
+    """
+
+    _BASE_PORT = 13370
+    _MAX_INSTANCES = 10
+    _DEFAULT_IDLE_TIMEOUT = 3600  # 1 hour
+
+    def __init__(self, idle_timeout: int = _DEFAULT_IDLE_TIMEOUT) -> None:
+        self._idle_timeout = idle_timeout
+        # directory_abs -> (port, process)
+        self._instances: dict[str, tuple[int, asyncio.subprocess.Process]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get_or_start(self, directory: Path) -> int:
+        """Get or start a code-server for the given directory. Returns port."""
+        async with self._lock:
+            return await self._get_or_start_locked(directory)
+
+    async def _get_or_start_locked(self, directory: Path) -> int:
+        key = str(directory.resolve())
+        if key in self._instances:
+            port, proc = self._instances[key]
+            if proc.returncode is None:  # still running
+                return port
+            # Process died, clean up
+            del self._instances[key]
+
+        if len(self._instances) >= self._MAX_INSTANCES:
+            raise RuntimeError("Maximum code-server instances reached")
+
+        port = self._allocate_port()
+        proc = await asyncio.create_subprocess_exec(
+            "code-server",
+            "--auth", "none",
+            "--bind-addr", f"127.0.0.1:{port}",
+            "--disable-telemetry", "--disable-update-check",
+            "--idle-timeout-seconds", str(self._idle_timeout),
+            "--trusted-origins", "*",
+            str(directory),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self._instances[key] = (port, proc)
+        logger.info(
+            "Starting code-server on port %d for %s (PID %d)", port, key, proc.pid
+        )
+        await self._wait_ready(port)
+        return port
+
+    def _allocate_port(self) -> int:
+        """Find the next available port."""
+        used = {p for p, _ in self._instances.values()}
+        for port in range(self._BASE_PORT, self._BASE_PORT + self._MAX_INSTANCES):
+            if port not in used:
+                return port
+        raise RuntimeError("No available ports for code-server")
+
+    async def _wait_ready(self, port: int, timeout: float = 30.0) -> None:
+        """Wait for code-server to respond to HTTP requests."""
+        deadline = asyncio.get_event_loop().time() + timeout
+        session = aiohttp.ClientSession()
+        try:
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    async with session.get(
+                        f"http://127.0.0.1:{port}/healthz",
+                        timeout=aiohttp.ClientTimeout(total=2),
+                    ) as resp:
+                        if resp.status == 200:
+                            logger.info("code-server ready on port %d", port)
+                            return
+                except (aiohttp.ClientError, OSError, asyncio.TimeoutError):
+                    pass
+                await asyncio.sleep(0.5)
+        finally:
+            await session.close()
+        raise RuntimeError(
+            f"code-server on port {port} failed to start within {timeout}s"
+        )
+
+    async def stop_all(self) -> None:
+        """Stop all running code-server instances."""
+        for key in list(self._instances):
+            port, proc = self._instances.pop(key)
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (OSError, asyncio.TimeoutError):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            logger.info("Stopped code-server on port %d", port)
+
+
 def _deny_response(reason: str) -> web.Response:
     """Return an appropriate error page based on token check result."""
     if reason == "expired":
@@ -255,6 +357,8 @@ class ShareServer:
         self._on_upload = on_upload
         self._app = web.Application(client_max_size=100 * 1024 * 1024)  # 100MB
         self._runner: web.AppRunner | None = None
+        self._code_manager = CodeServerManager()
+        self._proxy_session: aiohttp.ClientSession | None = None
         self._setup_routes()
 
     def _setup_routes(self) -> None:
@@ -268,6 +372,8 @@ class ShareServer:
         self._app.router.add_get("/tmux/{token}/ws", self._handle_tmux_ws)
         self._app.router.add_get("/tmux/{token}/", self._handle_tmux_page)
         self._app.router.add_get("/tmux/{token}", self._handle_tmux_page)
+        self._app.router.add_get("/code/{token}", self._handle_code_redirect)
+        self._app.router.add_route("*", "/code/{token}/{path:.*}", self._handle_code_proxy)
 
     def _find_file(self, rel_path: str, workspace: Path | None = None) -> Path | None:
         """Find a file in a specific workspace or across all roots."""
@@ -975,6 +1081,199 @@ class ShareServer:
 
         return ws
 
+    # -- VS Code Web (code-server reverse proxy) --
+
+    def _verify_code_workspace(self, token: str) -> tuple[Path | None, str]:
+        """Verify code-server token.
+
+        Token payload format: 'code:{directory_abs}' with directory encoded in name.
+        Returns (directory_path, status).
+        """
+        # Extract directory path from token name field
+        dir_path = extract_token_name(token)
+        if not dir_path:
+            return None, "invalid"
+
+        # Verify HMAC signature against the expected payload
+        status = check_token(token, f"code:{dir_path}")
+        if status != "ok":
+            return None, status
+
+        # Security: ensure directory is under a registered workspace root
+        resolved = Path(dir_path).resolve()
+        for root in self._workspace_roots:
+            root_resolved = root.resolve()
+            try:
+                resolved.relative_to(root_resolved)
+                return resolved, "ok"
+            except ValueError:
+                continue
+        return None, "invalid"
+
+    async def _handle_code_redirect(self, request: web.Request) -> web.Response:
+        """Redirect /code/{token} to /code/{token}/ (add trailing slash)."""
+        raise web.HTTPFound(f"/code/{request.match_info['token']}/")
+
+    async def _handle_code_proxy(self, request: web.Request) -> web.StreamResponse:
+        """Reverse proxy for code-server: handles both HTTP and WebSocket."""
+        token = request.match_info["token"]
+        path = request.match_info.get("path", "")
+
+        # Verify token
+        workspace, ws_status = self._verify_code_workspace(token)
+        if workspace is None:
+            return _deny_response(ws_status)
+
+        # Get or start code-server
+        try:
+            port = await self._code_manager.get_or_start(workspace)
+        except RuntimeError as e:
+            return web.Response(text=str(e), status=503)
+
+        # Build target URL
+        target_url = f"http://127.0.0.1:{port}/{path}"
+        if request.query_string:
+            target_url += f"?{request.query_string}"
+
+        # WebSocket upgrade
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return await self._proxy_code_ws(request, target_url)
+
+        return await self._proxy_code_http(request, target_url, token)
+
+    async def _proxy_code_http(
+        self, request: web.Request, target_url: str, token: str
+    ) -> web.StreamResponse:
+        """Forward HTTP request to code-server and return response."""
+        if self._proxy_session is None or self._proxy_session.closed:
+            self._proxy_session = aiohttp.ClientSession()
+
+        # Forward headers (skip hop-by-hop and encoding negotiation)
+        headers: dict[str, str] = {}
+        for key, value in request.headers.items():
+            if key.lower() not in (
+                "host", "content-length", "transfer-encoding", "accept-encoding",
+            ):
+                headers[key] = value
+        # Request uncompressed responses to avoid brotli/zstd decode issues
+        headers["Accept-Encoding"] = "gzip, deflate"
+
+        body = await request.read() if request.can_read_body else None
+
+        try:
+            async with self._proxy_session.request(
+                request.method,
+                target_url,
+                headers=headers,
+                data=body,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as upstream:
+                # Filter response headers
+                resp_headers: dict[str, str] = {}
+                for key, value in upstream.headers.items():
+                    if key.lower() in (
+                        "transfer-encoding",
+                        "content-encoding",
+                        "content-length",
+                    ):
+                        continue
+                    resp_headers[key] = value
+
+                content_type = upstream.headers.get("Content-Type", "")
+                prefix = f"/code/{token}"
+
+                if "text/html" in content_type:
+                    # Read full body for HTML path rewriting
+                    raw = await upstream.read()
+                    text = raw.decode("utf-8", errors="replace")
+                    # Inject <base> tag for relative URL resolution
+                    if "<head>" in text:
+                        text = text.replace(
+                            "<head>", f'<head><base href="{prefix}/">', 1
+                        )
+                    elif "<HEAD>" in text:
+                        text = text.replace(
+                            "<HEAD>", f'<HEAD><base href="{prefix}/">', 1
+                        )
+                    else:
+                        text = f'<base href="{prefix}/">' + text
+                    # Remove Content-Type from forwarded headers to avoid conflict
+                    html_headers = {
+                        k: v for k, v in resp_headers.items()
+                        if k.lower() != "content-type"
+                    }
+                    return web.Response(
+                        body=text.encode("utf-8"),
+                        status=upstream.status,
+                        headers=html_headers,
+                        content_type="text/html",
+                        charset="utf-8",
+                    )
+
+                # Stream non-HTML response
+                response = web.StreamResponse(
+                    status=upstream.status, headers=resp_headers
+                )
+                if content_type:
+                    response.content_type = content_type
+                await response.prepare(request)
+                async for chunk in upstream.content.iter_chunked(32768):
+                    await response.write(chunk)
+                await response.write_eof()
+                return response
+        except aiohttp.ClientError as e:
+            logger.error("code-server proxy error: %s", e)
+            return web.Response(text="Bad Gateway", status=502)
+
+    async def _proxy_code_ws(
+        self, request: web.Request, target_url: str
+    ) -> web.WebSocketResponse:
+        """Bridge WebSocket between browser and code-server."""
+        ws_client = web.WebSocketResponse(
+            protocols=request.headers.getall("Sec-WebSocket-Protocol", []),
+        )
+        await ws_client.prepare(request)
+
+        ws_url = target_url.replace("http://", "ws://")
+
+        if self._proxy_session is None or self._proxy_session.closed:
+            self._proxy_session = aiohttp.ClientSession()
+
+        try:
+            async with self._proxy_session.ws_connect(
+                ws_url,
+                protocols=request.headers.getall("Sec-WebSocket-Protocol", []),
+            ) as ws_upstream:
+
+                async def client_to_server() -> None:
+                    async for msg in ws_client:
+                        if msg.type == WSMsgType.TEXT:
+                            await ws_upstream.send_str(msg.data)
+                        elif msg.type == WSMsgType.BINARY:
+                            await ws_upstream.send_bytes(msg.data)
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                            break
+
+                async def server_to_client() -> None:
+                    async for msg in ws_upstream:
+                        if msg.type == WSMsgType.TEXT:
+                            await ws_client.send_str(msg.data)
+                        elif msg.type == WSMsgType.BINARY:
+                            await ws_client.send_bytes(msg.data)
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                            break
+
+                await asyncio.gather(
+                    client_to_server(),
+                    server_to_client(),
+                    return_exceptions=True,
+                )
+        except (aiohttp.ClientError, OSError) as e:
+            logger.error("code-server WebSocket proxy error: %s", e)
+
+        return ws_client
+
     # -- Server lifecycle --
 
     async def start(self) -> None:
@@ -985,6 +1284,9 @@ class ShareServer:
         logger.info("Share server listening on http://localhost:%d", self._port)
 
     async def stop(self) -> None:
+        await self._code_manager.stop_all()
+        if self._proxy_session and not self._proxy_session.closed:
+            await self._proxy_session.close()
         if self._runner:
             await self._runner.cleanup()
             self._runner = None
