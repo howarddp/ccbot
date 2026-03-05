@@ -295,6 +295,30 @@ def _discover_gemini_session_id(cwd: str) -> str:
         return ""
 
 
+def _is_gemini_pane() -> bool:
+    """Detect if the current tmux pane is running Gemini CLI.
+
+    Check the pane's current command via TMUX_PANE.  This handles the case
+    where Gemini CLI calls the hook but doesn't set GEMINI_PROJECT_DIR.
+    """
+    pane_id = os.environ.get("TMUX_PANE", "")
+    if not pane_id:
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-t", pane_id, "-p", "#{pane_current_command}"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            cmd = result.stdout.strip().lower()
+            return "gemini" in cmd
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return False
+
+
 def _resolve_tmux_window(
     pane_id: str,
 ) -> tuple[str, str, str] | None:
@@ -453,12 +477,17 @@ def hook_main() -> None:
         logger.info("Hook install requested")
         sys.exit(install_all_hooks())
 
-    # Detect hook mode: Gemini CLI uses env vars, Claude Code uses stdin JSON.
-    # GEMINI_PROJECT_DIR is set by Gemini CLI for hook subprocesses.
+    # Detect hook mode: Gemini CLI may set GEMINI_PROJECT_DIR env var,
+    # but some versions don't.  Both CLIs send stdin JSON with session_id/cwd.
+    # We check env var first, then fall back to detecting the running CLI
+    # from the tmux pane's process name.
     gemini_project_dir = os.environ.get("GEMINI_PROJECT_DIR", "")
 
     if gemini_project_dir:
         _process_gemini_hook(gemini_project_dir)
+    elif _is_gemini_pane():
+        # Gemini CLI without GEMINI_PROJECT_DIR — read cwd from stdin JSON
+        _process_gemini_hook("")
     else:
         _process_claude_hook()
 
@@ -474,17 +503,12 @@ def _process_gemini_hook(cwd: str) -> None:
     """
     logger.debug("Processing Gemini hook event (cwd=%s)", cwd)
 
-    if not os.path.isabs(cwd):
-        logger.warning("GEMINI_PROJECT_DIR is not absolute: %s", cwd)
-        print("{}")
-        return
-
-    # Try to read session_id from stdin JSON (Gemini does send it)
+    # Try to read session_id from stdin JSON (Gemini sends it)
     stdin_session_id = ""
     try:
         payload = json.load(sys.stdin)
         stdin_session_id = payload.get("session_id", "")
-        # Also pick up cwd from stdin if env var was missing
+        # Pick up cwd from stdin if env var was missing
         if not cwd:
             cwd = payload.get("cwd", cwd)
         logger.debug(
@@ -492,6 +516,11 @@ def _process_gemini_hook(cwd: str) -> None:
         )
     except (json.JSONDecodeError, ValueError, OSError) as e:
         logger.debug("Failed to read Gemini stdin JSON (expected): %s", e)
+
+    if not cwd or not os.path.isabs(cwd):
+        logger.warning("Gemini hook: no valid cwd (got: %s)", cwd)
+        print("{}")
+        return
 
     # Determine session_id: prefer stdin (runtime session_id from Gemini CLI),
     # but verify against actual transcript files.  If stdin's session_id has

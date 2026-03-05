@@ -238,6 +238,8 @@ class CodeServerManager:
         # directory_abs -> (port, process)
         self._instances: dict[str, tuple[int, asyncio.subprocess.Process]] = {}
         self._lock = asyncio.Lock()
+        self._install_lock = asyncio.Lock()
+        self._install_checked = False
 
     async def get_or_start(self, directory: Path) -> int:
         """Get or start a code-server for the given directory. Returns port."""
@@ -257,8 +259,9 @@ class CodeServerManager:
             raise RuntimeError("Maximum code-server instances reached")
 
         port = self._allocate_port()
+        cs_bin = self._find_code_server_bin() or "code-server"
         proc = await asyncio.create_subprocess_exec(
-            "code-server",
+            cs_bin,
             "--auth", "none",
             "--bind-addr", f"127.0.0.1:{port}",
             "--disable-telemetry", "--disable-update-check",
@@ -305,6 +308,44 @@ class CodeServerManager:
         raise RuntimeError(
             f"code-server on port {port} failed to start within {timeout}s"
         )
+
+    def _find_code_server_bin(self) -> str | None:
+        """Find code-server binary, checking PATH and standalone install."""
+        import shutil
+
+        path = shutil.which("code-server")
+        if path:
+            return path
+        # Standalone install goes to ~/.local/bin/code-server
+        standalone = Path.home() / ".local" / "bin" / "code-server"
+        if standalone.exists() and os.access(standalone, os.X_OK):
+            return str(standalone)
+        return None
+
+    async def ensure_installed(self) -> None:
+        """Install code-server if not already present."""
+        if self._install_checked:
+            return
+        async with self._install_lock:
+            if self._find_code_server_bin():
+                self._install_checked = True
+                return
+
+            logger.info("code-server not found, installing (standalone)...")
+            install = await asyncio.create_subprocess_shell(
+                "curl -fsSL https://code-server.dev/install.sh | sh -s -- --method standalone",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(install.communicate(), timeout=300)
+            if install.returncode != 0:
+                output = stdout.decode("utf-8", errors="replace") if stdout else ""
+                raise RuntimeError(
+                    f"code-server installation failed (exit {install.returncode}): "
+                    f"{output[-500:]}"
+                )
+            logger.info("code-server installed successfully")
+            self._install_checked = True
 
     async def stop_all(self) -> None:
         """Stop all running code-server instances."""
@@ -1124,15 +1165,10 @@ class ShareServer:
         if workspace is None:
             return _deny_response(ws_status)
 
-        # Get or start code-server
+        # Get or start code-server (auto-install if missing)
         try:
+            await self._code_manager.ensure_installed()
             port = await self._code_manager.get_or_start(workspace)
-        except FileNotFoundError:
-            return web.Response(
-                text="code-server is not installed. "
-                "Install it with: curl -fsSL https://code-server.dev/install.sh | sh",
-                status=503,
-            )
         except RuntimeError as e:
             return web.Response(text=str(e), status=503)
 

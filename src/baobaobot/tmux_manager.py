@@ -462,6 +462,22 @@ class TmuxManager:
         await asyncio.to_thread(_force_kill)
         await asyncio.sleep(0.5)
 
+        # Reset terminal state (TUI apps like Gemini's React Ink may leave
+        # the terminal in alternate screen mode after being killed)
+        def _reset_terminal() -> None:
+            session = self.get_session()
+            if not session:
+                return
+            try:
+                window = session.windows.get(window_id=window_id)
+                if window and window.active_pane:
+                    window.active_pane.send_keys("reset", enter=True)
+            except Exception:
+                pass
+
+        await asyncio.to_thread(_reset_terminal)
+        await asyncio.sleep(1.0)
+
         # Restart the CLI using the effective backend's launch command
         launch_cmd = (
             effective_backend.get_launch_command()
