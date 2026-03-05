@@ -412,7 +412,7 @@ class SystemScheduler:
         )
         try:
             stdout_bytes, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=_SUBPROCESS_TIMEOUT_S
+                proc.communicate(), timeout=self._cfg.subprocess_timeout
             )
         except asyncio.TimeoutError:
             proc.kill()
@@ -452,34 +452,6 @@ class SystemScheduler:
                 workspace_name,
                 exc_info=True,
             )
-
-    async def _run_claude_p(self, prompt: str, cwd: Path) -> str:
-        """Run `claude -p` as subprocess, return stdout."""
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-
-        proc = await asyncio.create_subprocess_exec(
-            "claude",
-            "-p", prompt,
-            "--dangerously-skip-permissions",
-            "--output-format", "text",
-            "--no-session-persistence",
-            cwd=str(cwd),
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout_bytes, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=self._cfg.subprocess_timeout
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            raise
-
-        return stdout_bytes.decode("utf-8", errors="replace")
-
-    # --- Post-summary actions ---
 
     # --- Delivery ---
 
