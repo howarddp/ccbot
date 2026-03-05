@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -79,6 +80,21 @@ def main() -> None:
     ensure_todos_table(workspace).close()  # ensure todos table exists in same DB
 
     today = date.today()
+
+    # --- Continuation context (from previous session's auto-summary) ---
+    cont_path = workspace / "memory" / "continuations.md"
+    if cont_path.exists():
+        age_hours = (time.time() - cont_path.stat().st_mtime) / 3600
+        if age_hours < 12:
+            content = cont_path.read_text(encoding="utf-8").strip()
+            if content:
+                print("## Continuation (previous conversation)")
+                print(content)
+                print()
+            cont_path.unlink()
+        else:
+            # Too old — discard silently
+            cont_path.unlink()
 
     # --- Open TODOs ---
     todos = list_todos(conn, status="open")
