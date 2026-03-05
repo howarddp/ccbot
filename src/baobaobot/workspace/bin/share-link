@@ -106,6 +106,9 @@ def main() -> None:
         "--terminal", action="store_true", help="Generate a web terminal link (10m TTL)"
     )
     parser.add_argument(
+        "--code", action="store_true", help="Generate a VS Code Web link (1h TTL)"
+    )
+    parser.add_argument(
         "--ttl", default="", help="Time-to-live (default: 30m, 10m for terminal). Examples: 30m, 2h, 1d"
     )
     parser.add_argument(
@@ -113,8 +116,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.upload and not args.terminal and not args.path:
-        parser.error("Provide a path to share, or use --upload/--terminal")
+    if not args.upload and not args.terminal and not args.code and not args.path:
+        parser.error("Provide a path to share, or use --upload/--terminal/--code")
 
     secret = os.environ.get("SHARE_SECRET", "")
     if not secret:
@@ -126,7 +129,7 @@ def main() -> None:
         print("Error: SHARE_PUBLIC_URL not set (tunnel not running?)", file=sys.stderr)
         sys.exit(1)
 
-    # Default TTL: 10m for terminal, 30m for others
+    # Default TTL: 10m for terminal, 1h for code, 30m for others
     default_ttl = "10m" if args.terminal else "30m"
     ttl = _parse_ttl(args.ttl or default_ttl)
 
@@ -138,7 +141,19 @@ def main() -> None:
 
     name = args.name or _get_tmux_window_name()
 
-    if args.terminal:
+    if args.code:
+        # VS Code Web link
+        if args.path:
+            code_dir = Path(args.path).resolve()
+        else:
+            code_dir = Path.cwd().resolve()
+        if not code_dir.is_dir():
+            print(f"Error: {code_dir} is not a directory", file=sys.stderr)
+            sys.exit(1)
+        token = _generate_token(f"code:{code_dir}", ttl, secret, name=str(code_dir))
+        url = f"{public_url}/code/{token}/"
+        print(url)
+    elif args.terminal:
         # Web terminal link
         token = _generate_token(f"term:{ws_root}", ttl, secret, name)
         url = f"{public_url}/term/{token}/"

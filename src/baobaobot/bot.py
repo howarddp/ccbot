@@ -137,6 +137,7 @@ from .screenshot import cleanup_file_after, make_screenshot_url, text_to_image
 from .session_monitor import (
     NewMessage,
     SessionMonitor,
+    _CODE_LINK_RE,
     _SEND_FILE_RE,
     _SHARE_LINK_RE,
     _UPLOAD_LINK_RE,
@@ -2982,6 +2983,7 @@ async def _deliver_message(
             file_paths=[],
             share_links=msg.share_links,
             upload_links=msg.upload_links,
+            code_links=msg.code_links,
         )
         if not msg.text:
             return
@@ -3055,6 +3057,40 @@ async def _deliver_message(
             file_paths=msg.file_paths,
             share_links=[],
             upload_links=[],
+            code_links=msg.code_links,
+        )
+        if not msg.text:
+            return
+
+    # Replace [CODE_LINK:path] markers with VS Code Web URLs
+    if msg.code_links:
+        public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+        text = msg.text
+        if public_url:
+            from .share_server import generate_token
+
+            for path_str in msg.code_links:
+                p = Path(path_str).resolve()
+                if p.is_dir():
+                    token = generate_token(f"code:{p}", ttl=1800, name=str(p))
+                    url = f"{public_url}/code/{token}/"
+                else:
+                    url = f"(not a directory: {path_str})"
+                text = text.replace(f"[CODE_LINK:{path_str}]", url, 1)
+        else:
+            text = _CODE_LINK_RE.sub("(share server unavailable)", text)
+        msg = NewMessage(
+            session_id=msg.session_id,
+            text=text,
+            is_complete=msg.is_complete,
+            content_type=msg.content_type,
+            tool_use_id=msg.tool_use_id,
+            role=msg.role,
+            tool_name=msg.tool_name,
+            file_paths=msg.file_paths,
+            share_links=msg.share_links,
+            upload_links=msg.upload_links,
+            code_links=[],
         )
         if not msg.text:
             return

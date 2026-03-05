@@ -158,7 +158,7 @@ def _build_config_keyboard() -> InlineKeyboardMarkup:
 
 
 def _build_sharelink_keyboard(wid: str) -> InlineKeyboardMarkup:
-    """Build ShareLink secondary menu: Browse / Upload / Terminal."""
+    """Build ShareLink secondary menu: Browse / Upload / Terminal / Code / Tmux."""
     return InlineKeyboardMarkup(
         [
             [
@@ -175,6 +175,16 @@ def _build_sharelink_keyboard(wid: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "💻 Terminal",
                     callback_data=f"{CB_MENU_SYSTEM}slterm:{wid}"[:64],
+                ),
+                InlineKeyboardButton(
+                    "🖥 Code",
+                    callback_data=f"{CB_MENU_SYSTEM}slcode:{wid}"[:64],
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📺 Tmux",
+                    callback_data=f"{CB_MENU_SYSTEM}sltmux:{wid}"[:64],
                 ),
             ],
         ]
@@ -345,6 +355,10 @@ async def _dispatch_system(
         await _handle_sl_upload(query, ctx, wid)
     elif action == "slterm":
         await _handle_sl_terminal(query, ctx, wid)
+    elif action == "slcode":
+        await _handle_sl_code(query, ctx, wid)
+    elif action == "sltmux":
+        await _handle_sl_tmux(query, ctx, wid)
     elif action == "summary":
         await _handle_summary(query, ctx, wid)
     elif action == "heartbeat":
@@ -909,6 +923,63 @@ async def _handle_sl_terminal(
     url = f"{public_url}/term/{token}/"
 
     await safe_reply(query.message, f"💻 [Terminal {display_name}]({url})")
+
+
+async def _handle_sl_code(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Generate a VS Code Web (code-server) URL for the workspace."""
+    await query.answer()
+    if not query.message:
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        await safe_reply(query.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(query.message, "❌ Share server unavailable.")
+        return
+
+    from ..share_server import generate_token
+
+    dir_path = str(ws_dir.resolve())
+    display_name = ws_dir.name
+    token = generate_token(f"code:{dir_path}", ttl=1800, name=dir_path)
+    url = f"{public_url}/code/{token}/"
+
+    await safe_reply(query.message, f"🖥 [VS Code {display_name}]({url})")
+
+
+async def _handle_sl_tmux(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Generate a tmux attach URL for the workspace window."""
+    await query.answer()
+    if not query.message:
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(query.message, "❌ Share server unavailable.")
+        return
+
+    from ..share_server import generate_token
+
+    tmux_session = ctx.config.tmux_session_name or ctx.config.name
+    display_name = ctx.session_manager.get_display_name(wid) or wid
+    # Token name is "{session}:{window_id}", payload is "tmux:{session}:{window_id}"
+    name_val = f"{tmux_session}:{wid}"
+    token = generate_token(f"tmux:{name_val}", ttl=600, name=name_val)
+    url = f"{public_url}/tmux/{token}/"
+
+    await safe_reply(query.message, f"📺 [Tmux {display_name}]({url})")
 
 
 async def _handle_agentsoul(
