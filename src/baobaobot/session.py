@@ -820,6 +820,34 @@ class SessionManager:
         if session:
             return session
 
+        # Gemini fallback: session_id from hook may differ from file's sessionId.
+        # Use find_latest_session_file to locate the actual file by cwd.
+        backend = self._resolve_window_backend(window_id)
+        if backend is not None and getattr(backend, "is_full_json", False):
+            find_latest = getattr(backend, "find_latest_session_file", None)
+            if find_latest is not None:
+                result = find_latest(state.cwd)
+                if result is not None:
+                    _file_sid, file_path = result
+                    # Log only once per window to avoid spam
+                    fallback_key = f"_gemini_fallback_{window_id}"
+                    if not getattr(self, fallback_key, False):
+                        logger.info(
+                            "Gemini fallback for window %s: hook sid=%s, "
+                            "file sid=%s, path=%s",
+                            window_id,
+                            state.session_id[:8],
+                            _file_sid[:8],
+                            file_path.name,
+                        )
+                        setattr(self, fallback_key, True)
+                    return ClaudeSession(
+                        session_id=state.session_id,
+                        summary="",
+                        message_count=0,
+                        file_path=str(file_path),
+                    )
+
         # File no longer exists, clear state
         logger.warning(
             "Session file no longer exists for window_id %s (sid=%s, cwd=%s)",

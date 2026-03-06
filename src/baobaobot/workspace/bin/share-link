@@ -7,6 +7,8 @@ Usage:
     share-link /path/to/dir/                   # share directory
     share-link --upload                        # upload link (30m TTL)
     share-link --upload --ttl 1h               # upload link with TTL
+    share-link --port 3000                     # proxy to local port (30m TTL)
+    share-link --port 3000 --ttl 2h            # proxy with custom TTL
 
 Reads SHARE_SECRET and SHARE_PUBLIC_URL from environment.
 """
@@ -109,6 +111,9 @@ def main() -> None:
         "--code", action="store_true", help="Generate a VS Code Web link (1h TTL)"
     )
     parser.add_argument(
+        "--port", type=int, default=0, help="Generate a reverse proxy link to a local port"
+    )
+    parser.add_argument(
         "--ttl", default="", help="Time-to-live (default: 30m, 10m for terminal). Examples: 30m, 2h, 1d"
     )
     parser.add_argument(
@@ -116,8 +121,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.upload and not args.terminal and not args.code and not args.path:
-        parser.error("Provide a path to share, or use --upload/--terminal/--code")
+    if not args.upload and not args.terminal and not args.code and not args.port and not args.path:
+        parser.error("Provide a path to share, or use --upload/--terminal/--code/--port")
 
     secret = os.environ.get("SHARE_SECRET", "")
     if not secret:
@@ -141,7 +146,12 @@ def main() -> None:
 
     name = args.name or _get_tmux_window_name()
 
-    if args.code:
+    if args.port:
+        # Port proxy link — embed port in token name for server extraction
+        token = _generate_token(f"port:{args.port}", ttl, secret, name=f"port:{args.port}")
+        url = f"{public_url}/port/{token}/"
+        print(url)
+    elif args.code:
         # VS Code Web link
         if args.path:
             code_dir = Path(args.path).resolve()

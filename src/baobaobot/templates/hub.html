@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Hub — {{NAME}}</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #1a1a2e; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; }
+
+/* iframe container */
+#frame-container { position: fixed; inset: 0; }
+#frame-container iframe {
+  width: 100%; height: 100%; border: none;
+  background: #1e1e1e;
+}
+
+/* loading overlay */
+#loading {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: #1a1a2e; color: #888; font-size: 14px;
+}
+#loading.hidden { display: none; }
+
+/* FAB */
+#fab {
+  position: fixed; bottom: 24px; right: 24px; z-index: 100;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: #6c5ce7; color: #fff; border: none;
+  font-size: 22px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(108, 92, 231, 0.4);
+  transition: transform 0.2s, background 0.2s;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+#fab:hover { background: #5a4bd1; }
+#fab.open { transform: rotate(45deg); background: #e74c3c; }
+
+/* backdrop */
+#backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0,0,0,0.4); opacity: 0;
+  pointer-events: none; transition: opacity 0.2s;
+}
+#backdrop.open { opacity: 1; pointer-events: auto; }
+
+/* menu */
+#menu {
+  position: fixed; bottom: 88px; right: 24px; z-index: 100;
+  background: #2d2d44; border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  padding: 8px 0; min-width: 200px;
+  transform: scale(0.9) translateY(10px); opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s, opacity 0.2s;
+  transform-origin: bottom right;
+}
+#menu.open { transform: scale(1) translateY(0); opacity: 1; pointer-events: auto; }
+
+.menu-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; color: #ddd; font-size: 14px;
+  cursor: pointer; transition: background 0.15s;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.menu-item:hover { background: #3d3d5c; }
+.menu-item.active { background: #4a4a6a; color: #fff; }
+.menu-item.disabled { opacity: 0.35; pointer-events: none; }
+.menu-item .icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+.menu-item .label { flex: 1; }
+
+.menu-divider { height: 1px; background: #444; margin: 6px 0; }
+
+/* active indicator */
+.menu-item .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #6c5ce7; flex-shrink: 0;
+  visibility: hidden;
+}
+.menu-item.active .dot { visibility: visible; }
+
+/* new-tab button */
+.menu-item .newtab {
+  font-size: 12px; color: #888; padding: 2px 6px;
+  border-radius: 4px; transition: color 0.15s;
+}
+.menu-item:hover .newtab { color: #bbb; }
+</style>
+</head>
+<body>
+
+<div id="loading">Loading...</div>
+<div id="frame-container"></div>
+
+<div id="backdrop"></div>
+<div id="menu"></div>
+<button id="fab">⚡</button>
+
+<script>
+const TOOLS = [
+  { key: 'browse', icon: '🌐', label: 'Browse Files' },
+  { key: 'upload', icon: '📤', label: 'Upload' },
+  { key: 'term',   icon: '💻', label: 'Terminal' },
+  { key: 'tmux',   icon: '📟', label: 'Tmux' },
+  { key: 'log',    icon: '📋', label: 'Bot Log' },
+  { key: 'code',   icon: '📎', label: 'VS Code' },
+];
+
+let urls = {};
+let current = '';
+const fab = document.getElementById('fab');
+const menu = document.getElementById('menu');
+const backdrop = document.getElementById('backdrop');
+const container = document.getElementById('frame-container');
+const loading = document.getElementById('loading');
+
+// Fetch sub-URLs
+async function init() {
+  try {
+    const resp = await fetch(location.pathname.replace(/\/$/, '') + '/urls');
+    if (!resp.ok) throw new Error(resp.status);
+    urls = await resp.json();
+    buildMenu();
+    // Default to browse
+    switchTo('browse');
+  } catch (e) {
+    loading.textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+function buildMenu() {
+  let html = '';
+  for (const t of TOOLS) {
+    const avail = !!urls[t.key];
+    const cls = avail ? '' : ' disabled';
+    html += `<div class="menu-item${cls}" data-key="${t.key}">
+      <span class="dot"></span>
+      <span class="icon">${t.icon}</span>
+      <span class="label">${t.label}</span>
+    </div>`;
+  }
+  html += '<div class="menu-divider"></div>';
+  html += `<div class="menu-item" id="newtab-btn">
+    <span class="dot" style="visibility:hidden"></span>
+    <span class="icon">↗️</span>
+    <span class="label">Open in New Tab</span>
+  </div>`;
+  menu.innerHTML = html;
+
+  // Bind clicks
+  menu.querySelectorAll('.menu-item[data-key]').forEach(el => {
+    el.addEventListener('click', () => {
+      const key = el.dataset.key;
+      if (urls[key]) { switchTo(key); closeMenu(); }
+    });
+  });
+  document.getElementById('newtab-btn').addEventListener('click', () => {
+    if (current && urls[current]) {
+      window.open(urls[current], '_blank');
+      closeMenu();
+    }
+  });
+}
+
+function switchTo(key) {
+  if (!urls[key]) return;
+  current = key;
+  loading.classList.remove('hidden');
+
+  // Replace iframe to avoid back-button pollution
+  container.innerHTML = '';
+  const iframe = document.createElement('iframe');
+  iframe.src = urls[key];
+  iframe.addEventListener('load', () => loading.classList.add('hidden'));
+  container.appendChild(iframe);
+
+  // Update active state in menu
+  menu.querySelectorAll('.menu-item[data-key]').forEach(el => {
+    el.classList.toggle('active', el.dataset.key === key);
+  });
+
+  // Update page title
+  const tool = TOOLS.find(t => t.key === key);
+  document.title = tool ? `${tool.label} — {{NAME}}` : 'Hub';
+}
+
+function toggleMenu() {
+  const open = !menu.classList.contains('open');
+  menu.classList.toggle('open', open);
+  backdrop.classList.toggle('open', open);
+  fab.classList.toggle('open', open);
+}
+function closeMenu() {
+  menu.classList.remove('open');
+  backdrop.classList.remove('open');
+  fab.classList.remove('open');
+}
+
+fab.addEventListener('click', toggleMenu);
+backdrop.addEventListener('click', closeMenu);
+
+// Keyboard: Escape closes menu
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeMenu();
+});
+
+init();
+</script>
+</body>
+</html>

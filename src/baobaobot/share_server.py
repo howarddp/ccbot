@@ -14,6 +14,8 @@ Routes:
   GET  /tmux/{token}/ws      — tmux attach WebSocket (grouped session)
   GET  /code/{token}/        — VS Code Web (code-server reverse proxy)
   *    /code/{token}/{path}  — code-server HTTP/WebSocket proxy
+  GET  /port/{token}/        — reverse proxy to local port (landing)
+  *    /port/{token}/{path}  — local port HTTP/WebSocket proxy
 """
 
 from __future__ import annotations
@@ -216,6 +218,7 @@ _EXPIRED_HTML = (_TEMPLATES_DIR / "expired.html").read_text(encoding="utf-8")
 _INVALID_HTML = (_TEMPLATES_DIR / "invalid.html").read_text(encoding="utf-8")
 _DIRECTORY_HTML = (_TEMPLATES_DIR / "directory.html").read_text(encoding="utf-8")
 _TERMINAL_HTML = (_TEMPLATES_DIR / "terminal.html").read_text(encoding="utf-8")
+_HUB_HTML = (_TEMPLATES_DIR / "hub.html").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +420,11 @@ class ShareServer:
         self._app.router.add_get("/tmux/{token}", self._handle_tmux_page)
         self._app.router.add_get("/code/{token}", self._handle_code_redirect)
         self._app.router.add_route("*", "/code/{token}/{path:.*}", self._handle_code_proxy)
+        self._app.router.add_get("/port/{token}", self._handle_port_redirect)
+        self._app.router.add_route("*", "/port/{token}/{path:.*}", self._handle_port_proxy)
+        self._app.router.add_get("/hub/{token}/urls", self._handle_hub_urls)
+        self._app.router.add_get("/hub/{token}/", self._handle_hub_page)
+        self._app.router.add_get("/hub/{token}", self._handle_hub_redirect)
 
     def _find_file(self, rel_path: str, workspace: Path | None = None) -> Path | None:
         """Find a file in a specific workspace or across all roots."""
@@ -1369,6 +1377,303 @@ class ShareServer:
             logger.error("code-server WebSocket proxy error: %s", e)
 
         return ws_client
+
+    # -- Port proxy (reverse proxy to local port) --
+
+    async def _handle_port_redirect(self, request: web.Request) -> web.Response:
+        """Redirect /port/{token} to /port/{token}/."""
+        raise web.HTTPFound(f"/port/{request.match_info['token']}/")
+
+    async def _handle_port_proxy(self, request: web.Request) -> web.StreamResponse:
+        """Reverse proxy to a local port."""
+        token = request.match_info["token"]
+        path = request.match_info.get("path", "")
+
+        # Extract port from token: token name contains "port:{N}"
+        name = extract_token_name(token)
+        if not name or not name.startswith("port:"):
+            return _deny_response("invalid")
+        try:
+            port = int(name.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return _deny_response("invalid")
+
+        if not (1024 <= port <= 65535):
+            return _deny_response("invalid")
+
+        # Verify HMAC
+        status = check_token(token, f"port:{port}")
+        if status != "ok":
+            return _deny_response(status)
+
+        # Build target URL
+        target_url = f"http://127.0.0.1:{port}/{path}"
+        if request.query_string:
+            target_url += f"?{request.query_string}"
+
+        # WebSocket upgrade
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return await self._proxy_port_ws(request, target_url)
+
+        return await self._proxy_port_http(request, target_url, token)
+
+    async def _proxy_port_http(
+        self, request: web.Request, target_url: str, token: str
+    ) -> web.StreamResponse:
+        """Forward HTTP request to local port and return response."""
+        if self._proxy_session is None or self._proxy_session.closed:
+            self._proxy_session = aiohttp.ClientSession()
+
+        headers: dict[str, str] = {}
+        for key, value in request.headers.items():
+            if key.lower() not in (
+                "host", "content-length", "transfer-encoding", "accept-encoding",
+            ):
+                headers[key] = value
+        headers["Accept-Encoding"] = "gzip, deflate"
+
+        body = await request.read() if request.can_read_body else None
+
+        try:
+            async with self._proxy_session.request(
+                request.method,
+                target_url,
+                headers=headers,
+                data=body,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as upstream:
+                resp_headers: dict[str, str] = {}
+                for key, value in upstream.headers.items():
+                    if key.lower() in (
+                        "transfer-encoding",
+                        "content-encoding",
+                        "content-length",
+                    ):
+                        continue
+                    resp_headers[key] = value
+
+                content_type = upstream.headers.get("Content-Type", "")
+                prefix = f"/port/{token}"
+
+                if "text/html" in content_type:
+                    raw = await upstream.read()
+                    text = raw.decode("utf-8", errors="replace")
+                    # Inject <base> tag for relative URL resolution
+                    if "<head>" in text:
+                        text = text.replace(
+                            "<head>", f'<head><base href="{prefix}/">', 1
+                        )
+                    elif "<HEAD>" in text:
+                        text = text.replace(
+                            "<HEAD>", f'<HEAD><base href="{prefix}/">', 1
+                        )
+                    else:
+                        text = f'<base href="{prefix}/">' + text
+                    html_headers = {
+                        k: v for k, v in resp_headers.items()
+                        if k.lower() != "content-type"
+                    }
+                    return web.Response(
+                        body=text.encode("utf-8"),
+                        status=upstream.status,
+                        headers=html_headers,
+                        content_type="text/html",
+                        charset="utf-8",
+                    )
+
+                # Stream non-HTML response
+                response = web.StreamResponse(
+                    status=upstream.status, headers=resp_headers
+                )
+                if content_type:
+                    response.content_type = content_type
+                await response.prepare(request)
+                async for chunk in upstream.content.iter_chunked(32768):
+                    await response.write(chunk)
+                await response.write_eof()
+                return response
+        except aiohttp.ClientError as e:
+            logger.error("port proxy error: %s", e)
+            return web.Response(text="Bad Gateway", status=502)
+
+    async def _proxy_port_ws(
+        self, request: web.Request, target_url: str
+    ) -> web.WebSocketResponse:
+        """Bridge WebSocket between browser and local port."""
+        ws_client = web.WebSocketResponse(
+            protocols=request.headers.getall("Sec-WebSocket-Protocol", []),
+        )
+        await ws_client.prepare(request)
+
+        ws_url = target_url.replace("http://", "ws://")
+
+        if self._proxy_session is None or self._proxy_session.closed:
+            self._proxy_session = aiohttp.ClientSession()
+
+        try:
+            async with self._proxy_session.ws_connect(
+                ws_url,
+                protocols=request.headers.getall("Sec-WebSocket-Protocol", []),
+            ) as ws_upstream:
+
+                async def client_to_server() -> None:
+                    async for msg in ws_client:
+                        if msg.type == WSMsgType.TEXT:
+                            await ws_upstream.send_str(msg.data)
+                        elif msg.type == WSMsgType.BINARY:
+                            await ws_upstream.send_bytes(msg.data)
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                            break
+
+                async def server_to_client() -> None:
+                    async for msg in ws_upstream:
+                        if msg.type == WSMsgType.TEXT:
+                            await ws_client.send_str(msg.data)
+                        elif msg.type == WSMsgType.BINARY:
+                            await ws_client.send_bytes(msg.data)
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                            break
+
+                await asyncio.gather(
+                    client_to_server(),
+                    server_to_client(),
+                    return_exceptions=True,
+                )
+        except (aiohttp.ClientError, OSError) as e:
+            logger.error("port proxy WebSocket error: %s", e)
+
+        return ws_client
+
+    # -- Hub (all-in-one dashboard) --
+
+    def _verify_hub_token(self, token: str) -> tuple[dict[str, str] | None, str]:
+        """Verify hub token and extract payload components.
+
+        Hub token payload: hub:{workspace_path}:{tmux_session}:{window_id}
+        Token name: {tmux_session}:{window_id}
+        Returns (payload_dict, status). payload_dict has keys:
+          workspace, tmux_session, window_id
+        """
+        name = extract_token_name(token)
+        if not name:
+            return None, "invalid"
+
+        # The name is "{tmux_session}:{window_id}" or "{tmux_session}:"
+        parts = name.split(":", 1)
+        tmux_session = parts[0] if parts else ""
+        window_id = parts[1] if len(parts) > 1 else ""
+
+        # Try each workspace root's agent dir for matching workspace_ dirs
+        worst = "invalid"
+        checked_dirs: set[str] = set()
+        for ws_root in self._workspace_roots:
+            agent_dir = ws_root.parent
+            if not agent_dir.is_dir():
+                continue
+            agent_key = str(agent_dir)
+            if agent_key in checked_dirs:
+                continue
+            checked_dirs.add(agent_key)
+            for ws_dir in agent_dir.iterdir():
+                if not ws_dir.is_dir() or not ws_dir.name.startswith("workspace_"):
+                    continue
+                ws_path = str(ws_dir.resolve())
+                payload = f"hub:{ws_path}:{name}"
+                status = check_token(token, payload)
+                if status == "ok":
+                    return {
+                        "workspace": ws_path,
+                        "tmux_session": tmux_session,
+                        "window_id": window_id,
+                    }, "ok"
+                if status == "expired":
+                    worst = "expired"
+
+        return None, worst
+
+    async def _handle_hub_redirect(self, request: web.Request) -> web.Response:
+        """Redirect /hub/{token} to /hub/{token}/."""
+        token = request.match_info["token"]
+        raise web.HTTPFound(f"/hub/{token}/")
+
+    async def _handle_hub_page(self, request: web.Request) -> web.Response:
+        """Serve the hub dashboard page."""
+        token = request.match_info["token"]
+        payload, status = self._verify_hub_token(token)
+        if payload is None:
+            return _deny_response(status)
+
+        ws_path = payload["workspace"]
+        display = Path(ws_path).name.removeprefix("workspace_")
+        html = _HUB_HTML.replace("{{NAME}}", display)
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_hub_urls(self, request: web.Request) -> web.Response:
+        """Return JSON with sub-URLs for each tool."""
+        token = request.match_info["token"]
+        payload, status = self._verify_hub_token(token)
+        if payload is None:
+            return web.json_response({"error": status}, status=403)
+
+        ws_path = payload["workspace"]
+        tmux_session = payload["tmux_session"]
+        window_id = payload["window_id"]
+
+        # Compute remaining TTL from the hub token
+        try:
+            parts = token.split("-", 2)
+            expires = int(parts[1])
+            remaining = max(60, expires - int(time.time()))
+        except (ValueError, IndexError):
+            remaining = 600
+
+        display = Path(ws_path).name.removeprefix("workspace_")
+        urls: dict[str, str] = {}
+
+        # Browse
+        browse_token = generate_token(f"p:{ws_path}:", ttl=remaining, name=display)
+        urls["browse"] = f"/p/{browse_token}/"
+
+        # Upload
+        upload_token = generate_token(
+            f"upload:{ws_path}", ttl=remaining, name=display
+        )
+        urls["upload"] = f"/u/{upload_token}"
+
+        # Terminal
+        term_token = generate_token(
+            f"term:{ws_path}", ttl=remaining, name=display
+        )
+        urls["term"] = f"/term/{term_token}/"
+
+        # Tmux (topic window)
+        if tmux_session and window_id:
+            tmux_payload = f"tmux:{tmux_session}:{window_id}"
+            tmux_name = f"{tmux_session}:{window_id}"
+            tmux_token = generate_token(
+                tmux_payload, ttl=remaining, name=tmux_name
+            )
+            urls["tmux"] = f"/tmux/{tmux_token}/"
+
+        # Log (main window)
+        if tmux_session:
+            log_payload = f"log:{tmux_session}"
+            log_token = generate_token(
+                log_payload, ttl=remaining, name=tmux_session
+            )
+            urls["log"] = f"/tmux/{log_token}/"
+
+        # Code (VS Code Web)
+        ws_resolved = Path(ws_path).resolve()
+        projects_dir = ws_resolved / "projects"
+        code_dir = str(projects_dir if projects_dir.is_dir() else ws_resolved)
+        code_token = generate_token(
+            f"code:{code_dir}", ttl=remaining, name=code_dir
+        )
+        urls["code"] = f"/code/{code_token}/"
+
+        return web.json_response(urls)
 
     # -- Server lifecycle --
 
