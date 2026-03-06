@@ -66,10 +66,13 @@ CB_VERBOSITY = "vb:"  # vb:<level>
 
 # File browser (/ls)
 CB_LS_DIR = "ls:d:"  # ls:d:<index>  — enter directory
-CB_LS_FILE = "ls:f:"  # ls:f:<index>  — view/download file
+CB_LS_FILE = "ls:f:"  # ls:f:<index>  — show file action menu
 CB_LS_UP = "ls:up"  # go up one level
 CB_LS_PAGE = "ls:p:"  # ls:p:<page>   — pagination
 CB_LS_CLOSE = "ls:close"  # close browser
+CB_LS_VIEW = "ls:v:"  # ls:v:<index>  — view file content inline
+CB_LS_DL = "ls:dl:"  # ls:dl:<index>  — download file
+CB_LS_BACK = "ls:back"  # back to file list from action menu
 
 # Menu commands (/agent, /system, /config)
 CB_MENU_AGENT = "mn:a:"  # mn:a:<action>:<window_id>

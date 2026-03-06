@@ -14,11 +14,14 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .callback_data import (
+    CB_LS_BACK,
     CB_LS_CLOSE,
     CB_LS_DIR,
+    CB_LS_DL,
     CB_LS_FILE,
     CB_LS_PAGE,
     CB_LS_UP,
+    CB_LS_VIEW,
 )
 
 ITEMS_PER_PAGE = 8
@@ -133,41 +136,36 @@ def build_file_browser(
         display_path = str(path)
 
     # Header text
-    header = f"📂 {display_path}/" if display_path else "📂 /"
-    text_lines = [header, ""]
-    for name, is_dir, size in page_entries:
-        if is_dir:
-            text_lines.append(f"📁 {name}/")
-        else:
-            text_lines.append(f"📄 {name} ({_format_size(size)})")
-
+    header = f"📂 `{display_path}/`" if display_path else "📂 `/`"
     if not entries:
-        text_lines.append("_(empty)_")
+        text = f"{header}\n\n_(empty)_"
+    else:
+        text = header
 
-    text = "\n".join(text_lines)
-
-    # Build keyboard buttons — 2 per row
+    # Build keyboard buttons — 1 per row (list mode)
     buttons: list[list[InlineKeyboardButton]] = []
-    for i in range(0, len(page_entries), 2):
-        row: list[InlineKeyboardButton] = []
-        for j in range(min(2, len(page_entries) - i)):
-            name, is_dir, size = page_entries[i + j]
-            idx = start + i + j
-            if is_dir:
-                label = name[:14] + "…" if len(name) > 15 else name
-                row.append(
+    for i, (name, is_dir, size) in enumerate(page_entries):
+        idx = start + i
+        if is_dir:
+            label = name[:20] + "…" if len(name) > 21 else name
+            buttons.append(
+                [
                     InlineKeyboardButton(
                         f"📁 {label}/", callback_data=f"{CB_LS_DIR}{idx}"
                     )
-                )
-            else:
-                label = _truncate_filename(name)
-                row.append(
+                ]
+            )
+        else:
+            label = _truncate_filename(name, max_len=20)
+            size_str = _format_size(size)
+            buttons.append(
+                [
                     InlineKeyboardButton(
-                        f"📄 {label}", callback_data=f"{CB_LS_FILE}{idx}"
+                        f"📄 {label}  ({size_str})",
+                        callback_data=f"{CB_LS_FILE}{idx}",
                     )
-                )
-        buttons.append(row)
+                ]
+            )
 
     # Pagination nav row
     if total_pages > 1:
@@ -196,3 +194,46 @@ def build_file_browser(
     buttons.append(action_row)
 
     return text, InlineKeyboardMarkup(buttons), entries
+
+
+def build_file_action_menu(
+    file_path: str, file_name: str, file_size: int, idx: int
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build file action menu shown when tapping a file.
+
+    Args:
+        file_path: Absolute path to the file.
+        file_name: Display name of the file.
+        file_size: File size in bytes.
+        idx: Index in the cached entries list.
+
+    Returns:
+        (text, keyboard) for the action menu.
+    """
+    import datetime
+
+    try:
+        mtime = Path(file_path).stat().st_mtime
+        modified = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        modified = "unknown"
+
+    text = (
+        f"📄 `{file_name}`\n\n"
+        f"Size: {_format_size(file_size)}\n"
+        f"Modified: {modified}"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("📖 檢視", callback_data=f"{CB_LS_VIEW}{idx}"),
+                InlineKeyboardButton("📤 下載", callback_data=f"{CB_LS_DL}{idx}"),
+            ],
+            [
+                InlineKeyboardButton("🔙 返回", callback_data=CB_LS_BACK),
+            ],
+        ]
+    )
+
+    return text, keyboard

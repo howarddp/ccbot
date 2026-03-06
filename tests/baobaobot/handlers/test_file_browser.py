@@ -120,12 +120,18 @@ class TestBuildFileBrowser:
         assert len(entries) == 0
         assert "_(empty)_" in text
 
-    def test_file_size_in_text(self, tmp_path):
-        """File entries in text include size."""
+    def test_file_size_in_buttons(self, tmp_path):
+        """File entries in buttons include size."""
         f = tmp_path / "data.bin"
         f.write_bytes(b"x" * 2048)
-        text, _kb, _entries = build_file_browser(str(tmp_path))
-        assert "2KB" in text
+        _text, kb, _entries = build_file_browser(str(tmp_path))
+        file_buttons = [
+            btn.text
+            for row in kb.inline_keyboard
+            for btn in row
+            if btn.text.startswith("📄")
+        ]
+        assert any("2KB" in b for b in file_buttons)
 
     def test_close_button_always_present(self, tmp_path):
         """Close button should always be in the last row."""

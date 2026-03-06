@@ -82,11 +82,14 @@ from .handlers.callback_data import (
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
+    CB_LS_BACK,
     CB_LS_CLOSE,
     CB_LS_DIR,
+    CB_LS_DL,
     CB_LS_FILE,
     CB_LS_PAGE,
     CB_LS_UP,
+    CB_LS_VIEW,
     CB_MENU_AGENT,
     CB_MENU_CONFIG,
     CB_MENU_SYSTEM,
@@ -102,6 +105,7 @@ from .handlers.file_browser import (
     LS_ENTRIES_KEY,
     LS_PATH_KEY,
     LS_ROOT_KEY,
+    build_file_action_menu,
     build_file_browser,
     clear_ls_state,
 )
@@ -575,6 +579,7 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     Subcommands:
       /url          — show available subcommands
+      /url all      — hub dashboard (all tools in one page)
       /url code     — VS Code Web
       /url term     — workspace shell terminal
       /url tmux     — attach to topic's tmux window
@@ -590,11 +595,11 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     args = context.args or []
     subcmd = (args[0].lower() if args else "").strip()
-    valid = ("code", "term", "tmux", "log", "upload", "browse")
+    valid = ("code", "term", "tmux", "log", "upload", "browse", "all")
 
     # Default TTL per subcommand (in seconds)
     _DEFAULT_TTL = {"code": 1800, "term": 600, "tmux": 600, "log": 600,
-                    "upload": 600, "browse": 600}
+                    "upload": 600, "browse": 600, "all": 600}
 
     # Parse optional TTL in minutes: /url code 90
     ttl_minutes: int | None = None
@@ -604,6 +609,7 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not subcmd:
         lines = [
+            "⚡ `/url all` — Hub Dashboard (10m)",
             "📎 `/url code` — VS Code Web (30m)",
             "💻 `/url term` — Shell Terminal (10m)",
             "📟 `/url tmux` — Tmux Window (10m)",
@@ -611,7 +617,7 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "📤 `/url upload` — Upload (10m)",
             "🌐 `/url browse` — Browse Files (10m)",
             "",
-            "💡 加分鐘數自訂時效: `/url log 90`",
+            "💡 加分鐘數自訂時效: `/url all 20`",
         ]
         await safe_reply(update.message, "\n".join(lines))
         return
@@ -619,7 +625,7 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if subcmd not in valid:
         await safe_reply(
             update.message,
-            f"❌ Unknown: `{subcmd}`\n💡 /url code | term | tmux | log | upload | browse",
+            f"❌ Unknown: `{subcmd}`\n💡 /url all | code | term | tmux | log | upload | browse",
         )
         return
 
@@ -632,6 +638,29 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     from .share_server import generate_token
+
+    if subcmd == "all":
+        # Hub needs both workspace and tmux info
+        workspace_root = _resolve_workspace_root(update, context)
+        if workspace_root is None:
+            await safe_reply(update.message, "❌ No workspace for this topic.")
+            return
+        ws_root = str(workspace_root.resolve())
+        display_name = workspace_root.name.removeprefix("workspace_")
+
+        # Resolve tmux session + window for the token payload
+        session_name = ctx.tmux_manager.session_name
+        wid = ""
+        rk = _resolve_rk(update, context)
+        if rk is not None:
+            wid = ctx.router.get_window(rk, ctx) or ""
+
+        tmux_info = f"{session_name}:{wid}" if wid else f"{session_name}:"
+        payload = f"hub:{ws_root}:{tmux_info}"
+        token = generate_token(payload, ttl=ttl, name=tmux_info)
+        url = f"{public_url}/hub/{token}/"
+        await safe_reply(update.message, f"⚡ [Hub {display_name}]({url})")
+        return
 
     if subcmd == "tmux":
         rk = _resolve_rk(update, context)
@@ -2239,9 +2268,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await safe_edit(query, text, reply_markup=keyboard)
         await query.answer()
 
-    # File browser: view/download file
+    # File browser: show file action menu
     elif data.startswith(CB_LS_FILE):
         idx = int(data[len(CB_LS_FILE) :])
+        ud = context.user_data or {}
+        entries = ud.get(LS_ENTRIES_KEY, [])
+        cur = ud.get(LS_PATH_KEY, "")
+        if idx < len(entries):
+            name, _is_dir, size = entries[idx]
+            fp = str(Path(cur) / name)
+            text, keyboard = build_file_action_menu(fp, name, size, idx)
+            await safe_edit(query, text, reply_markup=keyboard)
+            await query.answer()
+        else:
+            await query.answer("Invalid index", show_alert=True)
+
+    # File action: view content inline
+    elif data.startswith(CB_LS_VIEW):
+        idx = int(data[len(CB_LS_VIEW) :])
         ud = context.user_data or {}
         entries = ud.get(LS_ENTRIES_KEY, [])
         cur = ud.get(LS_PATH_KEY, "")
@@ -2254,21 +2298,50 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     try:
                         content = file_path.read_text(errors="replace")[:4000]
                         await safe_edit(query, f"📄 `{name}`\n\n```\n{content}\n```")
+                        await query.answer()
                     except Exception:
                         await safe_edit(query, f"❌ Cannot read `{name}`.")
+                        await query.answer()
                 else:
-                    try:
-                        await query.message.reply_document(
-                            document=open(file_path, "rb"),  # noqa: SIM115
-                            filename=name,
-                        )
-                        await query.answer(f"📤 {name}")
-                    except Exception:
-                        await safe_edit(query, f"❌ Cannot send `{name}`.")
+                    await query.answer("File too large, use download", show_alert=True)
             else:
                 await query.answer("File not found", show_alert=True)
         else:
             await query.answer("Invalid index", show_alert=True)
+
+    # File action: download file
+    elif data.startswith(CB_LS_DL):
+        idx = int(data[len(CB_LS_DL) :])
+        ud = context.user_data or {}
+        entries = ud.get(LS_ENTRIES_KEY, [])
+        cur = ud.get(LS_PATH_KEY, "")
+        if idx < len(entries):
+            name, _is_dir, _size = entries[idx]
+            file_path = Path(cur) / name
+            if file_path.is_file():
+                try:
+                    await query.message.reply_document(
+                        document=open(file_path, "rb"),  # noqa: SIM115
+                        filename=name,
+                    )
+                    await query.answer(f"📤 {name}")
+                except Exception:
+                    await query.answer(f"❌ Cannot send {name}", show_alert=True)
+            else:
+                await query.answer("File not found", show_alert=True)
+        else:
+            await query.answer("Invalid index", show_alert=True)
+
+    # File action: back to file list
+    elif data == CB_LS_BACK:
+        ud = context.user_data or {}
+        root = ud.get(LS_ROOT_KEY)
+        cur = ud.get(LS_PATH_KEY, root or "")
+        text, keyboard, new_entries = build_file_browser(cur, page=0, root_path=root)
+        if context.user_data is not None:
+            context.user_data[LS_ENTRIES_KEY] = new_entries
+        await safe_edit(query, text, reply_markup=keyboard)
+        await query.answer()
 
     # File browser: go up
     elif data == CB_LS_UP:

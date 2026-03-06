@@ -135,6 +135,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .delete-actions #deleteConfirm { background: #ff3b30; color: #fff; opacity: 0.4; }
 .delete-actions #deleteConfirm:not(:disabled) { opacity: 1; }
 
+/* More button (mobile context menu trigger) */
+.file-list .item .more-btn { background: none; border: none; color: var(--text2); font-size: 1.2em;
+                              padding: 4px 8px; cursor: pointer; flex-shrink: 0; border-radius: 6px;
+                              line-height: 1; }
+.file-list .item .more-btn:hover { background: var(--border); color: var(--text); }
+.file-list.grid .item .more-btn { position: absolute; top: 4px; right: 4px; font-size: 1em; }
+.file-list.grid .item { position: relative; }
+
 /* Hidden files dimmed */
 .file-list .item.hidden-file { opacity: 0.5; }
 
@@ -300,7 +308,7 @@ function fileUrl(item) {
 }
 
 // State
-let viewMode = localStorage.getItem('fm_view') || (window.innerWidth >= 768 ? 'grid' : 'list');
+let viewMode = localStorage.getItem('fm_view') || 'list';
 let showHidden = localStorage.getItem('fm_hidden') === '1';
 let sortKey = 'name';
 let sortAsc = true;
@@ -374,6 +382,7 @@ function render() {
           ${item.is_dir && item.count != null ? `<span>${item.count} items</span>` : ''}
         </div>
       </span>
+      <button class="more-btn" data-more="${idx}" title="More">⋯</button>
     </a>`;
   }).join('');
 
@@ -385,6 +394,29 @@ function render() {
       const item = items[idx];
       const pIdx = previewableItems.indexOf(item);
       if (pIdx >= 0) openPreview(pIdx);
+    });
+  });
+
+  // Attach click handlers for ⋯ more button
+  fl.querySelectorAll('[data-more]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.more);
+      ctxItem = items[idx];
+      if (!ctxItem) return;
+
+      const type = getFileType(ctxItem.name, ctxItem.is_dir);
+      const canPreview = !ctxItem.is_dir && PREVIEW_TYPES.has(type);
+      document.getElementById('ctxPreview').style.display = canPreview ? '' : 'none';
+      document.getElementById('ctxOpen').textContent = ctxItem.is_dir ? '📂 Open' : '📄 Open';
+
+      const rect = btn.getBoundingClientRect();
+      const x = Math.min(rect.left, window.innerWidth - 200);
+      const y = Math.min(rect.bottom + 4, window.innerHeight - 250);
+      ctxMenu.style.left = x + 'px';
+      ctxMenu.style.top = y + 'px';
+      ctxMenu.classList.add('open');
     });
   });
 }
