@@ -502,6 +502,22 @@ class SessionManager:
                         changed = True
             self.user_window_offsets[uid] = new_offsets
 
+        # --- Clean up stale window_display_names ---
+        # After migration, remove display names for window IDs that are
+        # no longer live and not in the new window_states.
+        valid_wids = live_ids | set(new_window_states)
+        stale_display = [
+            wid for wid in self.window_display_names if wid not in valid_wids
+        ]
+        for wid in stale_display:
+            logger.info(
+                "Removing stale window_display_name: %s (%s)",
+                wid,
+                self.window_display_names[wid],
+            )
+            del self.window_display_names[wid]
+            changed = True
+
         if changed:
             self._rebuild_reverse_index()
             self._save_state()
@@ -509,11 +525,16 @@ class SessionManager:
 
         self._needs_migration = False
 
-        # Clean up old-format keys from session_map.json
-        await self._cleanup_old_format_session_map_keys()
+        # Clean up stale keys from session_map.json
+        await self._cleanup_session_map_keys(live_ids)
 
-    async def _cleanup_old_format_session_map_keys(self) -> None:
-        """Remove old-format keys (window_name instead of @window_id) from session_map.json."""
+    async def _cleanup_session_map_keys(self, live_ids: set[str]) -> None:
+        """Remove stale keys from session_map.json.
+
+        Removes:
+        - Old-format keys (window_name instead of @window_id)
+        - Keys for window IDs that no longer exist in tmux
+        """
         if not self._session_map_file.exists():
             return
         try:
@@ -524,19 +545,26 @@ class SessionManager:
             return
 
         prefix = f"{self._tmux_session_name}:"
-        old_keys = [
-            key
-            for key in session_map
-            if key.startswith(prefix) and not self._is_window_id(key[len(prefix) :])
-        ]
-        if not old_keys:
+        stale_keys = []
+        for key in session_map:
+            if not key.startswith(prefix):
+                continue
+            wid = key[len(prefix) :]
+            if not self._is_window_id(wid):
+                # Old-format key (window_name instead of @id)
+                stale_keys.append(key)
+            elif wid not in live_ids:
+                # Dead window ID
+                stale_keys.append(key)
+
+        if not stale_keys:
             return
 
-        for key in old_keys:
+        for key in stale_keys:
             del session_map[key]
         atomic_write_json(self._session_map_file, session_map)
         logger.info(
-            "Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys
+            "Cleaned up %d stale session_map keys: %s", len(stale_keys), stale_keys
         )
 
     # --- Topic name management ---
@@ -665,6 +693,19 @@ class SessionManager:
         for wid in stale_wids:
             logger.info("Removing stale window_state: %s", wid)
             del self.window_states[wid]
+            changed = True
+
+        # Clean up window_display_names for windows no longer tracked.
+        stale_display_wids = [
+            w for w in self.window_display_names if w not in valid_wids
+        ]
+        for wid in stale_display_wids:
+            logger.info(
+                "Removing stale window_display_name: %s (%s)",
+                wid,
+                self.window_display_names[wid],
+            )
+            del self.window_display_names[wid]
             changed = True
 
         if changed:
