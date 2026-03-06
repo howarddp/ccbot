@@ -229,6 +229,14 @@ async def _message_queue_worker(
                         logger.warning(
                             f"Flood control for user {user_id}, {remaining}s remaining"
                         )
+                # Re-insert task at front of queue to retry after waiting
+                async with lock:
+                    remaining_items = _inspect_queue(queue)
+                    queue.put_nowait(task)
+                    queue.task_done()  # compensate for put_nowait counter
+                    for item in remaining_items:
+                        queue.put_nowait(item)
+                        queue.task_done()  # compensate
             except (TimedOut, NetworkError) as e:
                 if task.retry_count < _WORKER_MAX_RETRIES:
                     task.retry_count += 1

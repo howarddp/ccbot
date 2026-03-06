@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
 """Save text or files to BaoBao's memory.
 
-Supports three modes:
+Supports multiple modes:
   1. Text to daily memory:     memory-save "learned something"
   2. Text to experience:       memory-save -e topic "long-term info"
   3. File attachment to daily:  memory-save /path/to/file "description"
   4. File attachment to experience: memory-save -e topic /path/to/file "description"
+  5. Stdin to daily memory:    echo "content" | memory-save --stdin
+  6. Stdin to experience:      cat <<'MEMO' | memory-save --stdin -e topic
+                               long content here
+                               MEMO
 
 Auto-detection: if the first positional argument is an existing file path,
 attachment mode is used (requires a description). Otherwise, text mode is used.
+For long or multi-line text, use --stdin to read from stdin (avoids shell escaping).
 
 Usage:
     memory-save <text_or_file> [description] [--user NAME] [-e TOPIC]
-    memory-save --text "content" [--user NAME] [-e TOPIC]
+    memory-save --stdin [--user NAME] [-e TOPIC]
 
 Examples:
     memory-save "TODO: implement command extension" --user Alice
     memory-save "OpenClaw uses register(api) pattern" -e openclaw-research
     memory-save /path/to/screenshot.png "architecture diagram" --user Alice
     memory-save -e project-notes /path/to/diagram.png "system diagram"
+    cat <<'MEMO' | memory-save --stdin -e topic --user Alice
+    Long content with "quotes" and $variables
+    MEMO
 """
 
 from __future__ import annotations
@@ -122,7 +130,9 @@ def main() -> None:
     )
     parser.add_argument(
         "content",
-        help="Text to save, or path to a file (auto-detected)",
+        nargs="?",
+        default=None,
+        help="Text to save, or path to a file (auto-detected). Omit when using --stdin.",
     )
     parser.add_argument(
         "description",
@@ -139,12 +149,36 @@ def main() -> None:
         metavar="TOPIC",
         help="Save to memory/experience/<topic>.md instead of daily",
     )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read content from stdin (for long or multi-line text)",
+    )
     parser.add_argument("--workspace", type=str, default=None, help="Workspace path")
     args = parser.parse_args()
 
     workspace = Path(args.workspace) if args.workspace else resolve_workspace()
     if not workspace.exists():
         print(f"Workspace not found: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    # Stdin mode: --stdin flag or piped input with no content arg
+    if args.stdin or (args.content is None and not sys.stdin.isatty()):
+        text = sys.stdin.read().strip()
+        if not text:
+            print("Error: no content received from stdin", file=sys.stderr)
+            sys.exit(1)
+
+        if args.experience:
+            rel_path = save_text_experience(workspace, args.experience, text, args.user)
+            print(f"💾 Saved to experience: {rel_path}")
+        else:
+            rel_path = save_text_daily(workspace, text, args.user)
+            print(f"💾 Saved to daily: {rel_path}")
+        return
+
+    if args.content is None:
+        parser.print_help()
         sys.exit(1)
 
     source = Path(args.content)
