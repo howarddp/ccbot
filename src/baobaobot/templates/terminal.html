@@ -8,7 +8,6 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
-#terminal { height: calc(100% - 44px); }
 .toolbar {
   height: 44px;
   background: #2d2d2d;
@@ -42,14 +41,14 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
   z-index: 10;
 }
 .status-bar.disconnected { background: #c00; }
-#terminal { margin-top: 24px; height: calc(100% - 68px); }
+#terminal { margin-top: 68px; height: calc(100% - 68px); }
+.toolbar { margin-top: 24px; }
 </style>
 </head>
 <body>
 <div class="status-bar" id="statusBar">
   <span id="statusText">Connecting...</span>
 </div>
-<div id="terminal"></div>
 <div class="toolbar">
   <button onclick="sendKey('\x1b')">Esc</button>
   <button onclick="sendKey('\r')">Enter</button>
@@ -63,6 +62,7 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
   <button onclick="sendKey('\x03')">^C</button>
   <button onclick="sendKey('\x1a')">^Z</button>
 </div>
+<div id="terminal"></div>
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
@@ -169,7 +169,6 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(new TextEncoder().encode(key));
     }
-    term.focus();
   };
 
   connect();
