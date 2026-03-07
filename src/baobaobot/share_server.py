@@ -1817,7 +1817,7 @@ class ShareServer:
         except Exception:
             pass
 
-        # Projects (scan projects/ directory, up to 2 levels deep)
+        # Projects (scan projects/ directory, up to 2 levels deep, nested)
         projects_dir = ws_path / "projects"
         projects: list[dict[str, object]] = []
         if projects_dir.is_dir():
@@ -1825,17 +1825,19 @@ class ShareServer:
                 if not entry.is_dir() or entry.name.startswith("."):
                     continue
                 is_git = (entry / ".git").exists()
-                projects.append({"name": entry.name, "git": is_git})
+                item: dict[str, object] = {"name": entry.name, "git": is_git}
                 if not is_git:
-                    # Check one level deeper for sub-projects
+                    children: list[dict[str, object]] = []
                     for sub in sorted(entry.iterdir()):
                         if not sub.is_dir() or sub.name.startswith("."):
                             continue
-                        sub_git = (sub / ".git").exists()
-                        projects.append({
-                            "name": f"{entry.name}/{sub.name}",
-                            "git": sub_git,
+                        children.append({
+                            "name": sub.name,
+                            "git": (sub / ".git").exists(),
                         })
+                    if children:
+                        item["children"] = children
+                projects.append(item)
         if projects:
             stats["projects"] = projects
 
