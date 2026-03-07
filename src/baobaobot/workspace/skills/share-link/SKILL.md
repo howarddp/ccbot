@@ -16,6 +16,8 @@ Use these markers directly in your reply text. The bot auto-detects and replaces
 [SHARE_LINK:/absolute/path/to/directory/]
 [UPLOAD_LINK]
 [UPLOAD_LINK:2h]
+[TODO_LINK]
+[TODO_LINK:30m]
 ```
 
 - File link → inline preview for images/PDF/HTML, download for other types

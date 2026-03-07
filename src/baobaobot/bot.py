@@ -76,9 +76,6 @@ from .handlers.callback_data import (
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
-    CB_FILE_CANCEL,
-    CB_FILE_DESC,
-    CB_FILE_READ,
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
@@ -145,6 +142,7 @@ from .session_monitor import (
     _CODE_LINK_RE,
     _SEND_FILE_RE,
     _SHARE_LINK_RE,
+    _TODO_LINK_RE,
     _UPLOAD_LINK_RE,
 )
 from .terminal_parser import extract_bash_output
@@ -574,18 +572,18 @@ def _resolve_workspace_root(
     return workspace_dir
 
 
-async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def web_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Unified share link command.
 
     Subcommands:
-      /url          — show available subcommands
-      /url all      — hub dashboard (all tools in one page)
-      /url code     — VS Code Web
-      /url term     — workspace shell terminal
-      /url tmux     — attach to topic's tmux window
-      /url log      — attach to bot's main tmux window (live log)
-      /url upload   — file upload page
-      /url browse   — web file browser
+      /web          — open Web dashboard (default)
+      /web code     — VS Code Web
+      /web term     — workspace shell terminal
+      /web tmux     — attach to topic's tmux window
+      /web log      — attach to bot's main tmux window (live log)
+      /web upload   — file upload page
+      /web browse   — web file browser
+      /web todo     — TODO manager
     """
     user = update.effective_user
     if not user or not _is_user_allowed(context, user.id):
@@ -595,41 +593,35 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     args = context.args or []
     subcmd = (args[0].lower() if args else "").strip()
-    valid = ("code", "term", "tmux", "log", "upload", "browse", "all")
+    valid = ("code", "term", "tmux", "log", "upload", "browse", "todo")
 
     # Default TTL per subcommand (in seconds)
     _DEFAULT_TTL = {"code": 1800, "term": 600, "tmux": 600, "log": 600,
-                    "upload": 600, "browse": 600, "all": 600}
+                    "upload": 600, "browse": 600, "todo": 1200}
+    _WEB_DEFAULT_TTL = 600  # default for /web (no subcommand)
 
-    # Parse optional TTL in minutes: /url code 90
+    # Parse optional TTL in minutes: /web code 30
     ttl_minutes: int | None = None
-    ttl_arg = args[1] if len(args) > 1 else None
-    if ttl_arg and ttl_arg.isdigit():
-        ttl_minutes = int(ttl_arg)
+    # /web 30 → no subcmd, ttl=30
+    # /web code 30 → subcmd=code, ttl=30
+    if subcmd and subcmd.isdigit():
+        ttl_minutes = int(subcmd)
+        subcmd = ""
+    else:
+        ttl_arg = args[1] if len(args) > 1 else None
+        if ttl_arg and ttl_arg.isdigit():
+            ttl_minutes = int(ttl_arg)
 
-    if not subcmd:
-        lines = [
-            "⚡ `/url all` — Hub Dashboard (10m)",
-            "📎 `/url code` — VS Code Web (30m)",
-            "💻 `/url term` — Shell Terminal (10m)",
-            "📟 `/url tmux` — Tmux Window (10m)",
-            "📋 `/url log` — Bot Log (10m)",
-            "📤 `/url upload` — Upload (10m)",
-            "🌐 `/url browse` — Browse Files (10m)",
-            "",
-            "💡 加分鐘數自訂時效: `/url all 20`",
-        ]
-        await safe_reply(update.message, "\n".join(lines))
-        return
-
-    if subcmd not in valid:
+    if subcmd and subcmd not in valid:
         await safe_reply(
             update.message,
-            f"❌ Unknown: `{subcmd}`\n💡 /url all | code | term | tmux | log | upload | browse",
+            f"❌ Unknown: `{subcmd}`\n💡 /web \\[code | term | tmux | log | upload | browse | todo\\]",
         )
         return
 
-    ttl = ttl_minutes * 60 if ttl_minutes else _DEFAULT_TTL[subcmd]
+    ttl = ttl_minutes * 60 if ttl_minutes else (
+        _DEFAULT_TTL[subcmd] if subcmd else _WEB_DEFAULT_TTL
+    )
 
     public_url = os.environ.get("SHARE_PUBLIC_URL", "")
     ctx = _ctx(context)
@@ -639,8 +631,8 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     from .share_server import generate_token
 
-    if subcmd == "all":
-        # Hub needs both workspace and tmux info
+    if not subcmd:
+        # /web → open Web dashboard directly
         workspace_root = _resolve_workspace_root(update, context)
         if workspace_root is None:
             await safe_reply(update.message, "❌ No workspace for this topic.")
@@ -659,7 +651,7 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         payload = f"hub:{ws_root}:{tmux_info}"
         token = generate_token(payload, ttl=ttl, name=tmux_info)
         url = f"{public_url}/hub/{token}/"
-        await safe_reply(update.message, f"⚡ [Hub {display_name}]({url})")
+        await safe_reply(update.message, f"🌐 [Web — {display_name}]({url})")
         return
 
     if subcmd == "tmux":
@@ -729,6 +721,24 @@ async def url_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         token = generate_token(f"p:{ws_root}:", ttl=ttl, name=display_name)
         url = f"{public_url}/p/{token}/"
         await safe_reply(update.message, f"🌐 [Browse {display_name}]({url})")
+        return
+
+    if subcmd == "todo":
+        # Determine user's language for the TODO UI
+        lang = "en"
+        try:
+            from .persona.profile import read_user_profile
+
+            profile = read_user_profile(ctx.config.users_dir, user.id)
+            if profile and profile.language:
+                lang = profile.language
+        except Exception:
+            pass
+        token = generate_token(
+            f"todo:{ws_root}", ttl=ttl, name=f"lang:{lang}"
+        )
+        url = f"{public_url}/todo/{token}/"
+        await safe_reply(update.message, f"✅ [TODO]({url})")
         return
 
 
@@ -1293,43 +1303,10 @@ async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         return
 
-    # No caption — show inline keyboard asking user what to do
-    if not caption:
-        file_key = f"{user.id}_{rk.session_key}_{int(datetime.now(tz=timezone.utc).timestamp())}"
-        pending = context.bot_data.setdefault("_pending_files", {})
-        pending[file_key] = {
-            "path": str(dest),
-            "filename": filename,
-            "user_id": user.id,
-            "session_key": rk.session_key,
-            "thread_id": thread_id,
-            "window_id": wid,
-        }
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "📖 Read & Analyze", callback_data=f"{CB_FILE_READ}{file_key}"
-                    ),
-                    InlineKeyboardButton(
-                        "✏️ Describe It", callback_data=f"{CB_FILE_DESC}{file_key}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Cancel", callback_data=f"{CB_FILE_CANCEL}{file_key}"
-                    ),
-                ]
-            ]
-        )
-        await safe_reply(
-            update.message,
-            f"📎 File received: *{filename}*\nWhat would you like to do?",
-            reply_markup=keyboard,
-        )
-        return
-
-    # Has caption — forward to Claude Code with user prefix
+    # Forward file to Claude Code with user prefix
     lines = [f"[Received File] {dest}"]
-    lines.append(caption)
+    if caption:
+        lines.append(caption)
     raw_text = "\n".join(lines)
     text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
 
@@ -1524,61 +1501,26 @@ async def _process_media_group_after_delay(
             pass
         return
 
-    # --- no caption → show single inline keyboard for the group ---
-    group_key = (
-        f"{buf['user_id']}_{buf['session_key']}"
-        f"_{int(datetime.now(tz=timezone.utc).timestamp())}"
-    )
-    pending: dict = bot_data.setdefault("_pending_files", {})
-    pending[group_key] = {
-        "paths": [f["path"] for f in files],
-        "filenames": [f["filename"] for f in files],
-        "path": files[0]["path"],
-        "filename": files[0]["filename"],
-        "user_id": buf["user_id"],
-        "session_key": buf["session_key"],
-        "thread_id": thread_id,
-        "window_id": wid,
-        "is_group": True,
-    }
+    # --- no caption → send batch directly to Claude ---
+    lines = [f"[Received File] {f['path']}" for f in files]
+    raw_text = "\n".join(lines)
+    text_to_send = _ensure_user_and_prefix(users_dir, user, raw_text)
+    success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
     names = ", ".join(f["filename"] for f in files)
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "📖 Read & Analyze",
-                    callback_data=f"{CB_FILE_READ}{group_key}",
-                ),
-                InlineKeyboardButton(
-                    "✏️ Describe It",
-                    callback_data=f"{CB_FILE_DESC}{group_key}",
-                ),
-                InlineKeyboardButton(
-                    "❌ Cancel",
-                    callback_data=f"{CB_FILE_CANCEL}{group_key}",
-                ),
-            ]
-        ]
-    )
     try:
-        await bot.send_message(
-            chat_id,
-            f"📎 {len(files)} file{'s' if len(files) != 1 else ''} received: *{names}*\nWhat would you like to do?",
-            message_thread_id=thread_id,
-            reply_markup=keyboard,
-            parse_mode="Markdown",
-        )
-    except Exception:
-        # Fallback without Markdown
-        try:
+        if success:
+            await bot.send_message(
+                chat_id, f"📎 Sent {len(files)} files: {names}",
+                message_thread_id=thread_id,
+            )
+        else:
             await bot.send_message(
                 chat_id,
-                f"📎 {len(files)} file{'s' if len(files) != 1 else ''} received: {names}\nWhat would you like to do?",
+                f"❌ Failed to send to Claude: {message}",
                 message_thread_id=thread_id,
-                reply_markup=keyboard,
             )
-        except Exception:
-            logger.warning("Failed to send media group keyboard for mg_id=%s", mg_id)
+    except Exception:
+        pass
 
 
 def _cancel_bash_capture(bot_data: dict, user_id: int, session_key: int) -> None:
@@ -1826,44 +1768,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if await handle_important_edit_message(update, context):
         return
 
-    # Check if user has a pending file waiting for description
-    session_key = rk.session_key if rk else None
-    if session_key is not None:
-        pending = context.bot_data.get("_pending_files", {})
-        for fk, info in list(pending.items()):
-            if (
-                info.get("user_id") == user.id
-                and info.get("session_key") == session_key
-                and info.get("waiting_description")
-            ):
-                pending.pop(fk)
-                wid = info["window_id"]
-                if info.get("is_group"):
-                    lines = [f"[Received File] {p}" for p in info["paths"]]
-                    lines.append(text)
-                    raw_text = "\n".join(lines)
-                    display = ", ".join(info["filenames"])
-                else:
-                    dest = info["path"]
-                    display = info["filename"]
-                    raw_text = f"[Received File] {dest}\n{text}"
-                text_to_send = _ensure_user_and_prefix(
-                    ctx.config.users_dir, user, raw_text
-                )
-                await _send_typing(update.message.chat)
-                success, message = await ctx.session_manager.send_to_window(
-                    wid, text_to_send
-                )
-                if success:
-                    await safe_reply(update.message, f"📎 Sent: {display}")
-                else:
-                    await safe_reply(
-                        update.message,
-                        f"❌ Failed to send to Claude: {message}",
-                    )
-                return
-
     # Check if user has a pending voice transcript waiting for correction
+    session_key = rk.session_key if rk else None
     if session_key is not None:
         pending_voice = context.bot_data.get("_pending_voice", {})
         for vk, vinfo in list(pending_voice.items()):
@@ -2122,91 +2028,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except Exception:
                 pass
             await query.answer("Restart failed", show_alert=True)
-
-    # File action: Read & Analyze
-    elif data.startswith(CB_FILE_READ):
-        file_key = data[len(CB_FILE_READ) :]
-        pending = context.bot_data.get("_pending_files", {})
-        info = pending.pop(file_key, None)
-        if not info:
-            await query.answer("File no longer pending", show_alert=True)
-            return
-        wid = info["window_id"]
-        if info.get("is_group"):
-            paths = info["paths"]
-            fnames = info["filenames"]
-            lines = [f"[Received File] {p}" for p in paths]
-            lines.append(
-                "Please read and analyze these files. "
-                "Provide a brief summary of their content."
-            )
-            display = ", ".join(fnames)
-        else:
-            dest = info["path"]
-            fname = info["filename"]
-            lines = [
-                f"[Received File] {dest}",
-                "Please read and analyze this file. "
-                "Provide a brief summary of its content.",
-            ]
-            display = fname
-        raw_text = "\n".join(lines)
-        text_to_send = _ensure_user_and_prefix(ctx.config.users_dir, user, raw_text)
-        success, message = await ctx.session_manager.send_to_window(wid, text_to_send)
-        if success:
-            try:
-                await query.edit_message_text(f"📖 Sent to AI for analysis: {display}")
-            except Exception:
-                pass
-        else:
-            try:
-                await query.edit_message_text(f"❌ Failed to send to Claude: {message}")
-            except Exception:
-                pass
-        try:
-            await query.answer()
-        except Exception:
-            pass
-
-    # File action: Describe It (wait for user text)
-    elif data.startswith(CB_FILE_DESC):
-        file_key = data[len(CB_FILE_DESC) :]
-        pending = context.bot_data.get("_pending_files", {})
-        info = pending.get(file_key)
-        if not info:
-            try:
-                await query.answer("File no longer pending", show_alert=True)
-            except Exception:
-                pass
-            return
-        info["waiting_description"] = True
-        prompt = (
-            "✏️ Please describe what you'd like to do with these files:"
-            if info.get("is_group")
-            else "✏️ Please describe what you'd like to do with this file:"
-        )
-        try:
-            await query.edit_message_text(prompt)
-        except Exception:
-            pass
-        try:
-            await query.answer()
-        except Exception:
-            pass
-
-    # File action: Cancel
-    elif data.startswith(CB_FILE_CANCEL):
-        file_key = data[len(CB_FILE_CANCEL) :]
-        pending = context.bot_data.get("_pending_files", {})
-        pending.pop(file_key, None)
-        try:
-            await query.edit_message_text("❌ Cancelled.")
-        except Exception:
-            pass
-        try:
-            await query.answer()
-        except Exception:
-            pass
 
     # Voice transcript: Send confirmed
     elif data.startswith(CB_VOICE_SEND):
@@ -3051,6 +2872,7 @@ async def _deliver_message(
             share_links=msg.share_links,
             upload_links=msg.upload_links,
             code_links=msg.code_links,
+            todo_links=msg.todo_links,
         )
         if not msg.text:
             return
@@ -3113,6 +2935,7 @@ async def _deliver_message(
             # Tunnel not running — strip markers and add notice
             text = _SHARE_LINK_RE.sub("(share server unavailable)", text)
             text = _UPLOAD_LINK_RE.sub("(share server unavailable)", text)
+            text = _TODO_LINK_RE.sub("(share server unavailable)", text)
         msg = NewMessage(
             session_id=msg.session_id,
             text=text,
@@ -3125,6 +2948,7 @@ async def _deliver_message(
             share_links=[],
             upload_links=[],
             code_links=msg.code_links,
+            todo_links=msg.todo_links,
         )
         if not msg.text:
             return
@@ -3158,6 +2982,59 @@ async def _deliver_message(
             share_links=msg.share_links,
             upload_links=msg.upload_links,
             code_links=[],
+            todo_links=msg.todo_links,
+        )
+        if not msg.text:
+            return
+
+    # Replace [TODO_LINK] or [TODO_LINK:ttl] markers with TODO management URLs
+    if msg.todo_links:
+        public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+        text = msg.text
+        if public_url:
+            from .share_server import generate_token, parse_ttl
+
+            ws_cwd = agent_ctx.session_manager.get_window_state(wid).cwd
+            ws_root = Path(ws_cwd) if ws_cwd else None
+            if not ws_root or not ws_root.is_dir():
+                ws_roots = [Path(r) for r in (agent_ctx.config.iter_workspace_dirs() or [agent_ctx.config.agent_dir])]
+                ws_root = ws_roots[0] if ws_roots else None
+            if ws_root:
+                # Determine user locale from thread binding
+                lang = "en"
+                try:
+                    from .persona.profile import read_user_profile
+
+                    profile = read_user_profile(agent_ctx.config.users_dir, queue_id)
+                    if profile and profile.language:
+                        lang = profile.language
+                except Exception:
+                    pass
+                for ttl_str in msg.todo_links:
+                    ttl = parse_ttl(ttl_str) if ttl_str else 1200
+                    token = generate_token(
+                        f"todo:{ws_root.resolve()}", ttl=ttl, name=f"lang:{lang}"
+                    )
+                    url = f"{public_url}/todo/{token}/"
+                    marker = f"[TODO_LINK:{ttl_str}]" if ttl_str else "[TODO_LINK]"
+                    text = text.replace(marker, url, 1)
+            else:
+                text = _TODO_LINK_RE.sub("(no workspace)", text)
+        else:
+            text = _TODO_LINK_RE.sub("(share server unavailable)", text)
+        msg = NewMessage(
+            session_id=msg.session_id,
+            text=text,
+            is_complete=msg.is_complete,
+            content_type=msg.content_type,
+            tool_use_id=msg.tool_use_id,
+            role=msg.role,
+            tool_name=msg.tool_name,
+            file_paths=msg.file_paths,
+            share_links=msg.share_links,
+            upload_links=msg.upload_links,
+            code_links=msg.code_links,
+            todo_links=[],
         )
         if not msg.text:
             return
@@ -3548,7 +3425,7 @@ def create_bot(agent_ctx: AgentContext) -> Application:
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("workspace", workspace_command))
     application.add_handler(CommandHandler("ls", ls_command))
-    application.add_handler(CommandHandler("url", url_command))
+    application.add_handler(CommandHandler("web", web_command))
     application.add_handler(CommandHandler("rebuild", rebuild_command))
     application.add_handler(CommandHandler("cron", cron_command))
     application.add_handler(CommandHandler("verbosity", verbosity_command))

@@ -121,8 +121,8 @@ def _build_system_keyboard(
                 callback_data=f"{CB_MENU_SYSTEM}ls:{wid}"[:64],
             ),
             InlineKeyboardButton(
-                "🔗 ShareLink",
-                callback_data=f"{CB_MENU_SYSTEM}slink:{wid}"[:64],
+                "🌐 Web",
+                callback_data=f"{CB_MENU_SYSTEM}web:{wid}"[:64],
             ),
         ],
         [
@@ -201,6 +201,10 @@ def _build_sharelink_keyboard(wid: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "📺 Tmux",
                     callback_data=f"{CB_MENU_SYSTEM}sltmux:{wid}"[:64],
+                ),
+                InlineKeyboardButton(
+                    "✅ TODO",
+                    callback_data=f"{CB_MENU_SYSTEM}sltodo:{wid}"[:64],
                 ),
             ],
         ]
@@ -364,6 +368,8 @@ async def _dispatch_system(
         await _handle_ls(query, update, context)
     elif action == "share":
         await _handle_share(query, ctx, wid)
+    elif action == "web":
+        await _handle_web(query, ctx, wid)
     elif action == "slink":
         await _handle_sharelink(query, wid)
     elif action == "slbrowse":
@@ -376,6 +382,8 @@ async def _dispatch_system(
         await _handle_sl_code(query, ctx, wid)
     elif action == "sltmux":
         await _handle_sl_tmux(query, ctx, wid)
+    elif action == "sltodo":
+        await _handle_sl_todo(query, ctx, wid)
     elif action == "summary":
         await _handle_summary(query, ctx, wid)
     elif action == "heartbeat":
@@ -983,6 +991,36 @@ async def _handle_share(
     await safe_reply(query.message, f"🔗 [Browse {display_name}]({url})")
 
 
+async def _handle_web(
+    query: CallbackQuery, ctx: AgentContext, wid: str
+) -> None:
+    """Generate a Web dashboard URL directly."""
+    await query.answer()
+    if not query.message:
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        await safe_reply(query.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(query.message, "❌ Share server unavailable.")
+        return
+
+    from ..share_server import generate_token
+
+    ws_root = str(ws_dir.resolve())
+    display_name = ws_dir.name.removeprefix("workspace_")
+    session_name = ctx.tmux_manager.session_name
+    tmux_info = f"{session_name}:{wid}"
+    payload = f"hub:{ws_root}:{tmux_info}"
+    token = generate_token(payload, ttl=600, name=tmux_info)
+    url = f"{public_url}/hub/{token}/"
+    await safe_reply(query.message, f"🌐 [Web — {display_name}]({url})")
+
+
 async def _handle_sharelink(query: CallbackQuery, wid: str) -> None:
     """Show ShareLink secondary menu (Browse / Upload / Terminal)."""
     await query.answer()
@@ -1120,6 +1158,47 @@ async def _handle_sl_tmux(
     url = f"{public_url}/tmux/{token}/"
 
     await safe_reply(query.message, f"📺 [Tmux {display_name}]({url})")
+
+
+async def _handle_sl_todo(
+    query: CallbackQuery,
+    ctx: AgentContext,
+    wid: str,
+) -> None:
+    """Generate a TODO management URL for the workspace."""
+    await query.answer()
+    if not query.message:
+        return
+
+    ws_dir = resolve_workspace_for_window(ctx, wid)
+    if not ws_dir:
+        await safe_reply(query.message, "❌ No workspace for this topic.")
+        return
+
+    public_url = os.environ.get("SHARE_PUBLIC_URL", "")
+    if not public_url or not ctx.share_server:
+        await safe_reply(query.message, "❌ Share server unavailable.")
+        return
+
+    from ..share_server import generate_token
+
+    ws_root = str(ws_dir.resolve())
+    # Determine user locale
+    lang = "en"
+    user = query.from_user
+    if user:
+        try:
+            from ..persona.profile import read_user_profile
+
+            profile = read_user_profile(ctx.config.users_dir, user.id)
+            if profile and profile.language:
+                lang = profile.language
+        except Exception:
+            pass
+    token = generate_token(f"todo:{ws_root}", ttl=1200, name=f"lang:{lang}")
+    url = f"{public_url}/todo/{token}/"
+
+    await safe_reply(query.message, f"✅ [TODO]({url})")
 
 
 async def _handle_agentsoul(

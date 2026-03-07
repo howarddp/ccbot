@@ -50,6 +50,7 @@ _SEND_FILE_RE = re.compile(r"\[SEND_FILE:([^\]]+)\]")
 _SHARE_LINK_RE = re.compile(r"\[SHARE_LINK:([^\]]+)\]")
 _UPLOAD_LINK_RE = re.compile(r"\[UPLOAD_LINK(?::([^\]]*))?\]")
 _CODE_LINK_RE = re.compile(r"\[CODE_LINK:([^\]]+)\]")
+_TODO_LINK_RE = re.compile(r"\[TODO_LINK(?::([^\]]*))?\]")
 _SENDABLE_EXTENSIONS = {
     # Images
     ".jpg",
@@ -96,6 +97,7 @@ class NewMessage:
     share_links: list[str] = field(default_factory=list)  # [SHARE_LINK:path] matches
     upload_links: list[str] = field(default_factory=list)  # [UPLOAD_LINK] matches
     code_links: list[str] = field(default_factory=list)  # [CODE_LINK:path] matches
+    todo_links: list[str] = field(default_factory=list)  # [TODO_LINK] matches
 
 
 class SessionMonitor:
@@ -629,11 +631,13 @@ class SessionMonitor:
                     share_links: list[str] = []
                     upload_links: list[str] = []
                     code_links: list[str] = []
+                    todo_links: list[str] = []
                     if entry.role == "assistant" and entry.content_type == "text":
                         file_paths = _SEND_FILE_RE.findall(entry.text)
                         share_links = _SHARE_LINK_RE.findall(entry.text)
                         upload_links = _UPLOAD_LINK_RE.findall(entry.text)
                         code_links = _CODE_LINK_RE.findall(entry.text)
+                        todo_links = _TODO_LINK_RE.findall(entry.text)
                     # Auto-send images when Claude Code reads them via Read tool
                     if entry.content_type == "tool_use" and entry.tool_name == "Read":
                         m = _READ_PATH_RE.match(entry.text)
@@ -654,6 +658,7 @@ class SessionMonitor:
                             share_links=share_links,
                             upload_links=upload_links,
                             code_links=code_links,
+                            todo_links=todo_links,
                         )
                     )
 

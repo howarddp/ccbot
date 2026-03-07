@@ -219,6 +219,7 @@ _INVALID_HTML = (_TEMPLATES_DIR / "invalid.html").read_text(encoding="utf-8")
 _DIRECTORY_HTML = (_TEMPLATES_DIR / "directory.html").read_text(encoding="utf-8")
 _TERMINAL_HTML = (_TEMPLATES_DIR / "terminal.html").read_text(encoding="utf-8")
 _HUB_HTML = (_TEMPLATES_DIR / "hub.html").read_text(encoding="utf-8")
+_TODO_HTML = (_TEMPLATES_DIR / "todo.html").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +426,16 @@ class ShareServer:
         self._app.router.add_get("/hub/{token}/urls", self._handle_hub_urls)
         self._app.router.add_get("/hub/{token}/", self._handle_hub_page)
         self._app.router.add_get("/hub/{token}", self._handle_hub_redirect)
+        # TODO management UI
+        self._app.router.add_get("/todo/{token}/", self._handle_todo_page)
+        self._app.router.add_get("/todo/{token}", self._handle_todo_redirect)
+        self._app.router.add_get("/todo/{token}/api", self._handle_todo_list)
+        self._app.router.add_post("/todo/{token}/api", self._handle_todo_add)
+        self._app.router.add_put("/todo/{token}/api/{todo_id}", self._handle_todo_update)
+        self._app.router.add_delete("/todo/{token}/api/{todo_id}", self._handle_todo_delete)
+        self._app.router.add_post(
+            "/todo/{token}/api/{todo_id}/done", self._handle_todo_done
+        )
 
     def _find_file(self, rel_path: str, workspace: Path | None = None) -> Path | None:
         """Find a file in a specific workspace or across all roots."""
@@ -1606,7 +1617,18 @@ class ShareServer:
 
         ws_path = payload["workspace"]
         display = Path(ws_path).name.removeprefix("workspace_")
-        html = _HUB_HTML.replace("{{NAME}}", display)
+
+        # Compute remaining TTL for the JS countdown
+        try:
+            parts = token.split("-", 2)
+            expires = int(parts[1])
+            remaining = max(0, expires - int(time.time()))
+        except (ValueError, IndexError):
+            remaining = 600
+
+        html = _HUB_HTML.replace("{{NAME}}", display).replace(
+            "{{TTL}}", str(remaining)
+        )
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_hub_urls(self, request: web.Request) -> web.Response:
@@ -1667,13 +1689,204 @@ class ShareServer:
         # Code (VS Code Web)
         ws_resolved = Path(ws_path).resolve()
         projects_dir = ws_resolved / "projects"
-        code_dir = str(projects_dir if projects_dir.is_dir() else ws_resolved)
+        # Only use projects/ if it has actual contents
+        code_dir = str(
+            projects_dir
+            if projects_dir.is_dir() and any(projects_dir.iterdir())
+            else ws_resolved
+        )
         code_token = generate_token(
             f"code:{code_dir}", ttl=remaining, name=code_dir
         )
         urls["code"] = f"/code/{code_token}/"
 
+        # TODO management
+        todo_token = generate_token(
+            f"todo:{ws_path}", ttl=remaining, name=display
+        )
+        urls["todo"] = f"/todo/{todo_token}/"
+
         return web.json_response(urls)
+
+    # -- TODO management --
+
+    def _verify_todo_token(self, token: str) -> tuple[Path | None, str]:
+        """Verify a todo token and return (workspace_path, status)."""
+        worst = "invalid"
+        for root in self._workspace_roots:
+            status = check_token(token, f"todo:{root}")
+            if status == "ok":
+                return root, "ok"
+            if status == "expired":
+                worst = "expired"
+        return None, worst
+
+    def _get_todo_db(self, workspace: Path):
+        """Get a todo DB connection for the workspace."""
+        import sqlite3 as _sqlite3
+
+        from .workspace.bin._todo_common import connect_db
+
+        return connect_db(workspace)
+
+    async def _handle_todo_redirect(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        raise web.HTTPFound(f"/todo/{token}/")
+
+    async def _handle_todo_page(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        workspace, status = self._verify_todo_token(token)
+        if workspace is None:
+            return _deny_response(status)
+
+        # Extract language from token name (format: "lang:xx-YY" or just workspace name)
+        name = extract_token_name(token)
+        lang = "en"
+        if name.startswith("lang:"):
+            lang = name[5:]
+
+        html = _TODO_HTML.replace("{{LANG}}", lang)
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_todo_list(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        workspace, status = self._verify_todo_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        conn = self._get_todo_db(workspace)
+        try:
+            from .workspace.bin._todo_common import list_todos
+
+            rows = list_todos(conn, status="all")
+            result = []
+            ws_root = str(workspace.resolve())
+            # Compute remaining TTL from the todo token
+            try:
+                parts = token.split("-", 2)
+                remaining = max(60, int(parts[1]) - int(time.time()))
+            except (ValueError, IndexError):
+                remaining = 600
+            for r in rows:
+                d = dict(r)
+                # Generate file share URLs for attachments
+                atts_raw = d.get("attachments", "[]")
+                atts = json.loads(atts_raw) if isinstance(atts_raw, str) else atts_raw
+                if atts:
+                    att_urls = []
+                    memory_dir = workspace / "memory"
+                    for att_path in atts:
+                        full = (memory_dir / att_path).resolve()
+                        if full.is_file():
+                            rel = str(full.relative_to(workspace.resolve()))
+                            file_token = generate_token(
+                                f"f:{ws_root}:{rel}", ttl=remaining
+                            )
+                            att_urls.append({
+                                "name": Path(att_path).name,
+                                "path": att_path,
+                                "url": f"/f/{file_token}/{rel}",
+                            })
+                        else:
+                            att_urls.append({
+                                "name": Path(att_path).name,
+                                "path": att_path,
+                                "url": "",
+                            })
+                    d["attachment_urls"] = att_urls
+                else:
+                    d["attachment_urls"] = []
+                result.append(d)
+            return web.json_response(result)
+        finally:
+            conn.close()
+
+    async def _handle_todo_add(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        workspace, status = self._verify_todo_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        data = await request.json()
+        title = data.get("title", "").strip()
+        if not title:
+            return web.json_response({"error": "title required"}, status=400)
+
+        conn = self._get_todo_db(workspace)
+        try:
+            from .workspace.bin._todo_common import add_todo
+
+            todo_id = add_todo(
+                conn,
+                title,
+                todo_type=data.get("type", "task"),
+                start_date=data.get("start_date"),
+                deadline=data.get("deadline"),
+                location=data.get("location", ""),
+                content=data.get("content", ""),
+            )
+            return web.json_response({"id": todo_id})
+        finally:
+            conn.close()
+
+    async def _handle_todo_update(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        todo_id = request.match_info["todo_id"]
+        workspace, status = self._verify_todo_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        data = await request.json()
+        conn = self._get_todo_db(workspace)
+        try:
+            from .workspace.bin._todo_common import update_todo
+
+            fields = {}
+            for key in ("title", "type", "start_date", "deadline", "location", "content", "status"):
+                if key in data:
+                    fields[key] = data[key] or ""
+            ok = update_todo(conn, todo_id, **fields)
+            if not ok:
+                return web.json_response({"error": "not found"}, status=404)
+            return web.json_response({"ok": True})
+        finally:
+            conn.close()
+
+    async def _handle_todo_delete(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        todo_id = request.match_info["todo_id"]
+        workspace, status = self._verify_todo_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        conn = self._get_todo_db(workspace)
+        try:
+            from .workspace.bin._todo_common import remove_todo
+
+            ok = remove_todo(conn, todo_id)
+            if not ok:
+                return web.json_response({"error": "not found"}, status=404)
+            return web.json_response({"ok": True})
+        finally:
+            conn.close()
+
+    async def _handle_todo_done(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        todo_id = request.match_info["todo_id"]
+        workspace, status = self._verify_todo_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        conn = self._get_todo_db(workspace)
+        try:
+            from .workspace.bin._todo_common import done_todo
+
+            ok = done_todo(conn, todo_id)
+            if not ok:
+                return web.json_response({"error": "not found or already done"}, status=404)
+            return web.json_response({"ok": True})
+        finally:
+            conn.close()
 
     # -- Server lifecycle --
 

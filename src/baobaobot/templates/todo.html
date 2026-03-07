@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>TODO</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f5f5;
+    --surface: #ffffff;
+    --surface2: #f0f0f0;
+    --border: #e0e0e0;
+    --text: #1a1a1a;
+    --text2: #888;
+    --text3: #aaa;
+    --accent: #3478f6;
+    --accent-light: #e8f0fe;
+    --green: #34c759;
+    --green-light: #eafaf0;
+    --red: #ff3b30;
+    --red-light: #fff0ef;
+    --orange: #ff9500;
+    --orange-light: #fff5e6;
+    --yellow: #f0b400;
+    --purple: #af52de;
+    --purple-light: #f5ecfb;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06);
+    --shadow-lg: 0 4px 20px rgba(0,0,0,0.1);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { background: var(--bg); }
+  button { background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* ===== LIST VIEW ===== */
+  #listView { display: block; }
+  #detailView { display: none; }
+
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 16px 10px;
+    box-shadow: var(--shadow);
+  }
+
+  .header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+  .header-stats { font-size: 13px; color: var(--text2); margin-top: 1px; }
+
+  .add-btn {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: var(--accent); border: none; color: #fff;
+    font-size: 24px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(52,120,246,0.3);
+    transition: transform 0.15s;
+  }
+  .add-btn:active { transform: scale(0.9); }
+
+  .filters {
+    display: flex; gap: 6px; overflow-x: auto;
+    scrollbar-width: none; padding-bottom: 2px;
+  }
+  .filters::-webkit-scrollbar { display: none; }
+
+  .filter-chip {
+    flex-shrink: 0; padding: 5px 12px; border-radius: 20px;
+    font-size: 13px; font-weight: 500;
+    background: var(--surface2); color: var(--text2);
+    border: 1px solid var(--border); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filter-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .filter-chip .count { margin-left: 3px; opacity: 0.7; }
+
+  .tabs {
+    display: flex; padding: 0 16px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    flex: 1; text-align: center; padding: 11px 0;
+    font-size: 14px; font-weight: 600; color: var(--text2);
+    border-bottom: 2.5px solid transparent; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .content { padding: 8px 12px 100px; }
+
+  .todo-item {
+    background: var(--surface); border-radius: var(--radius);
+    padding: 14px; margin-bottom: 8px;
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+    cursor: pointer; transition: all 0.15s;
+    -webkit-user-select: none; user-select: none;
+  }
+  .todo-item:active { background: var(--surface2); transform: scale(0.99); }
+  .todo-item.done { opacity: 0.55; }
+
+  .todo-top { display: flex; align-items: flex-start; gap: 10px; }
+
+  .todo-check {
+    flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid var(--text3); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 1px; transition: all 0.15s;
+  }
+  .todo-check:active { transform: scale(0.85); }
+  .todo-check.checked { background: var(--green); border-color: var(--green); }
+  .todo-check.checked::after {
+    content: ''; width: 6px; height: 10px;
+    border: solid #fff; border-width: 0 2px 2px 0;
+    transform: rotate(45deg); margin-top: -2px;
+  }
+
+  .todo-body { flex: 1; min-width: 0; }
+  .todo-title { font-size: 15px; font-weight: 500; line-height: 1.4; word-break: break-word; }
+  .todo-item.done .todo-title { text-decoration: line-through; color: var(--text2); }
+
+  .todo-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+
+  .tag {
+    display: inline-flex; align-items: center;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600;
+  }
+  .tag-type { background: var(--accent-light); color: var(--accent); }
+  .tag-type.bug { background: var(--red-light); color: var(--red); }
+  .tag-type.feature { background: var(--green-light); color: #1a8a3a; }
+  .tag-type.reminder { background: var(--orange-light); color: #c67600; }
+  .tag-type.idea { background: #fff9e6; color: #997000; }
+  .tag-type.event { background: var(--purple-light); color: var(--purple); }
+  .tag-user { background: var(--surface2); color: var(--text2); font-weight: 500; }
+  .tag-date { font-size: 11px; color: var(--text2); }
+  .tag-date.overdue { color: var(--red); font-weight: 600; }
+
+  .todo-hint { font-size: 11px; color: var(--text3); margin-top: 4px; }
+
+  .chevron {
+    flex-shrink: 0; width: 20px; height: 20px;
+    color: var(--text3); display: flex;
+    align-items: center; justify-content: center;
+    font-size: 18px; margin-top: 1px;
+  }
+
+  /* ===== DETAIL VIEW ===== */
+  .detail-header {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+    box-shadow: var(--shadow);
+  }
+  .back-btn {
+    background: none; border: none; font-size: 28px;
+    color: var(--accent); cursor: pointer; padding: 4px;
+    line-height: 1; display: flex; align-items: center;
+  }
+  .back-btn:active { opacity: 0.5; }
+  .detail-header-title {
+    font-size: 17px; font-weight: 600; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .detail-content { padding: 16px; padding-bottom: 120px; }
+  .detail-title { font-size: 20px; font-weight: 700; line-height: 1.4; margin-bottom: 12px; word-break: break-word; }
+
+  .detail-meta { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+  .detail-meta-row { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .detail-meta-label { color: var(--text2); min-width: 70px; flex-shrink: 0; }
+  .detail-meta-value { font-weight: 500; }
+
+  .detail-status-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 12px; border-radius: 20px;
+    font-size: 13px; font-weight: 600;
+  }
+  .detail-status-chip.open { background: var(--accent-light); color: var(--accent); }
+  .detail-status-chip.done { background: var(--green-light); color: var(--green); }
+
+  .detail-divider { height: 1px; background: var(--border); margin: 16px 0; }
+  .detail-section-title {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
+  }
+
+  .detail-body {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px;
+    box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+
+  .detail-body .markdown-content { font-size: 15px; line-height: 1.7; color: var(--text); word-break: break-word; }
+  .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; }
+  .markdown-content h1 { font-size: 18px; } .markdown-content h2 { font-size: 16px; } .markdown-content h3 { font-size: 15px; }
+  .markdown-content p { margin-bottom: 10px; }
+  .markdown-content ul, .markdown-content ol { margin: 8px 0; padding-left: 20px; }
+  .markdown-content li { margin-bottom: 4px; }
+  .markdown-content code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', Menlo, monospace; }
+  .markdown-content pre { background: #f8f8f8; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; overflow-x: auto; margin: 10px 0; }
+  .markdown-content pre code { background: none; padding: 0; font-size: 13px; }
+  .markdown-content blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text2); margin: 10px 0; }
+  .markdown-content a { color: var(--accent); text-decoration: none; }
+
+  .attachment-list { display: flex; flex-direction: column; gap: 8px; }
+  .attachment-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    box-shadow: var(--shadow); text-decoration: none; color: var(--text);
+    transition: background 0.15s;
+  }
+  .attachment-item:active { background: var(--surface2); }
+  .attachment-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0; background: var(--surface2);
+  }
+  .attachment-name { flex: 1; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .detail-actions {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding: 12px 16px; padding-bottom: max(12px, env(safe-area-inset-bottom));
+    display: flex; gap: 10px;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+  }
+  .detail-actions .btn { flex: 1; }
+
+  .btn {
+    padding: 12px; border-radius: var(--radius-sm);
+    font-size: 15px; font-weight: 600; border: none;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-done-action { background: var(--green); color: #fff; }
+  .btn-edit-action { background: var(--accent); color: #fff; }
+  .btn-delete-outline { background: none; color: var(--red); border: 1.5px solid var(--red); flex: 0.6 !important; }
+  .btn-reopen { background: var(--orange); color: #fff; }
+
+  .empty { text-align: center; padding: 60px 20px; color: var(--text2); }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.3; }
+
+  /* ===== MODALS ===== */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    z-index: 200; display: none;
+    align-items: flex-end; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+
+  .modal-sheet {
+    background: var(--surface); border-radius: 20px 20px 0 0;
+    width: 100%; max-width: 500px; max-height: 85dvh;
+    overflow-y: auto; padding: 12px 16px 32px;
+    animation: slideUp 0.25s ease-out; box-shadow: var(--shadow-lg);
+  }
+  @keyframes slideUp { from { transform: translateY(100%); } }
+
+  .modal-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 16px; }
+  .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+
+  .form-group { margin-bottom: 14px; }
+  .form-label { font-size: 13px; font-weight: 600; color: var(--text2); margin-bottom: 6px; display: block; }
+  .form-input {
+    width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1.5px solid var(--border); background: var(--surface);
+    color: var(--text); font-size: 15px; font-family: inherit;
+    outline: none; transition: border-color 0.15s;
+  }
+  .form-input:focus { border-color: var(--accent); }
+  textarea.form-input { resize: vertical; min-height: 100px; }
+  .form-row { display: flex; gap: 10px; }
+  .form-row .form-group { flex: 1; }
+
+  .type-selector { display: flex; flex-wrap: wrap; gap: 6px; }
+  .type-option {
+    padding: 6px 14px; border-radius: 20px;
+    font-size: 13px; font-weight: 500;
+    background: var(--surface2); color: var(--text2);
+    border: 1.5px solid var(--border); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .type-option.selected { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+
+  .form-actions { display: flex; gap: 10px; margin-top: 20px; }
+
+  .confirm-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    z-index: 300; display: none;
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .confirm-overlay.show { display: flex; }
+  .confirm-box {
+    background: var(--surface); border-radius: var(--radius);
+    padding: 24px 20px 16px; max-width: 300px; width: 100%;
+    text-align: center; box-shadow: var(--shadow-lg);
+  }
+  .confirm-box .confirm-title { font-weight: 700; font-size: 17px; margin-bottom: 6px; }
+  .confirm-box .confirm-desc { color: var(--text2); font-size: 14px; margin-bottom: 20px; }
+  .confirm-actions { display: flex; gap: 10px; }
+
+  .toast {
+    position: fixed; bottom: 80px; left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--text); color: var(--surface);
+    padding: 10px 20px; border-radius: 20px;
+    font-size: 14px; font-weight: 500; z-index: 500;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    opacity: 0; pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; pointer-events: auto; }
+
+  .loading { text-align: center; padding: 40px; color: var(--text2); }
+
+  /* Dark mode */
+  .dark {
+    --bg: #1a1a2e;
+    --surface: #2a2a4a;
+    --surface2: #32325a;
+    --border: #3a3a5a;
+    --text: #e5e5e5;
+    --text2: #9a9ab0;
+    --text3: #6a6a80;
+    --accent: #60a5fa;
+    --accent-light: rgba(96,165,250,.15);
+    --green: #4ade80;
+    --green-light: rgba(74,222,128,.15);
+    --red: #f87171;
+    --red-light: rgba(248,113,113,.15);
+    --orange: #fb923c;
+    --orange-light: rgba(251,146,60,.15);
+    --yellow: #facc15;
+    --purple: #c084fc;
+    --purple-light: rgba(192,132,252,.15);
+    --shadow: 0 1px 3px rgba(0,0,0,.2);
+    --shadow-lg: 0 4px 20px rgba(0,0,0,.3);
+  }
+  .dark .markdown-content pre { background: #1e1e3a; border-color: var(--border); }
+  .dark .btn-delete-outline { color: var(--red); border-color: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- ===== LIST VIEW ===== -->
+<div id="listView">
+  <div class="header">
+    <div class="header-top">
+      <div>
+        <h1>TODO</h1>
+        <div class="header-stats" id="headerStats"></div>
+      </div>
+      <button class="add-btn" onclick="showAddModal()">+</button>
+    </div>
+    <div class="filters" id="filtersBar"></div>
+  </div>
+  <div class="tabs">
+    <div class="tab active" data-tab="open" id="tabOpen"></div>
+    <div class="tab" data-tab="done" id="tabDone"></div>
+  </div>
+  <div class="content" id="openList"></div>
+  <div class="content" id="doneList" style="display:none;"></div>
+</div>
+
+<!-- ===== DETAIL VIEW ===== -->
+<div id="detailView">
+  <div class="detail-header">
+    <button class="back-btn" onclick="hideDetail()">&#8249;</button>
+    <div class="detail-header-title" id="detailHeaderTitle"></div>
+  </div>
+  <div class="detail-content" id="detailContent"></div>
+  <div class="detail-actions" id="detailActions"></div>
+</div>
+
+<!-- ===== ADD/EDIT MODAL ===== -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modalTitle"></div>
+    <div class="form-group">
+      <label class="form-label" id="lblTitle"></label>
+      <input class="form-input" type="text" id="formTitle">
+    </div>
+    <div class="form-group">
+      <label class="form-label" id="lblType"></label>
+      <div class="type-selector" id="typeSelector"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label" id="lblStart"></label>
+        <input class="form-input" type="date" id="formStart">
+      </div>
+      <div class="form-group">
+        <label class="form-label" id="lblDeadline"></label>
+        <input class="form-input" type="date" id="formDeadline">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" id="lblLocation"></label>
+      <input class="form-input" type="text" id="formLocation">
+    </div>
+    <div class="form-group">
+      <label class="form-label" id="lblContent"></label>
+      <textarea class="form-input" id="formContent"></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="hideModal()" id="btnCancel"></button>
+      <button class="btn btn-primary" onclick="saveForm()" id="btnSave"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== CONFIRM DIALOG ===== -->
+<div class="confirm-overlay" id="confirmDialog">
+  <div class="confirm-box">
+    <p class="confirm-title" id="confirmTitle"></p>
+    <p class="confirm-desc" id="confirmDesc"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-secondary" onclick="hideConfirm()" id="confirmCancel"></button>
+      <button class="btn" id="confirmAction" onclick="doConfirmAction()"></button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = location.pathname.replace(/\/$/, '') + '/api';
+const TYPES = ['task', 'bug', 'feature', 'reminder', 'idea', 'event'];
+
+// ===== i18n =====
+const I18N = {
+  'zh-TW': {
+    title: 'TODO',
+    openCount: n => `${n} open`,
+    doneCount: n => `${n} done`,
+    stats: (o, d) => `${o} open / ${d} done`,
+    all: 'All',
+    tabOpen: n => `Open (${n})`,
+    tabDone: n => `Done (${n})`,
+    addTitle: 'New TODO',
+    editTitle: 'Edit TODO',
+    lblTitle: 'Title',
+    lblType: 'Type',
+    lblStart: 'Start',
+    lblDeadline: 'Deadline',
+    lblLocation: 'Location',
+    lblContent: 'Details (Markdown)',
+    phTitle: 'What needs to be done?',
+    phLocation: 'Optional',
+    phContent: 'Supports **bold**, `code`, lists...',
+    cancel: 'Cancel',
+    save: 'Save',
+    markDone: 'Mark Done',
+    edit: 'Edit',
+    delete: 'Delete',
+    reopen: 'Reopen',
+    confirmDoneTitle: 'Mark as Done?',
+    confirmDoneDesc: 'This item will be moved to the done list.',
+    confirmDeleteTitle: 'Delete?',
+    confirmDeleteDesc: 'This item will be permanently removed.',
+    confirmReopenTitle: 'Reopen?',
+    confirmReopenDesc: 'This item will be moved back to the open list.',
+    confirm: 'Confirm',
+    toastDone: 'Marked as done',
+    toastDeleted: 'Deleted',
+    toastReopened: 'Reopened',
+    toastSaved: 'Saved',
+    toastError: 'Error',
+    emptyOpen: 'No open items',
+    emptyDone: 'No completed items',
+    overdue: d => `overdue ${d}`,
+    doneAt: d => `done ${d}`,
+    hasDetails: 'Has details',
+    attachments: n => `${n} attachment${n > 1 ? 's' : ''}`,
+    sectionDetails: 'Details',
+    sectionAttachments: 'Attachments',
+    status: 'Status',
+    type: 'Type',
+    created: 'Created',
+    deadline: 'Deadline',
+    by: 'By',
+    location: 'Location',
+    statusOpen: 'Open',
+    statusDone: 'Done',
+  },
+  'en': {
+    title: 'TODO',
+    openCount: n => `${n} open`,
+    doneCount: n => `${n} done`,
+    stats: (o, d) => `${o} open / ${d} done`,
+    all: 'All',
+    tabOpen: n => `Open (${n})`,
+    tabDone: n => `Done (${n})`,
+    addTitle: 'New TODO',
+    editTitle: 'Edit TODO',
+    lblTitle: 'Title',
+    lblType: 'Type',
+    lblStart: 'Start',
+    lblDeadline: 'Deadline',
+    lblLocation: 'Location',
+    lblContent: 'Details (Markdown)',
+    phTitle: 'What needs to be done?',
+    phLocation: 'Optional',
+    phContent: 'Supports **bold**, `code`, lists...',
+    cancel: 'Cancel',
+    save: 'Save',
+    markDone: 'Mark Done',
+    edit: 'Edit',
+    delete: 'Delete',
+    reopen: 'Reopen',
+    confirmDoneTitle: 'Mark as Done?',
+    confirmDoneDesc: 'This item will be moved to the done list.',
+    confirmDeleteTitle: 'Delete?',
+    confirmDeleteDesc: 'This item will be permanently removed.',
+    confirmReopenTitle: 'Reopen?',
+    confirmReopenDesc: 'This item will be moved back to the open list.',
+    confirm: 'Confirm',
+    toastDone: 'Marked as done',
+    toastDeleted: 'Deleted',
+    toastReopened: 'Reopened',
+    toastSaved: 'Saved',
+    toastError: 'Error',
+    emptyOpen: 'No open items',
+    emptyDone: 'No completed items',
+    overdue: d => `overdue ${d}`,
+    doneAt: d => `done ${d}`,
+    hasDetails: 'Has details',
+    attachments: n => `${n} attachment${n > 1 ? 's' : ''}`,
+    sectionDetails: 'Details',
+    sectionAttachments: 'Attachments',
+    status: 'Status',
+    type: 'Type',
+    created: 'Created',
+    deadline: 'Deadline',
+    by: 'By',
+    location: 'Location',
+    statusOpen: 'Open',
+    statusDone: 'Done',
+  },
+};
+
+// Resolve locale: try full match, then language prefix, fallback to en
+const PAGE_LANG = '{{LANG}}' || 'en';
+const t = I18N[PAGE_LANG] || I18N[PAGE_LANG.split('-')[0]] || I18N['en'];
+
+// ===== State =====
+let todos = [];
+let activeFilter = 'all';
+let activeTab = 'open';
+let currentDetail = null;
+let editingId = null;
+let _confirmCallback = null;
+
+// ===== API =====
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API_BASE + path, opts);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err);
+  }
+  return res.json();
+}
+
+async function loadTodos() {
+  try {
+    todos = await api('GET', '');
+    render();
+  } catch (e) {
+    document.getElementById('openList').innerHTML = `<div class="empty">${t.toastError}: ${e.message}</div>`;
+  }
+}
+
+// ===== Render =====
+function shortDate(d) {
+  if (!d) return '';
+  const parts = d.split('-');
+  return parts[1] + '/' + parts[2];
+}
+
+function typeClass(type) {
+  return TYPES.includes(type) ? type : '';
+}
+
+function isOverdue(todo) {
+  if (todo.status !== 'open' || !todo.deadline) return false;
+  return todo.deadline < new Date().toISOString().slice(0, 10);
+}
+
+function renderItem(todo) {
+  const isDone = todo.status === 'done';
+  const overdue = isOverdue(todo);
+  const atts = todo.attachment_urls || [];
+  const hasContent = todo.content || atts.length > 0;
+
+  let dateHtml = '';
+  if (isDone && todo.done_at) {
+    dateHtml = `<span class="tag-date">${t.doneAt(shortDate(todo.done_at.slice(0, 10)))}</span>`;
+  } else if (overdue) {
+    dateHtml = `<span class="tag-date overdue">${t.overdue(shortDate(todo.deadline))}</span>`;
+  } else if (todo.deadline) {
+    dateHtml = `<span class="tag-date">due ${shortDate(todo.deadline)}</span>`;
+  } else if (todo.start_date) {
+    dateHtml = `<span class="tag-date">${shortDate(todo.start_date)}</span>`;
+  } else {
+    dateHtml = `<span class="tag-date">${shortDate(todo.created_at.slice(0, 10))}</span>`;
+  }
+
+  let hintParts = [];
+  if (todo.content) hintParts.push(t.hasDetails);
+  if (atts.length > 0) hintParts.push(t.attachments(atts.length));
+  const hintHtml = hintParts.length ? `<div class="todo-hint">${hintParts.join(' & ')}</div>` : '';
+
+  return `<div class="todo-item ${isDone ? 'done' : ''}" onclick="showDetail('${todo.id}')">
+    <div class="todo-top">
+      <div class="todo-check ${isDone ? 'checked' : ''}" onclick="event.stopPropagation(); ${isDone ? '' : `confirmDone('${todo.id}')`}"></div>
+      <div class="todo-body">
+        <div class="todo-title">${escHtml(todo.title)}</div>
+        <div class="todo-meta">
+          <span class="tag tag-type ${typeClass(todo.type)}">${escHtml(todo.type)}</span>
+          ${todo.created_by ? `<span class="tag tag-user">${escHtml(todo.created_by)}</span>` : ''}
+          ${dateHtml}
+        </div>
+        ${hintHtml}
+      </div>
+      <div class="chevron">&#8250;</div>
+    </div>
+  </div>`;
+}
+
+function render() {
+  const open = todos.filter(t => t.status === 'open');
+  const done = todos.filter(t => t.status === 'done');
+
+  // Apply filter
+  const filterFn = todo => {
+    if (activeFilter === 'all') return true;
+    if (TYPES.includes(activeFilter)) return todo.type === activeFilter;
+    return todo.created_by === activeFilter;
+  };
+
+  const filteredOpen = open.filter(filterFn);
+  const filteredDone = done.filter(filterFn);
+
+  // Stats
+  document.getElementById('headerStats').textContent = t.stats(open.length, done.length);
+  document.getElementById('tabOpen').textContent = t.tabOpen(open.length);
+  document.getElementById('tabDone').textContent = t.tabDone(done.length);
+
+  // Filters
+  const types = [...new Set(todos.map(t => t.type))];
+  const users = [...new Set(todos.map(t => t.created_by).filter(Boolean))];
+  let chips = `<div class="filter-chip ${activeFilter === 'all' ? 'active' : ''}" onclick="setFilter('all')">${t.all}<span class="count">${open.length}</span></div>`;
+  types.forEach(tp => {
+    const cnt = open.filter(t => t.type === tp).length;
+    chips += `<div class="filter-chip ${activeFilter === tp ? 'active' : ''}" onclick="setFilter('${escHtml(tp)}')">${escHtml(tp)}<span class="count">${cnt}</span></div>`;
+  });
+  users.forEach(u => {
+    chips += `<div class="filter-chip ${activeFilter === u ? 'active' : ''}" onclick="setFilter('${escHtml(u)}')">${escHtml(u)}</div>`;
+  });
+  document.getElementById('filtersBar').innerHTML = chips;
+
+  // Lists
+  document.getElementById('openList').innerHTML = filteredOpen.length
+    ? filteredOpen.map(renderItem).join('')
+    : `<div class="empty"><div class="empty-icon">&#9745;</div>${t.emptyOpen}</div>`;
+
+  document.getElementById('doneList').innerHTML = filteredDone.length
+    ? filteredDone.map(renderItem).join('')
+    : `<div class="empty">${t.emptyDone}</div>`;
+}
+
+function setFilter(f) {
+  activeFilter = f;
+  render();
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ===== Detail =====
+function showDetail(id) {
+  const todo = todos.find(t => t.id === id);
+  if (!todo) return;
+  currentDetail = todo;
+
+  document.getElementById('detailHeaderTitle').textContent = todo.id;
+
+  const isDone = todo.status === 'done';
+  const atts = todo.attachment_urls || [];
+
+  let html = `<div class="detail-title">${escHtml(todo.title)}</div>`;
+  html += '<div class="detail-meta">';
+  html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.status}</span><span class="detail-status-chip ${isDone ? 'done' : 'open'}">${isDone ? t.statusDone : t.statusOpen}</span></div>`;
+  html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.type}</span><span class="tag tag-type ${typeClass(todo.type)}">${escHtml(todo.type)}</span></div>`;
+  html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.created}</span><span class="detail-meta-value">${todo.created_at.slice(0, 10)}</span></div>`;
+  if (todo.start_date) {
+    html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.lblStart}</span><span class="detail-meta-value">${todo.start_date}</span></div>`;
+  }
+  if (todo.deadline) {
+    const overdue = isOverdue(todo);
+    html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.deadline}</span><span class="detail-meta-value" style="${overdue ? 'color:var(--red);font-weight:600' : ''}">${todo.deadline}${overdue ? ' (overdue)' : ''}</span></div>`;
+  }
+  if (todo.location) {
+    html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.location}</span><span class="detail-meta-value">${escHtml(todo.location)}</span></div>`;
+  }
+  if (todo.created_by) {
+    html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.by}</span><span class="detail-meta-value">${escHtml(todo.created_by)}</span></div>`;
+  }
+  if (isDone && todo.done_at) {
+    html += `<div class="detail-meta-row"><span class="detail-meta-label">${t.statusDone}</span><span class="detail-meta-value">${todo.done_at.slice(0, 16).replace('T', ' ')}</span></div>`;
+  }
+  html += '</div>';
+
+  if (todo.content) {
+    html += '<div class="detail-divider"></div>';
+    html += `<div class="detail-section-title">${t.sectionDetails}</div>`;
+    html += `<div class="detail-body"><div class="markdown-content">${marked.parse(todo.content)}</div></div>`;
+  }
+
+  if (atts.length > 0) {
+    html += `<div class="detail-section-title">${t.sectionAttachments}</div>`;
+    html += '<div class="attachment-list">';
+    atts.forEach(a => {
+      const href = a.url ? escHtml(a.url) : '#';
+      const isImg = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(a.name);
+      const icon = isImg ? '&#128247;' : '&#128196;';
+      html += `<a class="attachment-item" href="${href}" target="_blank"${a.url ? '' : ' style="opacity:0.5;pointer-events:none"'}>
+        <div class="attachment-icon">${icon}</div>
+        <span class="attachment-name">${escHtml(a.name)}</span>
+      </a>`;
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('detailContent').innerHTML = html;
+
+  // Actions
+  let actions = '';
+  if (isDone) {
+    actions = `<button class="btn btn-reopen" onclick="confirmReopen('${todo.id}')">${t.reopen}</button>
+      <button class="btn btn-delete-outline" onclick="confirmDelete('${todo.id}')">${t.delete}</button>`;
+  } else {
+    actions = `<button class="btn btn-done-action" onclick="confirmDone('${todo.id}')">${t.markDone}</button>
+      <button class="btn btn-edit-action" onclick="showEditModal('${todo.id}')">${t.edit}</button>
+      <button class="btn btn-delete-outline" onclick="confirmDelete('${todo.id}')">${t.delete}</button>`;
+  }
+  document.getElementById('detailActions').innerHTML = actions;
+
+  document.getElementById('listView').style.display = 'none';
+  document.getElementById('detailView').style.display = 'block';
+  window.scrollTo(0, 0);
+  history.pushState({ detail: id }, '');
+}
+
+function hideDetail() {
+  document.getElementById('detailView').style.display = 'none';
+  document.getElementById('listView').style.display = 'block';
+  currentDetail = null;
+}
+
+// ===== Tabs =====
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    activeTab = tab.dataset.tab;
+    document.getElementById('openList').style.display = activeTab === 'open' ? 'block' : 'none';
+    document.getElementById('doneList').style.display = activeTab === 'done' ? 'block' : 'none';
+  });
+});
+
+// ===== Modal =====
+function showAddModal() {
+  editingId = null;
+  document.getElementById('modalTitle').textContent = t.addTitle;
+  document.getElementById('formTitle').value = '';
+  document.getElementById('formStart').value = '';
+  document.getElementById('formDeadline').value = '';
+  document.getElementById('formLocation').value = '';
+  document.getElementById('formContent').value = '';
+  renderTypeSelector('task');
+  setupFormLabels();
+  document.getElementById('addModal').classList.add('show');
+}
+
+function showEditModal(id) {
+  const todo = todos.find(t => t.id === id);
+  if (!todo) return;
+  editingId = id;
+  document.getElementById('modalTitle').textContent = t.editTitle;
+  document.getElementById('formTitle').value = todo.title;
+  document.getElementById('formStart').value = todo.start_date || '';
+  document.getElementById('formDeadline').value = todo.deadline || '';
+  document.getElementById('formLocation').value = todo.location || '';
+  document.getElementById('formContent').value = todo.content || '';
+  renderTypeSelector(todo.type);
+  setupFormLabels();
+  document.getElementById('addModal').classList.add('show');
+}
+
+function setupFormLabels() {
+  document.getElementById('lblTitle').textContent = t.lblTitle;
+  document.getElementById('lblType').textContent = t.lblType;
+  document.getElementById('lblStart').textContent = t.lblStart;
+  document.getElementById('lblDeadline').textContent = t.lblDeadline;
+  document.getElementById('lblLocation').textContent = t.lblLocation;
+  document.getElementById('lblContent').textContent = t.lblContent;
+  document.getElementById('formTitle').placeholder = t.phTitle;
+  document.getElementById('formLocation').placeholder = t.phLocation;
+  document.getElementById('formContent').placeholder = t.phContent;
+  document.getElementById('btnCancel').textContent = t.cancel;
+  document.getElementById('btnSave').textContent = t.save;
+}
+
+function renderTypeSelector(selected) {
+  document.getElementById('typeSelector').innerHTML = TYPES.map(tp =>
+    `<div class="type-option ${tp === selected ? 'selected' : ''}" onclick="selectType(this, '${tp}')">${tp}</div>`
+  ).join('');
+}
+
+function selectType(el, tp) {
+  document.querySelectorAll('.type-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function getSelectedType() {
+  const sel = document.querySelector('.type-option.selected');
+  return sel ? sel.textContent : 'task';
+}
+
+function hideModal() { document.getElementById('addModal').classList.remove('show'); }
+
+async function saveForm() {
+  const title = document.getElementById('formTitle').value.trim();
+  if (!title) return;
+
+  const body = {
+    title,
+    type: getSelectedType(),
+    start_date: document.getElementById('formStart').value || null,
+    deadline: document.getElementById('formDeadline').value || null,
+    location: document.getElementById('formLocation').value,
+    content: document.getElementById('formContent').value,
+  };
+
+  try {
+    if (editingId) {
+      await api('PUT', '/' + editingId, body);
+    } else {
+      await api('POST', '', body);
+    }
+    hideModal();
+    showToast(t.toastSaved);
+    await loadTodos();
+    if (editingId && currentDetail) showDetail(editingId);
+  } catch (e) {
+    showToast(t.toastError + ': ' + e.message);
+  }
+}
+
+// ===== Confirm =====
+function showConfirmDialog(title, desc, btnText, btnClass, callback) {
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmDesc').textContent = desc;
+  const btn = document.getElementById('confirmAction');
+  btn.textContent = btnText;
+  btn.className = 'btn ' + btnClass;
+  document.getElementById('confirmCancel').textContent = t.cancel;
+  _confirmCallback = callback;
+  document.getElementById('confirmDialog').classList.add('show');
+}
+
+function hideConfirm() { document.getElementById('confirmDialog').classList.remove('show'); _confirmCallback = null; }
+function doConfirmAction() { const cb = _confirmCallback; hideConfirm(); if (cb) cb(); }
+
+function confirmDone(id) {
+  showConfirmDialog(t.confirmDoneTitle, t.confirmDoneDesc, t.markDone, 'btn-done-action', async () => {
+    try {
+      await api('POST', '/' + id + '/done');
+      showToast(t.toastDone);
+      await loadTodos();
+      if (currentDetail && currentDetail.id === id) hideDetail();
+    } catch (e) { showToast(t.toastError); }
+  });
+}
+
+function confirmDelete(id) {
+  showConfirmDialog(t.confirmDeleteTitle, t.confirmDeleteDesc, t.delete, 'btn-danger', async () => {
+    try {
+      await api('DELETE', '/' + id);
+      showToast(t.toastDeleted);
+      await loadTodos();
+      if (currentDetail && currentDetail.id === id) hideDetail();
+    } catch (e) { showToast(t.toastError); }
+  });
+}
+
+function confirmReopen(id) {
+  showConfirmDialog(t.confirmReopenTitle, t.confirmReopenDesc, t.reopen, 'btn-reopen', async () => {
+    try {
+      await api('PUT', '/' + id, { status: 'open' });
+      showToast(t.toastReopened);
+      await loadTodos();
+      if (currentDetail && currentDetail.id === id) hideDetail();
+    } catch (e) { showToast(t.toastError); }
+  });
+}
+
+// ===== Toast =====
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+// ===== Event listeners =====
+document.getElementById('addModal').addEventListener('click', e => { if (e.target === e.currentTarget) hideModal(); });
+document.getElementById('confirmDialog').addEventListener('click', e => { if (e.target === e.currentTarget) hideConfirm(); });
+
+window.addEventListener('popstate', () => {
+  if (document.getElementById('detailView').style.display === 'block') {
+    hideDetail();
+  }
+});
+
+// ===== Theme sync =====
+try {
+  const theme = localStorage.getItem('hub-theme');
+  if (theme !== 'light') document.documentElement.classList.add('dark');
+} catch(e) {}
+window.addEventListener('message', e => {
+  if (e.data && e.data.type === 'hub-theme') {
+    document.documentElement.classList.toggle('dark', e.data.theme === 'dark');
+  }
+});
+
+// ===== Init =====
+loadTodos();
+</script>
+</body>
+</html>

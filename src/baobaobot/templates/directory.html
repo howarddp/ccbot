@@ -17,6 +17,7 @@
   --shadow: 0 1px 3px rgba(0,0,0,.08);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+button { background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
        background: var(--bg); color: var(--text); line-height: 1.5; }
 
@@ -31,7 +32,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .toolbar button { background: none; border: 1px solid var(--border); border-radius: 6px;
                   padding: 6px 10px; cursor: pointer; font-size: 14px; color: var(--text2);
                   transition: .15s; }
-.toolbar button:hover, .toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.toolbar button:hover { background: var(--hover); color: var(--text); }
+.toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 /* Breadcrumb */
 .breadcrumb { display: flex; align-items: center; gap: 4px; padding: 8px 16px;
@@ -156,6 +158,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                    color: var(--text); text-align: left; }
 .ctx-menu button:hover { background: var(--hover); }
 .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
+
+/* Dark mode */
+.dark {
+  --bg: #1a1a2e;
+  --card: #2a2a4a;
+  --border: #3a3a5a;
+  --text: #e5e5e5;
+  --text2: #9a9ab0;
+  --accent: #60a5fa;
+  --hover: #32325a;
+  --shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.dark .search-bar input { background: var(--bg); color: var(--text); }
+.dark .delete-dialog { background: var(--card); color: var(--text); }
+.dark .delete-dialog input { background: var(--bg); color: var(--text); border-color: var(--border); }
+.dark .delete-actions #deleteCancel { background: var(--bg); color: var(--text); }
 
 /* RWD */
 @media (max-width: 767px) {
@@ -694,6 +712,17 @@ document.getElementById('modal').addEventListener('touchstart', e => { touchStar
 document.getElementById('modal').addEventListener('touchend', e => {
   const dx = e.changedTouches[0].clientX - touchStartX;
   if (Math.abs(dx) > 60) navPreview(dx > 0 ? -1 : 1);
+});
+
+// Sync theme with hub
+try {
+  const theme = localStorage.getItem('hub-theme');
+  if (theme !== 'light') document.documentElement.classList.add('dark');
+} catch(e) {}
+window.addEventListener('message', e => {
+  if (e.data && e.data.type === 'hub-theme') {
+    document.documentElement.classList.toggle('dark', e.data.theme === 'dark');
+  }
 });
 
 // Init

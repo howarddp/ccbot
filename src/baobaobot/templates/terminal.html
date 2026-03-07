@@ -34,8 +34,6 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
   flex-shrink: 0;
 }
 .toolbar button:active { background: #555; }
-.toolbar button.mod { background: #4a3a1a; }
-.toolbar button.mod.active { background: #6a5a2a; border-color: #8a7a4a; color: #fff; }
 .status-bar {
   position: fixed; top: 0; left: 0; right: 0;
   height: 24px; background: #007acc; color: #fff;
@@ -54,15 +52,15 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
 <div id="terminal"></div>
 <div class="toolbar">
   <button onclick="sendKey('\x1b')">Esc</button>
-  <button class="mod" id="ctrlBtn" onclick="toggleMod('ctrl')">Ctrl</button>
-  <button onclick="sendKey('\t')">Tab</button>
+  <button onclick="sendKey('\r')">Enter</button>
   <button onclick="sendKey('\x1b[A')">&#x25B2;</button>
   <button onclick="sendKey('\x1b[B')">&#x25BC;</button>
   <button onclick="sendKey('\x1b[D')">&#x25C0;</button>
   <button onclick="sendKey('\x1b[C')">&#x25B6;</button>
+  <button onclick="sendKey('\x1b[5~')">PgUp</button>
+  <button onclick="sendKey('\x1b[6~')">PgDn</button>
   <button onclick="sendKey('\x02')">^B</button>
   <button onclick="sendKey('\x03')">^C</button>
-  <button onclick="sendKey('\x04')">^D</button>
   <button onclick="sendKey('\x1a')">^Z</button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
@@ -87,7 +85,6 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
 
   const statusBar = document.getElementById('statusBar');
   const statusText = document.getElementById('statusText');
-  let ctrlActive = false;
   let socket = null;
   let reconnectAttempts = 0;
   const maxReconnect = 10;
@@ -153,12 +150,6 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
 
   // Terminal input -> WebSocket
   term.onData(function(data) {
-    if (ctrlActive) {
-      var ch = data.charCodeAt(0);
-      if (ch >= 97 && ch <= 122) { data = String.fromCharCode(ch - 96); }
-      else if (ch >= 65 && ch <= 90) { data = String.fromCharCode(ch - 64); }
-      setMod('ctrl', false);
-    }
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(new TextEncoder().encode(data));
     }
@@ -180,17 +171,6 @@ html, body { height: 100%; background: #1e1e1e; overflow: hidden; }
     }
     term.focus();
   };
-
-  window.toggleMod = function(mod) {
-    if (mod === 'ctrl') setMod('ctrl', !ctrlActive);
-  };
-
-  function setMod(mod, active) {
-    if (mod === 'ctrl') {
-      ctrlActive = active;
-      document.getElementById('ctrlBtn').classList.toggle('active', active);
-    }
-  }
 
   connect();
 })();

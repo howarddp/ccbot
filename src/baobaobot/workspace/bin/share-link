@@ -114,6 +114,12 @@ def main() -> None:
         "--port", type=int, default=0, help="Generate a reverse proxy link to a local port"
     )
     parser.add_argument(
+        "--todo", action="store_true", help="Generate a TODO management link (20m TTL)"
+    )
+    parser.add_argument(
+        "--lang", default="en", help="UI language for TODO page (e.g. zh-TW, en)"
+    )
+    parser.add_argument(
         "--ttl", default="", help="Time-to-live (default: 30m, 10m for terminal). Examples: 30m, 2h, 1d"
     )
     parser.add_argument(
@@ -121,8 +127,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.upload and not args.terminal and not args.code and not args.port and not args.path:
-        parser.error("Provide a path to share, or use --upload/--terminal/--code/--port")
+    if not args.upload and not args.terminal and not args.code and not args.port and not args.todo and not args.path:
+        parser.error("Provide a path to share, or use --upload/--terminal/--code/--port/--todo")
 
     secret = os.environ.get("SHARE_SECRET", "")
     if not secret:
@@ -134,8 +140,8 @@ def main() -> None:
         print("Error: SHARE_PUBLIC_URL not set (tunnel not running?)", file=sys.stderr)
         sys.exit(1)
 
-    # Default TTL: 10m for terminal, 1h for code, 30m for others
-    default_ttl = "10m" if args.terminal else "30m"
+    # Default TTL: 10m for terminal, 20m for todo, 30m for others
+    default_ttl = "10m" if args.terminal else ("20m" if args.todo else "30m")
     ttl = _parse_ttl(args.ttl or default_ttl)
 
     # Determine workspace root from CWD or WORKSPACE_ROOTS
@@ -146,7 +152,11 @@ def main() -> None:
 
     name = args.name or _get_tmux_window_name()
 
-    if args.port:
+    if args.todo:
+        token = _generate_token(f"todo:{ws_root}", ttl, secret, name=f"lang:{args.lang}")
+        url = f"{public_url}/todo/{token}/"
+        print(url)
+    elif args.port:
         # Port proxy link — embed port in token name for server extraction
         token = _generate_token(f"port:{args.port}", ttl, secret, name=f"port:{args.port}")
         url = f"{public_url}/port/{token}/"

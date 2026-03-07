@@ -1,212 +1,518 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Hub — {{NAME}}</title>
+<title>{{NAME}}</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; background: #1a1a2e; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+button{background:transparent;border:none;color:inherit;font:inherit;cursor:pointer}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Inter',-apple-system,system-ui,sans-serif}
 
-/* iframe container */
-#frame-container { position: fixed; inset: 0; }
-#frame-container iframe {
-  width: 100%; height: 100%; border: none;
-  background: #1e1e1e;
+/* Utility classes */
+.flex{display:flex}.flex-1{flex:1 1 0%}.flex-col{flex-direction:column}.flex-shrink-0{flex-shrink:0}
+.grid{display:grid}.grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.items-center{align-items:center}.items-stretch{align-items:stretch}.justify-center{justify-content:center}.justify-between{justify-content:space-between}
+.min-w-0{min-width:0}.min-h-0{min-height:0}.w-full{width:100%}
+.w-3\.5{width:.875rem}.w-4{width:1rem}.w-5{width:1.25rem}.w-7{width:1.75rem}.w-8{width:2rem}
+.h-full{height:100%}.h-1{height:.25rem}.h-5{height:1.25rem}.h-7{height:1.75rem}.h-8{height:2rem}.h-12{height:3rem}.h-14{height:3.5rem}.h-px{height:1px}
+.gap-0\.5{gap:.125rem}.gap-1\.5{gap:.375rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}
+.hidden{display:none}.block{display:block}
+.p-0\.5{padding:.125rem}.p-3{padding:.75rem}.p-4{padding:1rem}
+.px-1\.5{padding-left:.375rem;padding-right:.375rem}.px-2{padding-left:.5rem;padding-right:.5rem}.px-2\.5{padding-left:.625rem;padding-right:.625rem}.px-3{padding-left:.75rem;padding-right:.75rem}.px-4{padding-left:1rem;padding-right:1rem}
+.py-0\.5{padding-top:.125rem;padding-bottom:.125rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-2\.5{padding-top:.625rem;padding-bottom:.625rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-3\.5{padding-top:.875rem;padding-bottom:.875rem}
+.pb-2{padding-bottom:.5rem}
+.mx-2{margin-left:.5rem;margin-right:.5rem}.mx-auto{margin-left:auto;margin-right:auto}
+.mb-1{margin-bottom:.25rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.ml-2{margin-left:.5rem}
+.mt-0\.5{margin-top:.125rem}.mt-1\.5{margin-top:.375rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.my-2{margin-top:.5rem;margin-bottom:.5rem}
+.text-\[10px\]{font-size:10px}.text-xs{font-size:.75rem;line-height:1rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-base{font-size:1rem;line-height:1.5rem}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}
+.font-medium{font-weight:500}.font-semibold{font-weight:600}.font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.leading-none{line-height:1}.whitespace-nowrap{white-space:nowrap}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.text-left{text-align:left}.text-center{text-align:center}
+.bg-white{background-color:#fff}.bg-gray-50{background-color:#f9fafb}.bg-gray-100{background-color:#f3f4f6}.bg-gray-800{background-color:#1f2937}
+.bg-blue-500{background-color:#3b82f6}.bg-red-500{background-color:#ef4444}.bg-green-100{background-color:#dcfce7}.bg-red-100{background-color:#fee2e2}
+.text-white{color:#fff}.text-gray-100{color:#f3f4f6}.text-gray-300{color:#d1d5db}.text-gray-400{color:#9ca3af}.text-gray-500{color:#6b7280}.text-gray-600{color:#4b5563}.text-gray-800{color:#1f2937}.text-gray-900{color:#111827}
+.text-blue-500{color:#3b82f6}.text-red-500{color:#ef4444}.text-green-700{color:#15803d}.text-red-700{color:#b91c1c}
+.border-gray-100{border-color:#f3f4f6}.border-gray-200{border-color:#e5e7eb}.border-gray-300{border-color:#d1d5db}
+.divide-y>*+*{border-top-width:1px;border-style:solid}.divide-gray-100>*+*{border-color:#f3f4f6}
+.border{border-width:1px;border-style:solid;border-color:#e5e7eb}.border-r{border-right-width:1px;border-right-style:solid}.border-b{border-bottom-width:1px;border-bottom-style:solid}.border-t{border-top-width:1px;border-top-style:solid}.border-2{border-width:2px;border-style:solid}
+.rounded{border-radius:.25rem}.rounded-md{border-radius:.375rem}.rounded-lg{border-radius:.5rem}.rounded-xl{border-radius:.75rem}.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}
+.shadow-sm{box-shadow:0 1px 2px 0 rgba(0,0,0,.05)}.shadow-lg{box-shadow:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1)}
+.transition-all{transition:all .15s ease}.transition-colors{transition:color .15s,background-color .15s,border-color .15s}
+.z-50{z-index:50}.overflow-hidden{overflow:hidden}
+.hover\:bg-gray-100:hover{background-color:#f3f4f6}.active\:bg-gray-50:active{background-color:#f9fafb}
+/* Dark */
+.dark .dark\:bg-\[\#1a1a2e\]{background-color:#1a1a2e}.dark .dark\:bg-\[\#222244\]{background-color:#222244}.dark .dark\:bg-\[\#2a2a4a\]{background-color:#2a2a4a}
+.dark .dark\:bg-white\/5{background-color:rgba(255,255,255,.05)}.dark .dark\:bg-gray-200{background-color:#e5e7eb}.dark .dark\:bg-gray-600{background-color:#4b5563}.dark .dark\:bg-gray-700{background-color:#374151}.dark .dark\:bg-gray-800{background-color:#1f2937}
+.dark .dark\:bg-green-900\/30{background-color:rgba(20,83,45,.3)}.dark .dark\:bg-red-900\/30{background-color:rgba(127,29,29,.3)}
+.dark .dark\:text-gray-100{color:#f3f4f6}.dark .dark\:text-gray-300{color:#d1d5db}.dark .dark\:text-gray-400{color:#9ca3af}.dark .dark\:text-gray-600{color:#4b5563}.dark .dark\:text-gray-800{color:#1f2937}
+.dark .dark\:text-blue-400{color:#60a5fa}.dark .dark\:text-green-400{color:#4ade80}.dark .dark\:text-red-400{color:#f87171}
+.dark .dark\:border-gray-600{border-color:#4b5563}.dark .dark\:border-gray-700{border-color:#374151}.dark .dark\:border-gray-700\/60{border-color:rgba(55,65,81,.6)}
+.dark .dark\:divide-gray-700>*+*{border-color:#374151}
+.dark .dark\:block{display:block}.dark .dark\:hidden{display:none}
+.dark .dark\:hover\:bg-gray-700:hover{background-color:#374151}.dark .dark\:active\:bg-gray-700:active{background-color:#374151}
+
+/* Sidebar (desktop >=768) */
+.sidebar{display:none}
+@media(min-width:768px){
+  .sidebar{display:flex;flex-direction:column;width:220px;flex-shrink:0;transition:width .2s ease}
+  .sidebar.collapsed{width:56px;overflow:hidden}
+  .sidebar.collapsed .sidebar-label,.sidebar.collapsed .sidebar-footer-text{display:none}
+  .sidebar.collapsed .sidebar-header-text{display:none}
+  .sidebar.collapsed nav{padding-left:6px;padding-right:6px}
+  .mobile-bar{display:none!important}
+  .app-main{height:100%!important}
+}
+.sidebar-item{transition:background .15s,color .15s;border-left:3px solid transparent}
+.sidebar-item:hover{background:rgba(0,0,0,.03)}
+.dark .sidebar-item:hover{background:rgba(255,255,255,.04)}
+.sidebar-item.active{background:transparent;color:#2563eb;border-left-color:#2563eb;font-weight:500}
+.dark .sidebar-item.active{color:#60a5fa;border-left-color:#60a5fa}
+
+/* Tab bar (mobile) */
+.tab-bar{padding-bottom:env(safe-area-inset-bottom,0)}
+.tab-item{transition:color .15s}
+.tab-item.active{color:#2563eb}
+.dark .tab-item.active{color:#60a5fa}
+.tab-item .tab-dot{width:4px;height:4px;border-radius:50%;background:#2563eb;opacity:0;transition:opacity .15s}
+.dark .tab-item .tab-dot{background:#60a5fa}
+.tab-item.active .tab-dot{opacity:1}
+
+/* Pages */
+.page{display:none;height:100%;overflow-y:auto}
+.page.active{display:flex;flex-direction:column}
+.page::-webkit-scrollbar{width:0}
+@media(min-width:768px){
+  .page::-webkit-scrollbar{width:6px}
+  .page::-webkit-scrollbar-thumb{background:rgba(0,0,0,.12);border-radius:3px}
+  .dark .page::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15)}
 }
 
-/* loading overlay */
-#loading {
-  position: fixed; inset: 0; z-index: 50;
-  display: flex; align-items: center; justify-content: center;
-  background: #1a1a2e; color: #888; font-size: 14px;
-}
-#loading.hidden { display: none; }
+/* Cards */
+.card{transition:box-shadow .15s,transform .1s}
+.card:active{transform:scale(.98)}
+@media(min-width:768px){.card:active{transform:none}.card:hover{box-shadow:0 2px 8px rgba(0,0,0,.08)}}
+.dark .card:hover{box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.dark .shadow-sm{box-shadow:0 1px 3px rgba(0,0,0,.25)}
 
-/* FAB */
-#fab {
-  position: fixed; bottom: 24px; right: 24px; z-index: 100;
-  width: 52px; height: 52px; border-radius: 50%;
-  background: #6c5ce7; color: #fff; border: none;
-  font-size: 22px; cursor: pointer;
-  box-shadow: 0 4px 16px rgba(108, 92, 231, 0.4);
-  transition: transform 0.2s, background 0.2s;
-  display: flex; align-items: center; justify-content: center;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-#fab:hover { background: #5a4bd1; }
-#fab.open { transform: rotate(45deg); background: #e74c3c; }
+/* Nav icons */
+.nav-icon{width:1.25rem;height:1.25rem;flex-shrink:0}
+.nav-icon svg{width:100%;height:100%;display:block}
 
-/* backdrop */
-#backdrop {
-  position: fixed; inset: 0; z-index: 90;
-  background: rgba(0,0,0,0.4); opacity: 0;
-  pointer-events: none; transition: opacity 0.2s;
-}
-#backdrop.open { opacity: 1; pointer-events: auto; }
+/* TTL */
+.ttl-bar{height:2px;transition:width .5s linear}
 
-/* menu */
-#menu {
-  position: fixed; bottom: 88px; right: 24px; z-index: 100;
-  background: #2d2d44; border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-  padding: 8px 0; min-width: 200px;
-  transform: scale(0.9) translateY(10px); opacity: 0;
-  pointer-events: none;
-  transition: transform 0.2s, opacity 0.2s;
-  transform-origin: bottom right;
-}
-#menu.open { transform: scale(1) translateY(0); opacity: 1; pointer-events: auto; }
+/* Toast */
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;transition:all .3s;pointer-events:none;z-index:200}
+@media(min-width:768px){.toast{bottom:32px}}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
-.menu-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px; color: #ddd; font-size: 14px;
-  cursor: pointer; transition: background 0.15s;
-  text-decoration: none;
-  -webkit-tap-highlight-color: transparent;
-}
-.menu-item:hover { background: #3d3d5c; }
-.menu-item.active { background: #4a4a6a; color: #fff; }
-.menu-item.disabled { opacity: 0.35; pointer-events: none; }
-.menu-item .icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
-.menu-item .label { flex: 1; }
+/* Iframe pages */
+.iframe-page{flex:1;position:relative}
+.iframe-page iframe{width:100%;height:100%;border:none}
+.iframe-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:inherit}
 
-.menu-divider { height: 1px; background: #444; margin: 6px 0; }
-
-/* active indicator */
-.menu-item .dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: #6c5ce7; flex-shrink: 0;
-  visibility: hidden;
-}
-.menu-item.active .dot { visibility: visible; }
-
-/* new-tab button */
-.menu-item .newtab {
-  font-size: 12px; color: #888; padding: 2px 6px;
-  border-radius: 4px; transition: color 0.15s;
-}
-.menu-item:hover .newtab { color: #bbb; }
+/* Content max-width */
+@media(min-width:768px){.page-content{max-width:680px}}
 </style>
 </head>
-<body>
 
-<div id="loading">Loading...</div>
-<div id="frame-container"></div>
+<body class="bg-gray-50 text-gray-900 dark:bg-[#1a1a2e] dark:text-gray-100">
+<div class="flex h-full">
 
-<div id="backdrop"></div>
-<div id="menu"></div>
-<button id="fab">⚡</button>
+<!-- Sidebar (desktop) -->
+<aside class="sidebar bg-white dark:bg-[#222244] border-r border-gray-200 dark:border-gray-700">
+  <div class="px-4 h-12 flex items-center border-b border-gray-100 dark:border-gray-700">
+    <button onclick="toggleSidebar()" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 flex-shrink-0" title="Toggle sidebar">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" stroke-linecap="round"/></svg>
+    </button>
+    <span class="sidebar-header-text ml-2 text-base font-semibold whitespace-nowrap">{{NAME}}</span>
+  </div>
+  <nav class="flex-1 py-1 flex flex-col" id="sidebar-nav"></nav>
+  <div class="px-3 py-3 border-t border-gray-100 dark:border-gray-700">
+    <div class="flex items-center justify-between px-2">
+      <div class="sidebar-footer-text text-xs text-gray-400"><span class="font-mono" id="ttl-sidebar"></span> remaining</div>
+      <button onclick="toggleTheme()" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 flex-shrink-0" title="Toggle theme">
+        <svg class="w-3.5 h-3.5 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg class="w-3.5 h-3.5 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div class="mt-1.5 mx-2"><div class="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-1"><div class="ttl-bar bg-blue-500 rounded-full h-1" id="ttl-bar-sidebar" style="width:100%"></div></div></div>
+  </div>
+</aside>
+
+<!-- Main -->
+<div class="flex-1 flex flex-col min-w-0">
+  <!-- Top bar (mobile) -->
+  <header class="mobile-bar flex items-center justify-between px-4 h-12 bg-white dark:bg-[#222244] border-b border-gray-200 dark:border-gray-700 z-50">
+    <div class="flex items-center gap-2">
+      <span class="text-base font-semibold">{{NAME}}</span>
+      <span class="text-xs text-gray-400 font-mono" id="ttl-mobile"></span>
+    </div>
+    <button onclick="toggleTheme()" class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400">
+      <svg class="w-4 h-4 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke-width="2" stroke-linecap="round"/></svg>
+      <svg class="w-4 h-4 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </header>
+  <!-- TTL bar (mobile) -->
+  <div class="mobile-bar w-full bg-gray-100 dark:bg-gray-800"><div class="ttl-bar bg-blue-500" id="ttl-bar-mobile" style="width:100%"></div></div>
+
+  <!-- Pages container -->
+  <main class="app-main flex-1 min-h-0" style="height:calc(100% - 48px - 2px - 56px)">
+    <!-- Home -->
+    <div id="page-home" class="page active p-4 gap-4">
+      <div class="page-content mx-auto w-full">
+        <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl p-4 shadow-sm border border-gray-100 dark:border-gray-700 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Workspace</span>
+            <span class="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full" id="home-status">Active</span>
+          </div>
+          <div class="text-lg font-semibold mb-1">{{NAME}}</div>
+          <div class="text-xs text-gray-400" id="home-agent"></div>
+        </div>
+        <!-- Quick actions -->
+        <div class="grid grid-cols-4 gap-3 mb-4" id="home-actions"></div>
+        <!-- TODO summary -->
+        <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-4" id="home-todo-card" style="display:none">
+          <div class="flex items-center justify-between p-4 pb-2">
+            <span class="text-sm font-medium">Open TODOs</span>
+            <button onclick="switchTab('todo')" class="text-xs text-blue-500 dark:text-blue-400">View All</button>
+          </div>
+          <div id="home-todo-list" class="divide-y divide-gray-100 dark:divide-gray-700"></div>
+          <div class="px-4 py-2 text-center" id="home-todo-more" style="display:none">
+            <span class="text-xs text-gray-400"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Dynamic pages inserted by JS -->
+  </main>
+
+  <!-- Tab bar (mobile) -->
+  <nav class="mobile-bar tab-bar flex items-stretch bg-white dark:bg-[#222244] border-t border-gray-200 dark:border-gray-700 h-14 z-50" id="tab-bar"></nav>
+</div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast px-4 py-2 bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-800 text-sm rounded-full shadow-lg"></div>
 
 <script>
-const TOOLS = [
-  { key: 'browse', icon: '🌐', label: 'Browse Files' },
-  { key: 'upload', icon: '📤', label: 'Upload' },
-  { key: 'term',   icon: '💻', label: 'Terminal' },
-  { key: 'tmux',   icon: '📟', label: 'Tmux' },
-  { key: 'log',    icon: '📋', label: 'Bot Log' },
-  { key: 'code',   icon: '📎', label: 'VS Code' },
+// --- Config ---
+const WS_NAME = '{{NAME}}';
+const TTL_TOTAL = {{TTL}};
+let ttlSeconds = TTL_TOTAL;
+let urls = {};
+let currentTab = 'home';
+
+// SVG icons (stroke-based, monochrome)
+const IC = {
+  home:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+  browse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+  todo:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+  tmux:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="2" y1="12" x2="12" y2="12"/></svg>',
+  more:   '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  term:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+  log:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+  upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
+  code:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+};
+
+// All available tools
+const TABS = [
+  { key:'home',     label:'Home',     primary:true },
+  { key:'browse',   label:'Files',    primary:true },
+  { key:'todo',     label:'TODO',     primary:true },
+  { key:'tmux',     label:'Tmux',     primary:true },
+  { key:'more',     label:'More',     primary:true, mobileOnly:true },
+  { key:'term',     label:'Terminal', primary:false },
+  { key:'log',      label:'Bot Log',  primary:false },
+  { key:'upload',   label:'Upload',   primary:false },
+  { key:'code',     label:'VS Code',  primary:false },
 ];
 
-let urls = {};
-let current = '';
-const fab = document.getElementById('fab');
-const menu = document.getElementById('menu');
-const backdrop = document.getElementById('backdrop');
-const container = document.getElementById('frame-container');
-const loading = document.getElementById('loading');
-
-// Fetch sub-URLs
+// --- Init ---
 async function init() {
   try {
     const resp = await fetch(location.pathname.replace(/\/$/, '') + '/urls');
     if (!resp.ok) throw new Error(resp.status);
     urls = await resp.json();
-    buildMenu();
-    // Default to browse
-    switchTo('browse');
   } catch (e) {
-    loading.textContent = 'Failed to load: ' + e.message;
+    document.querySelector('main').innerHTML = '<div class="flex-1 flex items-center justify-center text-gray-400">Failed to load: ' + e.message + '</div>';
+    return;
   }
+  buildNav();
+  buildPages();
+  buildHomeActions();
+  loadHomeTodos();
+  switchTab('home');
 }
 
-function buildMenu() {
-  let html = '';
-  for (const t of TOOLS) {
-    const avail = !!urls[t.key];
-    const cls = avail ? '' : ' disabled';
-    html += `<div class="menu-item${cls}" data-key="${t.key}">
-      <span class="dot"></span>
-      <span class="icon">${t.icon}</span>
-      <span class="label">${t.label}</span>
-    </div>`;
-  }
-  html += '<div class="menu-divider"></div>';
-  html += `<div class="menu-item" id="newtab-btn">
-    <span class="dot" style="visibility:hidden"></span>
-    <span class="icon">↗️</span>
-    <span class="label">Open in New Tab</span>
-  </div>`;
-  menu.innerHTML = html;
-
-  // Bind clicks
-  menu.querySelectorAll('.menu-item[data-key]').forEach(el => {
-    el.addEventListener('click', () => {
-      const key = el.dataset.key;
-      if (urls[key]) { switchTo(key); closeMenu(); }
-    });
-  });
-  document.getElementById('newtab-btn').addEventListener('click', () => {
-    if (current && urls[current]) {
-      window.open(urls[current], '_blank');
-      closeMenu();
+// --- Navigation ---
+function buildNav() {
+  // Sidebar (desktop) — show all tabs except 'more'
+  const sidebar = document.getElementById('sidebar-nav');
+  let shtml = '';
+  let hasDivider = false;
+  for (const t of TABS) {
+    if (t.key === 'more') continue;
+    if (t.key === 'home') {
+      shtml += navItem(t, 'sidebar');
+      continue;
     }
+    if (!urls[t.key]) continue;
+    // no divider between primary and secondary items
+    shtml += navItem(t, 'sidebar');
+  }
+  sidebar.innerHTML = shtml;
+
+  // Tab bar (mobile) — show primary tabs only
+  const tabbar = document.getElementById('tab-bar');
+  let thtml = '';
+  for (const t of TABS) {
+    if (!t.primary) continue;
+    if (t.key !== 'home' && t.key !== 'more' && !urls[t.key]) continue;
+    thtml += `<button onclick="switchTab('${t.key}')" class="tab-item flex-1 flex flex-col items-center justify-center gap-0.5 text-gray-400" data-tab="${t.key}">
+      <span class="nav-icon">${IC[t.key]}</span>
+      <span class="text-[10px]">${t.label}</span>
+      <span class="tab-dot"></span>
+    </button>`;
+  }
+  tabbar.innerHTML = thtml;
+}
+
+function navItem(t, type) {
+  if (type === 'sidebar') {
+    return `<button onclick="switchTab('${t.key}')" class="sidebar-item flex items-center gap-3 px-3 py-2.5 text-sm text-gray-600 dark:text-gray-400 w-full text-left" data-tab="${t.key}">
+      <span class="nav-icon">${IC[t.key]}</span><span class="sidebar-label">${t.label}</span>
+    </button>`;
+  }
+}
+
+// --- Pages ---
+function buildPages() {
+  const main = document.querySelector('main');
+  // Create iframe pages for each tool with a URL
+  for (const t of TABS) {
+    if (t.key === 'home' || t.key === 'more') continue;
+    if (!urls[t.key]) continue;
+    const div = document.createElement('div');
+    div.id = 'page-' + t.key;
+    div.className = 'page';
+    div.innerHTML = `<div class="iframe-page">
+      <div class="iframe-loading bg-gray-50 dark:bg-[#1a1a2e] text-gray-400 text-sm" id="loading-${t.key}">Loading ${t.label}...</div>
+    </div>`;
+    main.appendChild(div);
+  }
+  // More page (mobile)
+  const more = document.createElement('div');
+  more.id = 'page-more';
+  more.className = 'page p-4 gap-3';
+  let moreHtml = '<div class="page-content mx-auto w-full"><div class="text-lg font-semibold mb-3">More</div>';
+  moreHtml += '<div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">';
+  for (const t of TABS) {
+    if (t.primary || t.key === 'home' || t.key === 'more') continue;
+    if (!urls[t.key]) continue;
+    moreHtml += `<button onclick="switchTab('${t.key}')" class="w-full flex items-center gap-3 px-4 py-3.5 active:bg-gray-50 dark:active:bg-gray-700 text-left">
+      <span class="nav-icon text-gray-500 dark:text-gray-400">${IC[t.key]}</span>
+      <div class="flex-1"><div class="text-sm">${t.label}</div></div>
+      <span class="text-gray-300 dark:text-gray-600">›</span>
+    </button>`;
+  }
+  moreHtml += '</div>';
+  // Appearance
+  moreHtml += `<div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mt-3">
+    <div class="flex items-center gap-3 px-4 py-3.5">
+      <span class="nav-icon text-gray-500 dark:text-gray-400"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10"/><path d="M2 12h20"/></svg></span>
+      <div class="flex-1"><div class="text-sm">Appearance</div></div>
+      <div class="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5 gap-0.5">
+        <button onclick="setTheme('light')" class="theme-btn px-2.5 py-1 text-xs rounded-md transition-all" data-theme="light">Light</button>
+        <button onclick="setTheme('dark')" class="theme-btn px-2.5 py-1 text-xs rounded-md transition-all" data-theme="dark">Dark</button>
+      </div>
+    </div>
+  </div>`;
+  moreHtml += '<div class="text-center text-xs text-gray-400 mt-4">Link expires in <span class="font-mono ttl-display"></span></div>';
+  moreHtml += '</div>';
+  more.innerHTML = moreHtml;
+  main.appendChild(more);
+}
+
+// --- Home page ---
+function buildHomeActions() {
+  const grid = document.getElementById('home-actions');
+  const actions = [
+    { key:'browse', label:'Files' },
+    { key:'todo',   label:'TODO' },
+    { key:'tmux',   label:'Tmux' },
+    { key:'upload', label:'Upload' },
+  ];
+  grid.innerHTML = actions.filter(a => urls[a.key]).map(a =>
+    `<button onclick="switchTab('${a.key}')" class="card flex flex-col items-center gap-2 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2a2a4a] shadow-sm">
+      <span class="nav-icon text-gray-500 dark:text-gray-400">${IC[a.key]}</span>
+      <span class="text-xs text-gray-600 dark:text-gray-400">${a.label}</span>
+    </button>`
+  ).join('');
+}
+
+async function loadHomeTodos() {
+  if (!urls.todo) return;
+  try {
+    const apiUrl = urls.todo.replace(/\/$/, '') + '/api';
+    const resp = await fetch(apiUrl);
+    if (!resp.ok) return;
+    const raw = await resp.json();
+    const all = Array.isArray(raw) ? raw : (raw.items || []);
+    const items = all.filter(t => t.status === 'open');
+    if (items.length === 0) return;
+
+    const card = document.getElementById('home-todo-card');
+    card.style.display = '';
+    const list = document.getElementById('home-todo-list');
+    const show = items.slice(0, 3);
+    list.innerHTML = show.map(t => {
+      const typeClass = t.type === 'bug'
+        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+        : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400';
+      const date = t.created_at ? t.created_at.substring(5, 10).replace('-', '/') : '';
+      return `<div class="flex items-center gap-3 px-4 py-3">
+        <div class="w-5 h-5 rounded-full border-2 border-gray-300 dark:border-gray-600 flex-shrink-0"></div>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm truncate">${esc(t.title)}</div>
+          <div class="flex gap-1.5 mt-0.5">
+            <span class="text-[10px] px-1.5 py-0.5 ${typeClass} rounded">${esc(t.type)}</span>
+            <span class="text-[10px] text-gray-400">${date}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+    if (items.length > 3) {
+      const more = document.getElementById('home-todo-more');
+      more.style.display = '';
+      more.querySelector('span').textContent = '+' + (items.length - 3) + ' more';
+    }
+  } catch (e) { /* silent */ }
+}
+
+// --- Tab switching ---
+function switchTab(name) {
+  currentTab = name;
+  // Lazy-load iframe
+  if (name !== 'home' && name !== 'more' && urls[name]) {
+    const page = document.getElementById('page-' + name);
+    if (page && !page.querySelector('iframe')) {
+      const wrap = page.querySelector('.iframe-page');
+      if (wrap) {
+        const iframe = document.createElement('iframe');
+        iframe.src = urls[name];
+        iframe.addEventListener('load', () => {
+          const ld = document.getElementById('loading-' + name);
+          if (ld) ld.style.display = 'none';
+        });
+        wrap.appendChild(iframe);
+      }
+    }
+  }
+
+  // Update pages
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+
+  // Update sidebar
+  document.querySelectorAll('.sidebar-item').forEach(s => {
+    const isActive = s.dataset.tab === name;
+    s.classList.toggle('active', isActive);
+    s.classList.toggle('text-gray-600', !isActive);
+    s.classList.toggle('dark:text-gray-400', !isActive);
+  });
+
+  // Update tab bar
+  document.querySelectorAll('.tab-item').forEach(t => {
+    const isActive = t.dataset.tab === name;
+    t.classList.toggle('active', isActive);
+    t.classList.toggle('text-gray-400', !isActive);
   });
 }
 
-function switchTo(key) {
-  if (!urls[key]) return;
-  current = key;
-  loading.classList.remove('hidden');
+// --- Sidebar collapse ---
+function toggleSidebar() {
+  const sb = document.querySelector('.sidebar');
+  sb.classList.toggle('collapsed');
+  localStorage.setItem('hub-sidebar', sb.classList.contains('collapsed') ? 'collapsed' : '');
+}
+if (localStorage.getItem('hub-sidebar') === 'collapsed') {
+  document.querySelector('.sidebar')?.classList.add('collapsed');
+}
 
-  // Replace iframe to avoid back-button pollution
-  container.innerHTML = '';
-  const iframe = document.createElement('iframe');
-  iframe.src = urls[key];
-  iframe.addEventListener('load', () => loading.classList.add('hidden'));
-  container.appendChild(iframe);
+// --- Theme ---
+function setTheme(theme) {
+  document.documentElement.classList.toggle('dark', theme === 'dark');
+  localStorage.setItem('hub-theme', theme);
+  updateThemeBtns();
+  // Sync theme to all iframes
+  document.querySelectorAll('iframe').forEach(f => {
+    try { f.contentWindow.postMessage({type:'hub-theme', theme}, '*'); } catch(e) {}
+  });
+}
+function toggleTheme() {
+  setTheme(document.documentElement.classList.contains('dark') ? 'light' : 'dark');
+}
+function updateThemeBtns() {
+  const isDark = document.documentElement.classList.contains('dark');
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    const active = (btn.dataset.theme === 'dark') === isDark;
+    btn.classList.toggle('bg-white', active && !isDark);
+    btn.classList.toggle('dark:bg-gray-600', active);
+    btn.classList.toggle('shadow-sm', active);
+    btn.classList.toggle('font-medium', active);
+  });
+}
+const savedTheme = localStorage.getItem('hub-theme');
+if (savedTheme !== 'light') document.documentElement.classList.add('dark');
+updateThemeBtns();
 
-  // Update active state in menu
-  menu.querySelectorAll('.menu-item[data-key]').forEach(el => {
-    el.classList.toggle('active', el.dataset.key === key);
+// --- Toast ---
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// --- TTL ---
+function updateTTL() {
+  const m = Math.floor(ttlSeconds / 60);
+  const s = ttlSeconds % 60;
+  const text = m + ':' + String(s).padStart(2, '0');
+  const pct = Math.max(0, (ttlSeconds / TTL_TOTAL) * 100);
+  const warn = ttlSeconds <= 120;
+
+  // Update all displays
+  document.querySelectorAll('#ttl-mobile, #ttl-sidebar, .ttl-display').forEach(el => {
+    el.textContent = text;
+    el.classList.toggle('text-red-500', warn);
+  });
+  document.querySelectorAll('#ttl-bar-mobile, #ttl-bar-sidebar').forEach(bar => {
+    bar.style.width = pct + '%';
+    bar.classList.toggle('bg-blue-500', !warn);
+    bar.classList.toggle('bg-red-500', warn);
   });
 
-  // Update page title
-  const tool = TOOLS.find(t => t.key === key);
-  document.title = tool ? `${tool.label} — {{NAME}}` : 'Hub';
+  if (ttlSeconds <= 0) {
+    document.querySelector('main').innerHTML = '<div class="flex-1 flex items-center justify-center"><div class="text-center"><div class="text-4xl mb-3">⏰</div><div class="text-gray-500 dark:text-gray-400">Link expired. Please generate a new one.</div></div></div>';
+    return;
+  }
+  ttlSeconds--;
+  setTimeout(updateTTL, 1000);
 }
+updateTTL();
 
-function toggleMenu() {
-  const open = !menu.classList.contains('open');
-  menu.classList.toggle('open', open);
-  backdrop.classList.toggle('open', open);
-  fab.classList.toggle('open', open);
-}
-function closeMenu() {
-  menu.classList.remove('open');
-  backdrop.classList.remove('open');
-  fab.classList.remove('open');
-}
+// --- Utils ---
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-fab.addEventListener('click', toggleMenu);
-backdrop.addEventListener('click', closeMenu);
-
-// Keyboard: Escape closes menu
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeMenu();
-});
-
+// --- Start ---
 init();
 </script>
 </body>

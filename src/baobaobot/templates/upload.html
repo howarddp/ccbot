@@ -5,54 +5,66 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Upload Files</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, system-ui, sans-serif; background: #f5f5f5;
-         padding: 20px; max-width: 600px; margin: 0 auto; }
-  h1 { font-size: 1.4em; margin-bottom: 4px; color: #333; }
-  .source-name { font-size: 0.85em; color: #888; margin-bottom: 14px; }
-  .drop-zone { border: 2px dashed #ccc; border-radius: 12px; padding: 40px 20px;
-               text-align: center; color: #888; cursor: pointer; transition: .2s;
-               background: #fff; margin-bottom: 16px; }
-  .drop-zone.drag { border-color: #4a9eff; background: #f0f7ff; color: #4a9eff; }
-  .drop-zone input { display: none; }
-  .file-list { margin-bottom: 16px; }
-  .file-item { display: flex; justify-content: space-between; align-items: center;
-               padding: 8px 12px; background: #fff; border-radius: 8px;
-               margin-bottom: 6px; font-size: 0.9em; }
-  .file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis;
-                     white-space: nowrap; margin-right: 8px; }
-  .file-item .size { color: #888; font-size: 0.85em; white-space: nowrap; }
-  .file-item .remove { color: #e55; cursor: pointer; margin-left: 8px;
-                       font-size: 1.1em; padding: 0 4px; }
-  textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px;
-             font-size: 1em; resize: vertical; min-height: 60px; margin-bottom: 16px; }
-  button { width: 100%; padding: 14px; background: #4a9eff; color: #fff; border: none;
-           border-radius: 8px; font-size: 1.1em; cursor: pointer; }
-  button:disabled { background: #ccc; }
-  .progress { display: none; margin-top: 12px; }
-  .progress-bar { height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
-  .progress-fill { height: 100%; background: #4a9eff; width: 0%; transition: width .3s; }
-  .status { text-align: center; margin-top: 12px; color: #888; }
-  .done { color: #4caf50; font-size: 1.2em; text-align: center; margin-top: 20px; }
-  .expired { color: #e55; font-size: 1.2em; text-align: center; margin-top: 40px; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:'Inter',-apple-system,system-ui,sans-serif}
+/* Utility classes */
+.flex{display:flex}.flex-1{flex:1 1 0%}.flex-col{flex-direction:column}.items-center{align-items:center}.justify-center{justify-content:center}
+.hidden{display:none}.w-full{width:100%}.h-full{height:100%}.h-1\.5{height:.375rem}.min-h-screen{min-height:100vh}.max-w-lg{max-width:32rem}
+.p-4{padding:1rem}.p-8{padding:2rem}.px-1{padding-left:.25rem;padding-right:.25rem}.px-3{padding-left:.75rem;padding-right:.75rem}.px-4{padding-left:1rem;padding-right:1rem}
+.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-16{padding-top:4rem;padding-bottom:4rem}
+.mx-auto{margin-left:auto;margin-right:auto}.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.mt-2{margin-top:.5rem}.mt-4{margin-top:1rem}
+.gap-2{gap:.5rem}.space-y-1\.5>*+*{margin-top:.375rem}
+.text-xs{font-size:.75rem;line-height:1rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}
+.font-medium{font-weight:500}.font-semibold{font-weight:600}.leading-none{line-height:1}.whitespace-nowrap{white-space:nowrap}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.text-center{text-align:center}
+.bg-white{background-color:#fff}.bg-gray-50{background-color:#f9fafb}.bg-gray-200{background-color:#e5e7eb}.bg-gray-300{background-color:#d1d5db}.bg-blue-500{background-color:#3b82f6}
+.text-white{color:#fff}.text-gray-400{color:#9ca3af}.text-gray-500{color:#6b7280}.text-gray-900{color:#111827}.text-red-400{color:#f87171}.text-green-600{color:#16a34a}
+.border{border-width:1px;border-style:solid;border-color:#e5e7eb}.border-2{border-width:2px;border-style:solid}.border-dashed{border-style:dashed}.border-gray-100{border-color:#f3f4f6}.border-gray-200{border-color:#e5e7eb}.border-blue-400{border-color:#60a5fa}
+.rounded-lg{border-radius:.5rem}.rounded-xl{border-radius:.75rem}.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}
+.shadow-sm{box-shadow:0 1px 2px 0 rgba(0,0,0,.05)}.outline-none{outline:none}.resize-y{resize:vertical}.min-h-\[60px\]{min-height:60px}.overflow-hidden{overflow:hidden}.cursor-pointer{cursor:pointer}
+.transition-colors{transition:color .15s,background-color .15s,border-color .15s}.transition-all{transition:all .15s ease}.duration-300{transition-duration:300ms}
+.hover\:border-blue-400:hover{border-color:#60a5fa}.hover\:bg-blue-600:hover{background-color:#2563eb}.hover\:text-red-600:hover{color:#dc2626}
+.focus\:border-blue-400:focus{border-color:#60a5fa}
+.disabled\:bg-gray-300:disabled{background-color:#d1d5db}.disabled\:cursor-not-allowed:disabled{cursor:not-allowed}
+.placeholder-gray-400::placeholder{color:#9ca3af}
+/* Dark */
+.dark .dark\:bg-\[\#1a1a2e\]{background-color:#1a1a2e}.dark .dark\:bg-\[\#2a2a4a\]{background-color:#2a2a4a}
+.dark .dark\:bg-gray-600{background-color:#4b5563}.dark .dark\:bg-gray-700{background-color:#374151}
+.dark .dark\:text-gray-100{color:#f3f4f6}.dark .dark\:text-gray-400{color:#9ca3af}.dark .dark\:text-green-400{color:#4ade80}
+.dark .dark\:border-gray-600{border-color:#4b5563}.dark .dark\:border-gray-700{border-color:#374151}.dark .dark\:border-blue-500{border-color:#3b82f6}
+.dark .dark\:hover\:border-blue-500:hover{border-color:#3b82f6}.dark .dark\:focus\:border-blue-500:focus{border-color:#3b82f6}
+.dark .dark\:disabled\:bg-gray-600:disabled{background-color:#4b5563}
 </style>
 </head>
-<body>
-<div id="app">
-  <h1>Upload Files</h1>
-  <div class="source-name" id="sourceName"></div>
-  <div class="drop-zone" id="dropZone">
-    <p>Tap to select or drag files here</p>
-    <input type="file" id="fileInput" multiple>
+<body class="bg-gray-50 dark:bg-[#1a1a2e] text-gray-900 dark:text-gray-100 min-h-screen">
+<div class="max-w-lg mx-auto p-4" id="app">
+  <h1 class="text-lg font-semibold mb-1">Upload Files</h1>
+  <div class="text-xs text-gray-400 mb-4" id="sourceName"></div>
+
+  <div class="drop-zone bg-white dark:bg-[#2a2a4a] rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-600 p-8 text-center cursor-pointer transition-colors mb-4 hover:border-blue-400 dark:hover:border-blue-500" id="dropZone">
+    <div class="text-3xl mb-2">📤</div>
+    <p class="text-sm text-gray-500 dark:text-gray-400">Tap to select or drag files here</p>
+    <input type="file" id="fileInput" multiple class="hidden">
   </div>
-  <div class="file-list" id="fileList"></div>
-  <textarea id="description" placeholder="Description (optional)"></textarea>
-  <button id="uploadBtn" disabled>Upload</button>
-  <div class="progress" id="progress">
-    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    <div class="status" id="statusText">Uploading...</div>
+
+  <div id="fileList" class="mb-4 space-y-1.5"></div>
+
+  <textarea id="description" placeholder="Description (optional)"
+    class="w-full px-4 py-3 bg-white dark:bg-[#2a2a4a] border border-gray-200 dark:border-gray-600 rounded-xl text-sm resize-y min-h-[60px] mb-4 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors placeholder-gray-400"></textarea>
+
+  <button id="uploadBtn" disabled
+    class="w-full py-3 bg-blue-500 text-white text-sm font-medium rounded-xl transition-colors disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-blue-600">
+    Upload
+  </button>
+
+  <div class="hidden mt-4" id="progress">
+    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+      <div class="bg-blue-500 h-full rounded-full transition-all duration-300" id="progressFill" style="width:0%"></div>
+    </div>
+    <div class="text-center text-xs text-gray-400 mt-2" id="statusText">Uploading...</div>
   </div>
 </div>
+
 <script>
 const SOURCE_NAME = /*__SOURCE__*/''/*__END__*/;
 if (SOURCE_NAME) document.getElementById('sourceName').textContent = SOURCE_NAME;
@@ -73,8 +85,8 @@ function render() {
   fl.innerHTML = '';
   files.forEach((f, i) => {
     const d = document.createElement('div');
-    d.className = 'file-item';
-    d.innerHTML = `<span class="name">${f.name}</span><span class="size">${formatSize(f.size)}</span><span class="remove" data-i="${i}">&times;</span>`;
+    d.className = 'flex items-center gap-2 px-3 py-2 bg-white dark:bg-[#2a2a4a] rounded-lg border border-gray-100 dark:border-gray-700 text-sm';
+    d.innerHTML = `<span class="flex-1 truncate">${f.name}</span><span class="text-xs text-gray-400 whitespace-nowrap">${formatSize(f.size)}</span><button class="remove text-red-400 hover:text-red-600 text-lg leading-none px-1" data-i="${i}">&times;</button>`;
     fl.appendChild(d);
   });
   btn.disabled = files.length === 0;
@@ -87,11 +99,12 @@ function addFiles(newFiles) {
 
 dz.addEventListener('click', () => fi.click());
 fi.addEventListener('change', () => { addFiles(fi.files); fi.value = ''; });
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
-dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); addFiles(e.dataTransfer.files); });
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('border-blue-400','dark:border-blue-500'); });
+dz.addEventListener('dragleave', () => { dz.classList.remove('border-blue-400','dark:border-blue-500'); });
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('border-blue-400','dark:border-blue-500'); addFiles(e.dataTransfer.files); });
 fl.addEventListener('click', e => {
-  if (e.target.classList.contains('remove')) { files.splice(+e.target.dataset.i, 1); render(); }
+  const rm = e.target.closest('.remove');
+  if (rm) { files.splice(+rm.dataset.i, 1); render(); }
 });
 
 btn.addEventListener('click', async () => {
@@ -99,7 +112,7 @@ btn.addEventListener('click', async () => {
   const pg = document.getElementById('progress');
   const pf = document.getElementById('progressFill');
   const st = document.getElementById('statusText');
-  pg.style.display = 'block';
+  pg.classList.remove('hidden');
 
   const fd = new FormData();
   files.forEach(f => fd.append('files', f));
@@ -112,7 +125,7 @@ btn.addEventListener('click', async () => {
   };
   xhr.onload = () => {
     if (xhr.status === 200) {
-      document.getElementById('app').innerHTML = '<div class="done">Upload complete!</div>';
+      document.getElementById('app').innerHTML = '<div class="flex flex-col items-center justify-center py-16"><div class="text-4xl mb-3">✅</div><div class="text-green-600 dark:text-green-400 font-medium">Upload complete!</div></div>';
     } else {
       st.textContent = 'Upload failed: ' + xhr.statusText;
       btn.disabled = false;
@@ -120,6 +133,17 @@ btn.addEventListener('click', async () => {
   };
   xhr.onerror = () => { st.textContent = 'Network error'; btn.disabled = false; };
   xhr.send(fd);
+});
+
+// Sync theme with parent hub if in iframe
+try {
+  const theme = localStorage.getItem('hub-theme');
+  if (theme !== 'light') document.documentElement.classList.add('dark');
+} catch(e) {}
+window.addEventListener('message', e => {
+  if (e.data && e.data.type === 'hub-theme') {
+    document.documentElement.classList.toggle('dark', e.data.theme === 'dark');
+  }
 });
 </script>
 </body>
