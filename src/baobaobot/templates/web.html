@@ -27,7 +27,7 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif}
 .mx-2{margin-left:.5rem;margin-right:.5rem}.mx-auto{margin-left:auto;margin-right:auto}
 .mb-1{margin-bottom:.25rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.ml-2{margin-left:.5rem}
 .mt-0\.5{margin-top:.125rem}.mt-1\.5{margin-top:.375rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.my-2{margin-top:.5rem;margin-bottom:.5rem}
-.text-\[10px\]{font-size:10px}.text-xs{font-size:.75rem;line-height:1rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-base{font-size:1rem;line-height:1.5rem}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}
+.text-\[10px\]{font-size:10px}.text-xs{font-size:.75rem;line-height:1rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-base{font-size:1rem;line-height:1.5rem}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}
 .font-medium{font-weight:500}.font-semibold{font-weight:600}.font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .leading-none{line-height:1}.whitespace-nowrap{white-space:nowrap}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .text-left{text-align:left}.text-center{text-align:center}
@@ -161,29 +161,66 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif}
 
   <!-- Pages container -->
   <main class="app-main flex-1 min-h-0" style="height:calc(100% - 48px - 2px - 56px)">
-    <!-- Home -->
+    <!-- Home (Dashboard) -->
     <div id="page-home" class="page active p-4 gap-4">
-      <div class="page-content mx-auto w-full">
-        <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl p-4 shadow-sm border border-gray-100 dark:border-gray-700 mb-4">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Workspace</span>
-            <span class="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full" id="home-status">Active</span>
+      <div class="page-content mx-auto w-full" style="max-width:480px">
+        <!-- Stats cards -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" class="mb-4" id="stats-grid">
+          <!-- TODO card -->
+          <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 text-center cursor-pointer transition-colors hover:border-blue-400 dark:hover:border-blue-500" onclick="switchTab('todo')">
+            <div class="flex items-center justify-center gap-2 mb-2">
+              <div class="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
+                <svg class="w-4 h-4 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              </div>
+              <span class="text-xs text-gray-500 dark:text-gray-400">TODO</span>
+            </div>
+            <div class="text-3xl font-semibold" id="stat-todo-open">-</div>
+            <div class="text-[11px] text-gray-400 mt-0.5" id="stat-todo-sub"></div>
           </div>
-          <div class="text-lg font-semibold mb-1">{{NAME}}</div>
-          <div class="text-xs text-gray-400" id="home-agent"></div>
+          <!-- Cron card -->
+          <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 text-center cursor-pointer transition-colors hover:border-blue-400 dark:hover:border-blue-500" onclick="switchTab('cron')">
+            <div class="flex items-center justify-center gap-2 mb-2">
+              <div class="w-8 h-8 rounded-xl bg-green-50 dark:bg-green-900/30 flex items-center justify-center">
+                <svg class="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <span class="text-xs text-gray-500 dark:text-gray-400">Cron</span>
+            </div>
+            <div class="text-3xl font-semibold" id="stat-cron-active">-</div>
+            <div class="text-[11px] text-gray-400 mt-0.5" id="stat-cron-sub"></div>
+          </div>
+          <!-- Memory card -->
+          <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 text-center cursor-pointer transition-colors hover:border-blue-400 dark:hover:border-blue-500" onclick="switchTab('browse')">
+            <div class="flex items-center justify-center gap-2 mb-2">
+              <div class="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-900/30 flex items-center justify-center">
+                <svg class="w-4 h-4 text-purple-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+              </div>
+              <span class="text-xs text-gray-500 dark:text-gray-400">Memory</span>
+            </div>
+            <div class="text-3xl font-semibold" id="stat-memory-daily">-</div>
+            <div class="text-[11px] text-gray-400 mt-0.5" id="stat-memory-sub"></div>
+          </div>
+          <!-- Disk card -->
+          <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 text-center">
+            <div class="flex items-center justify-center gap-2 mb-2">
+              <div class="w-8 h-8 rounded-xl bg-orange-50 dark:bg-orange-900/30 flex items-center justify-center">
+                <svg class="w-4 h-4 text-orange-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+              </div>
+              <span class="text-xs text-gray-500 dark:text-gray-400">Disk</span>
+            </div>
+            <div class="text-3xl font-semibold" id="stat-disk">-</div>
+            <div class="text-[11px] text-gray-400 mt-0.5">workspace</div>
+          </div>
         </div>
-        <!-- Quick actions -->
-        <div class="grid grid-cols-4 gap-3 mb-4" id="home-actions"></div>
-        <!-- TODO summary -->
-        <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-4" id="home-todo-card" style="display:none">
+
+        <!-- Projects -->
+        <div class="bg-white dark:bg-[#2a2a4a] rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-4" id="home-projects-card" style="display:none">
           <div class="flex items-center justify-between p-4 pb-2">
-            <span class="text-sm font-medium">Open TODOs</span>
-            <button onclick="switchTab('todo')" class="text-xs text-blue-500 dark:text-blue-400">View All</button>
+            <div class="flex items-center gap-2">
+              <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              <span class="text-sm font-medium">Projects</span>
+            </div>
           </div>
-          <div id="home-todo-list" class="divide-y divide-gray-100 dark:divide-gray-700"></div>
-          <div class="px-4 py-2 text-center" id="home-todo-more" style="display:none">
-            <span class="text-xs text-gray-400"></span>
-          </div>
+          <div id="home-projects-list" class="divide-y divide-gray-100 dark:divide-gray-700"></div>
         </div>
       </div>
     </div>
@@ -217,16 +254,18 @@ const IC = {
   log:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
   code:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+  cron:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
 };
 
 // All available tools
 const TABS = [
   { key:'home',     label:'Home',     primary:true },
   { key:'todo',     label:'TODO',     primary:true },
+  { key:'cron',     label:'Cron',     primary:true },
   { key:'browse',   label:'Files',    primary:true },
   { key:'upload',   label:'Upload',   primary:true },
-  { key:'tmux',     label:'Tmux',     primary:true },
   { key:'more',     label:'More',     primary:true, mobileOnly:true },
+  { key:'tmux',     label:'Tmux',     primary:false },
   { key:'term',     label:'Terminal', primary:false },
   { key:'log',      label:'Bot Log',  primary:false },
   { key:'code',     label:'VS Code',  primary:false },
@@ -244,8 +283,8 @@ async function init() {
   }
   buildNav();
   buildPages();
-  buildHomeActions();
-  loadHomeTodos();
+  loadStats();
+  loadProjects();
   switchTab('home');
 }
 
@@ -339,59 +378,69 @@ function buildPages() {
 }
 
 // --- Home page ---
-function buildHomeActions() {
-  const grid = document.getElementById('home-actions');
-  const actions = [
-    { key:'todo',   label:'TODO' },
-    { key:'browse', label:'Files' },
-    { key:'upload', label:'Upload' },
-    { key:'tmux',   label:'Tmux' },
-  ];
-  grid.innerHTML = actions.filter(a => urls[a.key]).map(a =>
-    `<button onclick="switchTab('${a.key}')" class="card flex flex-col items-center gap-2 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2a2a4a] shadow-sm">
-      <span class="nav-icon text-gray-500 dark:text-gray-400">${IC[a.key]}</span>
-      <span class="text-xs text-gray-600 dark:text-gray-400">${a.label}</span>
-    </button>`
-  ).join('');
+async function loadStats() {
+  try {
+    const resp = await fetch(location.pathname.replace(/\/$/, '') + '/stats');
+    if (!resp.ok) return;
+    const s = await resp.json();
+
+    // TODO
+    if (s.todo) {
+      document.getElementById('stat-todo-open').textContent = s.todo.open;
+      const parts = [];
+      if (s.todo.overdue > 0) parts.push(s.todo.overdue + ' overdue');
+      parts.push(s.todo.done + ' done');
+      document.getElementById('stat-todo-sub').textContent = parts.join(' · ');
+      if (s.todo.overdue > 0) {
+        document.getElementById('stat-todo-open').classList.add('text-red-500');
+      }
+    } else {
+      document.getElementById('stat-todo-open').textContent = '0';
+    }
+
+    // Cron
+    if (s.cron) {
+      document.getElementById('stat-cron-active').textContent = s.cron.active;
+      document.getElementById('stat-cron-sub').textContent = s.cron.total + ' total';
+    } else {
+      document.getElementById('stat-cron-active').textContent = '0';
+    }
+
+    // Memory
+    if (s.memory) {
+      document.getElementById('stat-memory-daily').textContent = s.memory.daily + ' days';
+      document.getElementById('stat-memory-sub').textContent = s.memory.experience + ' topics';
+    }
+
+    // Disk
+    if (s.disk) {
+      document.getElementById('stat-disk').textContent = s.disk;
+    }
+  } catch (e) { /* silent */ }
 }
 
-async function loadHomeTodos() {
-  if (!urls.todo) return;
+async function loadProjects() {
   try {
-    const apiUrl = urls.todo.replace(/\/$/, '') + '/api';
-    const resp = await fetch(apiUrl);
+    const resp = await fetch(location.pathname.replace(/\/$/, '') + '/stats');
     if (!resp.ok) return;
-    const raw = await resp.json();
-    const all = Array.isArray(raw) ? raw : (raw.items || []);
-    const items = all.filter(t => t.status === 'open');
-    if (items.length === 0) return;
+    const s = await resp.json();
+    if (!s.projects || s.projects.length === 0) return;
 
-    const card = document.getElementById('home-todo-card');
+    const card = document.getElementById('home-projects-card');
     card.style.display = '';
-    const list = document.getElementById('home-todo-list');
-    const show = items.slice(0, 3);
-    list.innerHTML = show.map(t => {
-      const typeClass = t.type === 'bug'
-        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
-        : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400';
-      const date = t.created_at ? t.created_at.substring(5, 10).replace('-', '/') : '';
+    const list = document.getElementById('home-projects-list');
+    list.innerHTML = s.projects.map(p => {
+      const icon = p.git ? '<svg class="w-4 h-4 text-gray-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6"/><path d="M5.63 5.63l4.24 4.24m4.24 4.24l4.26 4.26"/><path d="M18.37 5.63l-4.24 4.24m-4.24 4.24L5.63 18.37"/></svg>'
+        : '<svg class="w-4 h-4 text-gray-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+      const sub = p.git ? '<span class="text-[10px] text-gray-400">git</span>' : '';
       return `<div class="flex items-center gap-3 px-4 py-3">
-        <div class="w-5 h-5 rounded-full border-2 border-gray-300 dark:border-gray-600 flex-shrink-0"></div>
+        ${icon}
         <div class="flex-1 min-w-0">
-          <div class="text-sm truncate">${esc(t.title)}</div>
-          <div class="flex gap-1.5 mt-0.5">
-            <span class="text-[10px] px-1.5 py-0.5 ${typeClass} rounded">${esc(t.type)}</span>
-            <span class="text-[10px] text-gray-400">${date}</span>
-          </div>
+          <div class="text-sm truncate">${esc(p.name)}</div>
         </div>
+        ${sub}
       </div>`;
     }).join('');
-
-    if (items.length > 3) {
-      const more = document.getElementById('home-todo-more');
-      more.style.display = '';
-      more.querySelector('span').textContent = '+' + (items.length - 3) + ' more';
-    }
   } catch (e) { /* silent */ }
 }
 

@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Cron Jobs</title>
+<style>
+  :root {
+    --bg: #f5f5f5;
+    --surface: #ffffff;
+    --surface2: #f0f0f0;
+    --border: #e0e0e0;
+    --text: #1a1a1a;
+    --text2: #888;
+    --text3: #aaa;
+    --accent: #3478f6;
+    --accent-light: #e8f0fe;
+    --green: #34c759;
+    --green-light: #eafaf0;
+    --red: #ff3b30;
+    --red-light: #fff0ef;
+    --orange: #ff9500;
+    --orange-light: #fff5e6;
+    --purple: #af52de;
+    --purple-light: #f5ecfb;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0a;
+      --surface: #1c1c1e;
+      --surface2: #2c2c2e;
+      --border: #3a3a3c;
+      --text: #f5f5f5;
+      --text2: #98989d;
+      --text3: #636366;
+      --accent-light: #1a2a44;
+      --green-light: #0d2818;
+      --red-light: #2d1210;
+      --orange-light: #2d1f0a;
+      --purple-light: #1f1230;
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { background: var(--bg); }
+  button { background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .header {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--bg);
+    padding: 16px 16px 0;
+  }
+  .header-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .header h1 { font-size: 28px; font-weight: 700; }
+  .header .subtitle { font-size: 13px; color: var(--text2); margin-bottom: 12px; }
+
+  /* Filters */
+  .filters {
+    display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .filters::-webkit-scrollbar { display: none; }
+  .filter-chip {
+    display: flex; align-items: center; gap: 4px;
+    padding: 6px 12px; border-radius: 20px;
+    font-size: 13px; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--border);
+    white-space: nowrap; flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .filter-chip.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .filter-chip .count {
+    font-size: 11px; font-weight: 600;
+    background: rgba(0,0,0,0.1); border-radius: 10px;
+    padding: 1px 6px; min-width: 18px; text-align: center;
+  }
+  .filter-chip.active .count { background: rgba(255,255,255,0.25); }
+
+  /* Job list */
+  .job-list { padding: 0 16px 100px; }
+
+  .section-label {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    padding: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  .job-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+  }
+  .job-card.disabled { opacity: 0.5; }
+
+  .job-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .job-name {
+    font-size: 15px; font-weight: 600;
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .job-toggle {
+    width: 44px; height: 26px; border-radius: 13px;
+    background: var(--surface2); border: 1px solid var(--border);
+    position: relative; transition: background 0.2s;
+    flex-shrink: 0; margin-left: 8px;
+  }
+  .job-toggle::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.2s;
+  }
+  .job-toggle.on { background: var(--green); border-color: var(--green); }
+  .job-toggle.on::after { transform: translateX(18px); }
+
+  .job-schedule {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text2);
+    margin-bottom: 6px;
+  }
+  .schedule-badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: 10px; text-transform: uppercase;
+  }
+  .schedule-badge.cron { background: var(--accent-light); color: var(--accent); }
+  .schedule-badge.every { background: var(--purple-light); color: var(--purple); }
+  .schedule-badge.at { background: var(--orange-light); color: var(--orange); }
+
+  .job-message {
+    font-size: 13px; color: var(--text2);
+    background: var(--surface2);
+    padding: 8px 10px; border-radius: var(--radius-sm);
+    margin-top: 6px;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 80px; overflow: hidden;
+    position: relative;
+  }
+
+  .job-meta {
+    display: flex; gap: 12px; margin-top: 8px;
+    font-size: 11px; color: var(--text3);
+  }
+  .job-meta .status-dot {
+    display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; margin-right: 3px; vertical-align: middle;
+  }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.error { background: var(--red); }
+  .status-dot.running { background: var(--orange); }
+  .status-dot.pending { background: var(--text3); }
+
+  /* Detail view */
+  #detailView { display: none; }
+  #detailView.active { display: block; }
+  #listView.hidden { display: none; }
+
+  .detail-header {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--bg);
+    padding: 16px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-header .back {
+    font-size: 28px; color: var(--accent); padding: 0 4px;
+  }
+  .detail-header h2 {
+    font-size: 18px; font-weight: 600;
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .detail-body { padding: 16px; }
+  .detail-section {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+  }
+  .detail-section h3 {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 10px;
+  }
+  .detail-row {
+    display: flex; justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-row .label { color: var(--text2); }
+  .detail-row .value { font-weight: 500; text-align: right; max-width: 60%; word-break: break-all; }
+
+  .detail-message {
+    font-size: 14px; color: var(--text);
+    background: var(--surface2);
+    padding: 12px; border-radius: var(--radius-sm);
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 200px; overflow-y: auto;
+  }
+
+  /* History */
+  .history-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .history-item:last-child { border-bottom: none; }
+  .history-time { color: var(--text2); flex-shrink: 0; }
+  .history-status {
+    font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .history-status.ok { background: var(--green-light); color: var(--green); }
+  .history-status.error { background: var(--red-light); color: var(--red); }
+  .history-status.skipped { background: var(--surface2); color: var(--text3); }
+  .history-duration { color: var(--text3); margin-left: auto; }
+
+  .empty-state {
+    text-align: center; padding: 60px 20px;
+    color: var(--text3); font-size: 15px;
+  }
+
+  .toast {
+    position: fixed; bottom: 80px; left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--text); color: var(--surface);
+    padding: 10px 20px; border-radius: 20px;
+    font-size: 14px; font-weight: 500; z-index: 500;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    opacity: 0; pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; pointer-events: auto; }
+</style>
+</head>
+<body>
+
+<!-- List View -->
+<div id="listView">
+  <div class="header">
+    <div class="header-row">
+      <h1>Cron</h1>
+    </div>
+    <div class="subtitle" id="summary"></div>
+    <div class="filters" id="filters"></div>
+  </div>
+  <div class="job-list" id="jobList"></div>
+</div>
+
+<!-- Detail View -->
+<div id="detailView">
+  <div class="detail-header">
+    <button class="back" onclick="showList()">&lsaquo;</button>
+    <h2 id="detailTitle"></h2>
+  </div>
+  <div class="detail-body" id="detailBody"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = location.pathname.replace(/\/$/, '') + '/api';
+let jobs = [];
+let history = {};
+let filter = 'all';
+
+// Theme sync (from hub iframe)
+(function() {
+  function applyTheme(dark) {
+    if (dark) {
+      document.documentElement.style.setProperty('--bg', '#0a0a0a');
+      document.documentElement.style.setProperty('--surface', '#1c1c1e');
+      document.documentElement.style.setProperty('--surface2', '#2c2c2e');
+      document.documentElement.style.setProperty('--border', '#3a3a3c');
+      document.documentElement.style.setProperty('--text', '#f5f5f5');
+      document.documentElement.style.setProperty('--text2', '#98989d');
+      document.documentElement.style.setProperty('--text3', '#636366');
+      document.documentElement.style.setProperty('--accent-light', '#1a2a44');
+      document.documentElement.style.setProperty('--green-light', '#0d2818');
+      document.documentElement.style.setProperty('--red-light', '#2d1210');
+      document.documentElement.style.setProperty('--orange-light', '#2d1f0a');
+      document.documentElement.style.setProperty('--purple-light', '#1f1230');
+    }
+  }
+  try {
+    const stored = localStorage.getItem('hub-theme');
+    if (stored === 'dark') applyTheme(true);
+  } catch(e) {}
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'theme') applyTheme(e.data.dark);
+  });
+})();
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function formatTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const time = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  if (d.toDateString() === now.toDateString()) return time;
+  return (d.getMonth()+1) + '/' + d.getDate() + ' ' + time;
+}
+
+function formatDuration(s) {
+  if (!s) return '-';
+  if (s < 60) return Math.round(s) + 's';
+  if (s < 3600) return Math.round(s / 60) + 'm';
+  return (s / 3600).toFixed(1) + 'h';
+}
+
+function scheduleText(sched) {
+  if (sched.kind === 'cron') return sched.expr + (sched.tz ? ' (' + sched.tz + ')' : '');
+  if (sched.kind === 'every') {
+    const s = sched.every_seconds;
+    if (s < 60) return 'every ' + s + 's';
+    if (s < 3600) return 'every ' + Math.round(s/60) + 'm';
+    return 'every ' + (s/3600).toFixed(1) + 'h';
+  }
+  if (sched.kind === 'at') return sched.at;
+  return sched.kind;
+}
+
+function statusInfo(job) {
+  if (job.state.running_at) return { cls: 'running', text: 'Running' };
+  if (job.state.last_status === 'ok') return { cls: 'ok', text: 'OK' };
+  if (job.state.last_status === 'error') return { cls: 'error', text: 'Error' };
+  return { cls: 'pending', text: 'Pending' };
+}
+
+async function load() {
+  try {
+    const resp = await fetch(API);
+    if (!resp.ok) throw new Error(resp.status);
+    const data = await resp.json();
+    jobs = data.jobs || [];
+    history = data.history || {};
+    render();
+  } catch(e) {
+    document.getElementById('jobList').innerHTML =
+      '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+function render() {
+  // Summary
+  const enabled = jobs.filter(j => j.enabled).length;
+  const total = jobs.length;
+  document.getElementById('summary').textContent =
+    enabled + ' active / ' + total + ' total';
+
+  // Filters
+  const kinds = {};
+  jobs.forEach(j => {
+    const k = j.schedule.kind;
+    kinds[k] = (kinds[k] || 0) + 1;
+  });
+  const filtersEl = document.getElementById('filters');
+  let fhtml = '<button class="filter-chip ' + (filter === 'all' ? 'active' : '') +
+    '" onclick="setFilter(\'all\')">All<span class="count">' + total + '</span></button>';
+  for (const [k, c] of Object.entries(kinds)) {
+    fhtml += '<button class="filter-chip ' + (filter === k ? 'active' : '') +
+      '" onclick="setFilter(\'' + k + '\')">' + k +
+      '<span class="count">' + c + '</span></button>';
+  }
+  filtersEl.innerHTML = fhtml;
+
+  // Job list
+  let filtered = filter === 'all' ? jobs : jobs.filter(j => j.schedule.kind === filter);
+  const list = document.getElementById('jobList');
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="empty-state">No cron jobs</div>';
+    return;
+  }
+
+  // Split enabled / disabled
+  const active = filtered.filter(j => j.enabled);
+  const inactive = filtered.filter(j => !j.enabled);
+
+  let html = '';
+  if (active.length) {
+    html += '<div class="section-label">Active (' + active.length + ')</div>';
+    html += active.map(renderCard).join('');
+  }
+  if (inactive.length) {
+    html += '<div class="section-label">Disabled (' + inactive.length + ')</div>';
+    html += inactive.map(renderCard).join('');
+  }
+  list.innerHTML = html;
+}
+
+function renderCard(job) {
+  const st = statusInfo(job);
+  const sched = job.schedule;
+  const nextRun = job.state.next_run_at ? formatTime(job.state.next_run_at) : '';
+  const lastRun = job.state.last_run_at ? formatTime(job.state.last_run_at) : '';
+
+  return '<div class="job-card ' + (job.enabled ? '' : 'disabled') + '" onclick="showDetail(\'' + job.id + '\')">' +
+    '<div class="job-header">' +
+      '<span class="job-name">' + esc(job.name) + '</span>' +
+      '<div class="job-toggle ' + (job.enabled ? 'on' : '') + '" onclick="event.stopPropagation();toggleJob(\'' + job.id + '\',' + !job.enabled + ')"></div>' +
+    '</div>' +
+    '<div class="job-schedule">' +
+      '<span class="schedule-badge ' + sched.kind + '">' + sched.kind + '</span>' +
+      '<span>' + esc(scheduleText(sched)) + '</span>' +
+    '</div>' +
+    (job.message ? '<div class="job-message">' + esc(job.message) + '</div>' : '') +
+    '<div class="job-meta">' +
+      '<span><span class="status-dot ' + st.cls + '"></span>' + st.text + '</span>' +
+      (lastRun ? '<span>Last: ' + lastRun + '</span>' : '') +
+      (nextRun && job.enabled ? '<span>Next: ' + nextRun + '</span>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function setFilter(f) {
+  filter = f;
+  render();
+}
+
+async function toggleJob(id, enabled) {
+  try {
+    const resp = await fetch(API + '/' + id + '/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    if (!resp.ok) throw new Error('Failed');
+    const job = jobs.find(j => j.id === id);
+    if (job) job.enabled = enabled;
+    render();
+    toast(enabled ? 'Enabled' : 'Disabled');
+  } catch(e) {
+    toast('Error: ' + e.message);
+  }
+}
+
+function showDetail(id) {
+  const job = jobs.find(j => j.id === id);
+  if (!job) return;
+
+  document.getElementById('listView').classList.add('hidden');
+  document.getElementById('detailView').classList.add('active');
+  document.getElementById('detailTitle').textContent = job.name;
+
+  const st = statusInfo(job);
+  const sched = job.schedule;
+  const hist = history[job.id] || [];
+
+  let html = '';
+
+  // Schedule section
+  html += '<div class="detail-section"><h3>Schedule</h3>';
+  html += detailRow('Type', sched.kind);
+  html += detailRow('Expression', scheduleText(sched));
+  if (job.enabled && job.state.next_run_at) html += detailRow('Next Run', formatTime(job.state.next_run_at));
+  html += detailRow('Status', '<span class="status-dot ' + st.cls + '"></span> ' + st.text);
+  html += detailRow('Enabled', job.enabled ? 'Yes' : 'No');
+  if (job.delete_after_run) html += detailRow('One-shot', 'Yes (delete after run)');
+  if (job.system) html += detailRow('System Job', 'Yes');
+  html += '</div>';
+
+  // Message section
+  if (job.message) {
+    html += '<div class="detail-section"><h3>Message</h3>';
+    html += '<div class="detail-message">' + esc(job.message) + '</div>';
+    html += '</div>';
+  }
+
+  // State section
+  html += '<div class="detail-section"><h3>Execution</h3>';
+  html += detailRow('Last Run', formatTime(job.state.last_run_at));
+  html += detailRow('Last Status', job.state.last_status || '-');
+  if (job.state.last_error) html += detailRow('Last Error', job.state.last_error);
+  html += detailRow('Last Duration', formatDuration(job.state.last_duration_s));
+  if (job.state.consecutive_errors > 0)
+    html += detailRow('Consecutive Errors', String(job.state.consecutive_errors));
+  html += detailRow('Created', formatTime(job.created_at));
+  html += '</div>';
+
+  // History section
+  if (hist.length > 0) {
+    html += '<div class="detail-section"><h3>History (' + hist.length + ')</h3>';
+    hist.forEach(h => {
+      html += '<div class="history-item">' +
+        '<span class="history-time">' + formatTime(h.started_at) + '</span>' +
+        '<span class="history-status ' + (h.status || 'pending') + '">' + (h.status || '...') + '</span>' +
+        '<span class="history-duration">' + formatDuration(h.duration_s) + '</span>' +
+      '</div>';
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('detailBody').innerHTML = html;
+}
+
+function detailRow(label, value) {
+  return '<div class="detail-row"><span class="label">' + label +
+    '</span><span class="value">' + value + '</span></div>';
+}
+
+function showList() {
+  document.getElementById('detailView').classList.remove('active');
+  document.getElementById('listView').classList.remove('hidden');
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+load();
+</script>
+</body>
+</html>

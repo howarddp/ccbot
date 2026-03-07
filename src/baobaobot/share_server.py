@@ -218,8 +218,9 @@ _EXPIRED_HTML = (_TEMPLATES_DIR / "expired.html").read_text(encoding="utf-8")
 _INVALID_HTML = (_TEMPLATES_DIR / "invalid.html").read_text(encoding="utf-8")
 _DIRECTORY_HTML = (_TEMPLATES_DIR / "directory.html").read_text(encoding="utf-8")
 _TERMINAL_HTML = (_TEMPLATES_DIR / "terminal.html").read_text(encoding="utf-8")
-_HUB_HTML = (_TEMPLATES_DIR / "hub.html").read_text(encoding="utf-8")
+_HUB_HTML = (_TEMPLATES_DIR / "web.html").read_text(encoding="utf-8")
 _TODO_HTML = (_TEMPLATES_DIR / "todo.html").read_text(encoding="utf-8")
+_CRON_HTML = (_TEMPLATES_DIR / "cron.html").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +425,7 @@ class ShareServer:
         self._app.router.add_get("/port/{token}", self._handle_port_redirect)
         self._app.router.add_route("*", "/port/{token}/{path:.*}", self._handle_port_proxy)
         self._app.router.add_get("/hub/{token}/urls", self._handle_hub_urls)
+        self._app.router.add_get("/hub/{token}/stats", self._handle_hub_stats)
         self._app.router.add_get("/hub/{token}/", self._handle_hub_page)
         self._app.router.add_get("/hub/{token}", self._handle_hub_redirect)
         # TODO management UI
@@ -435,6 +437,13 @@ class ShareServer:
         self._app.router.add_delete("/todo/{token}/api/{todo_id}", self._handle_todo_delete)
         self._app.router.add_post(
             "/todo/{token}/api/{todo_id}/done", self._handle_todo_done
+        )
+        # Cron management UI
+        self._app.router.add_get("/cron/{token}/", self._handle_cron_page)
+        self._app.router.add_get("/cron/{token}", self._handle_cron_redirect)
+        self._app.router.add_get("/cron/{token}/api", self._handle_cron_list)
+        self._app.router.add_post(
+            "/cron/{token}/api/{job_id}/toggle", self._handle_cron_toggle
         )
 
     def _find_file(self, rel_path: str, workspace: Path | None = None) -> Path | None:
@@ -1706,7 +1715,131 @@ class ShareServer:
         )
         urls["todo"] = f"/todo/{todo_token}/"
 
+        # Cron management
+        cron_token = generate_token(
+            f"cron:{ws_path}", ttl=remaining, name=display
+        )
+        urls["cron"] = f"/cron/{cron_token}/"
+
         return web.json_response(urls)
+
+    async def _handle_hub_stats(self, request: web.Request) -> web.Response:
+        """Return dashboard statistics for the hub home page."""
+        token = request.match_info["token"]
+        payload, status = self._verify_hub_token(token)
+        if payload is None:
+            return web.json_response({"error": status}, status=403)
+
+        ws_path = Path(payload["workspace"])
+        stats: dict[str, object] = {}
+
+        # TODO stats
+        import sqlite3 as _sqlite3
+
+        db_path = ws_path / "memory.db"
+        if db_path.exists():
+            conn = _sqlite3.connect(str(db_path))
+            conn.row_factory = _sqlite3.Row
+            try:
+                # TODOs
+                has_todos = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='todos'"
+                ).fetchone()
+                if has_todos:
+                    todo_open = conn.execute(
+                        "SELECT COUNT(*) FROM todos WHERE status='open'"
+                    ).fetchone()[0]
+                    today = time.strftime("%Y-%m-%d")
+                    todo_overdue = conn.execute(
+                        "SELECT COUNT(*) FROM todos WHERE status='open' AND deadline < ?",
+                        (today,),
+                    ).fetchone()[0]
+                    todo_done = conn.execute(
+                        "SELECT COUNT(*) FROM todos WHERE status='done'"
+                    ).fetchone()[0]
+                    stats["todo"] = {
+                        "open": todo_open,
+                        "overdue": todo_overdue,
+                        "done": todo_done,
+                    }
+
+                # Cron
+                has_cron = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='cron_jobs'"
+                ).fetchone()
+                if has_cron:
+                    cron_active = conn.execute(
+                        "SELECT COUNT(*) FROM cron_jobs WHERE enabled=1"
+                    ).fetchone()[0]
+                    cron_total = conn.execute(
+                        "SELECT COUNT(*) FROM cron_jobs"
+                    ).fetchone()[0]
+                    stats["cron"] = {
+                        "active": cron_active,
+                        "total": cron_total,
+                    }
+            finally:
+                conn.close()
+
+        # Memory stats
+        memory_dir = ws_path / "memory"
+        daily_count = 0
+        experience_count = 0
+        if memory_dir.is_dir():
+            daily_dir = memory_dir / "daily"
+            if daily_dir.is_dir():
+                for month_dir in daily_dir.iterdir():
+                    if month_dir.is_dir():
+                        daily_count += sum(
+                            1 for f in month_dir.iterdir() if f.suffix == ".md"
+                        )
+            exp_dir = memory_dir / "experience"
+            if exp_dir.is_dir():
+                experience_count = sum(
+                    1 for f in exp_dir.iterdir() if f.suffix == ".md"
+                )
+        stats["memory"] = {"daily": daily_count, "experience": experience_count}
+
+        # Workspace disk usage
+        try:
+            result = subprocess.run(
+                ["du", "-sm", str(ws_path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                mb = int(result.stdout.split()[0])
+                if mb >= 1024:
+                    stats["disk"] = f"{mb / 1024:.1f} GB"
+                else:
+                    stats["disk"] = f"{mb} MB"
+        except Exception:
+            pass
+
+        # Projects (scan projects/ directory, up to 2 levels deep)
+        projects_dir = ws_path / "projects"
+        projects: list[dict[str, object]] = []
+        if projects_dir.is_dir():
+            for entry in sorted(projects_dir.iterdir()):
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                is_git = (entry / ".git").exists()
+                projects.append({"name": entry.name, "git": is_git})
+                if not is_git:
+                    # Check one level deeper for sub-projects
+                    for sub in sorted(entry.iterdir()):
+                        if not sub.is_dir() or sub.name.startswith("."):
+                            continue
+                        sub_git = (sub / ".git").exists()
+                        projects.append({
+                            "name": f"{entry.name}/{sub.name}",
+                            "git": sub_git,
+                        })
+        if projects:
+            stats["projects"] = projects
+
+        return web.json_response(stats)
 
     # -- TODO management --
 
@@ -1884,6 +2017,149 @@ class ShareServer:
             ok = done_todo(conn, todo_id)
             if not ok:
                 return web.json_response({"error": "not found or already done"}, status=404)
+            return web.json_response({"ok": True})
+        finally:
+            conn.close()
+
+    # -- Cron management --
+
+    def _verify_cron_token(self, token: str) -> tuple[Path | None, str]:
+        """Verify a cron token and return (workspace_path, status)."""
+        worst = "invalid"
+        for root in self._workspace_roots:
+            status = check_token(token, f"cron:{root}")
+            if status == "ok":
+                return root, "ok"
+            if status == "expired":
+                worst = "expired"
+        return None, worst
+
+    async def _handle_cron_redirect(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        raise web.HTTPFound(f"/cron/{token}/")
+
+    async def _handle_cron_page(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        workspace, status = self._verify_cron_token(token)
+        if workspace is None:
+            return _deny_response(status)
+
+        name = extract_token_name(token)
+        lang = "en"
+        if name.startswith("lang:"):
+            lang = name[5:]
+
+        html = _CRON_HTML.replace("{{LANG}}", lang)
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_cron_list(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        workspace, status = self._verify_cron_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        import sqlite3 as _sqlite3
+
+        db_path = workspace / "memory.db"
+        if not db_path.exists():
+            return web.json_response({"jobs": [], "history": {}})
+
+        conn = _sqlite3.connect(str(db_path))
+        conn.row_factory = _sqlite3.Row
+        try:
+            # Check if cron_jobs table exists
+            table_check = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cron_jobs'"
+            ).fetchone()
+            if not table_check:
+                return web.json_response({"jobs": [], "history": {}})
+
+            rows = conn.execute(
+                "SELECT * FROM cron_jobs ORDER BY created_at"
+            ).fetchall()
+            jobs = []
+            for r in rows:
+                jobs.append({
+                    "id": r["id"],
+                    "name": r["name"],
+                    "schedule": {
+                        "kind": r["schedule_kind"],
+                        "expr": r["schedule_expr"],
+                        "tz": r["schedule_tz"],
+                        "every_seconds": r["schedule_every_s"],
+                        "at": r["schedule_at"],
+                    },
+                    "message": r["message"],
+                    "enabled": bool(r["enabled"]),
+                    "delete_after_run": bool(r["delete_after_run"]),
+                    "system": bool(r["system"]),
+                    "creator_user_id": r["creator_user_id"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                    "state": {
+                        "next_run_at": r["next_run_at"],
+                        "running_at": r["running_at"],
+                        "last_run_at": r["last_run_at"],
+                        "last_status": r["last_status"],
+                        "last_error": r["last_error"],
+                        "last_duration_s": r["last_duration_s"],
+                        "consecutive_errors": r["consecutive_errors"],
+                    },
+                })
+
+            # Load recent history (last 20 per job)
+            hist: dict[str, list] = {}
+            table_check2 = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cron_history'"
+            ).fetchone()
+            if table_check2:
+                for job in jobs:
+                    h_rows = conn.execute(
+                        "SELECT * FROM cron_history WHERE job_id = ? "
+                        "ORDER BY started_at DESC LIMIT 20",
+                        (job["id"],),
+                    ).fetchall()
+                    if h_rows:
+                        hist[job["id"]] = [
+                            {
+                                "started_at": h["started_at"],
+                                "finished_at": h["finished_at"],
+                                "status": h["status"],
+                                "error": h["error"],
+                                "duration_s": h["duration_s"],
+                            }
+                            for h in h_rows
+                        ]
+
+            return web.json_response({"jobs": jobs, "history": hist})
+        finally:
+            conn.close()
+
+    async def _handle_cron_toggle(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        job_id = request.match_info["job_id"]
+        workspace, status = self._verify_cron_token(token)
+        if workspace is None:
+            return web.json_response({"error": status}, status=403)
+
+        data = await request.json()
+        enabled = bool(data.get("enabled", True))
+
+        import sqlite3 as _sqlite3
+
+        db_path = workspace / "memory.db"
+        if not db_path.exists():
+            return web.json_response({"error": "not found"}, status=404)
+
+        conn = _sqlite3.connect(str(db_path))
+        try:
+            result = conn.execute(
+                "UPDATE cron_jobs SET enabled = ? WHERE id = ?",
+                (1 if enabled else 0, job_id),
+            )
+            conn.commit()
+            if result.rowcount == 0:
+                return web.json_response({"error": "not found"}, status=404)
             return web.json_response({"ok": True})
         finally:
             conn.close()
