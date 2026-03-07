@@ -222,13 +222,13 @@ const IC = {
 // All available tools
 const TABS = [
   { key:'home',     label:'Home',     primary:true },
-  { key:'browse',   label:'Files',    primary:true },
   { key:'todo',     label:'TODO',     primary:true },
+  { key:'browse',   label:'Files',    primary:true },
+  { key:'upload',   label:'Upload',   primary:true },
   { key:'tmux',     label:'Tmux',     primary:true },
   { key:'more',     label:'More',     primary:true, mobileOnly:true },
   { key:'term',     label:'Terminal', primary:false },
   { key:'log',      label:'Bot Log',  primary:false },
-  { key:'upload',   label:'Upload',   primary:false },
   { key:'code',     label:'VS Code',  primary:false },
 ];
 
@@ -342,10 +342,10 @@ function buildPages() {
 function buildHomeActions() {
   const grid = document.getElementById('home-actions');
   const actions = [
-    { key:'browse', label:'Files' },
     { key:'todo',   label:'TODO' },
-    { key:'tmux',   label:'Tmux' },
+    { key:'browse', label:'Files' },
     { key:'upload', label:'Upload' },
+    { key:'tmux',   label:'Tmux' },
   ];
   grid.innerHTML = actions.filter(a => urls[a.key]).map(a =>
     `<button onclick="switchTab('${a.key}')" class="card flex flex-col items-center gap-2 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2a2a4a] shadow-sm">
