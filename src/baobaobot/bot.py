@@ -1710,10 +1710,25 @@ async def _auto_create_session(
     )
     assembler.write()
 
+    # Check for per-workspace backend override (workspace.toml)
+    from . import workspace_config
+
+    ws_backend_override: TmuxCliBackend | None = None
+    ws_agent_type = workspace_config.get_agent_type(workspace_path)
+    if ws_agent_type and ws_agent_type != ctx.backend.agent_type:
+        try:
+            wb = ctx.get_backend(ws_agent_type)
+            if isinstance(wb, TmuxCliBackend):
+                ws_backend_override = wb
+        except Exception:
+            logger.warning("Unknown backend in workspace.toml: %s", ws_agent_type)
+            ws_agent_type = ""
+
     # Create tmux window with agent prefix: "agent_name/topic_name"
     tmux_window_name = f"{ctx.config.name}/{ws_name}"
     success, message, created_wname, created_wid = await ctx.tmux_manager.create_window(
-        str(workspace_path), window_name=tmux_window_name
+        str(workspace_path), window_name=tmux_window_name,
+        backend=ws_backend_override,
     )
 
     if not success:
@@ -1721,19 +1736,31 @@ async def _auto_create_session(
         return
 
     logger.info(
-        "Auto-created session: window=%s (id=%s) at %s (user=%d, key=%d)",
+        "Auto-created session: window=%s (id=%s) at %s (user=%d, key=%d, backend=%s)",
         created_wname,
         created_wid,
         workspace_path,
         rk.user_id,
         rk.session_key,
+        ws_agent_type or ctx.backend.agent_type,
     )
 
     # Wait for CLI TUI to be ready (polls tmux pane for prompt pattern)
-    await ctx.tmux_manager.wait_for_cli_ready(created_wid)
+    await ctx.tmux_manager.wait_for_cli_ready(created_wid, backend=ws_backend_override)
 
     # Wait for SessionStart hook to register in session_map
     await ctx.session_manager.wait_for_session_map_entry(created_wid)
+
+    # Set per-workspace backend override on window state AFTER session_map
+    # is loaded — load_session_map's stale cleanup would clear it if set earlier
+    if ws_agent_type:
+        state = ctx.session_manager.get_window_state(created_wid)
+        state.agent_type = ws_agent_type
+        ctx.session_manager._save_state()
+
+    # Ensure workspace.toml exists with actual defaults
+    resolved_agent_type = ws_agent_type or ctx.backend.agent_type
+    workspace_config.ensure_defaults(workspace_path, resolved_agent_type, rk.user_id)
 
     # Bind via router — use topic-only name for display (not prefixed)
     ctx.router.bind_window(rk, created_wid, ws_name, ctx)
@@ -3256,6 +3283,17 @@ async def post_init(application: Application) -> None:
         refreshed = refresh_all_skills(agent_ctx.config.shared_dir, workspace_dirs)
         if refreshed:
             logger.info("Refreshed skills for %d workspace(s) on startup", refreshed)
+
+    # Backfill workspace.toml agent_type for existing workspaces
+    from . import workspace_config as _wscfg
+
+    for wid, wstate in agent_ctx.session_manager.window_states.items():
+        if wstate.cwd:
+            ws_path = Path(wstate.cwd)
+            if ws_path.is_dir() and not _wscfg.get_agent_type(ws_path):
+                resolved_at = wstate.agent_type or agent_ctx.backend.agent_type
+                _wscfg.set_agent_type(ws_path, resolved_at)
+                logger.info("Backfilled workspace.toml agent_type=%s for %s", resolved_at, ws_path)
 
     # Per-window backend resolver (used by SessionManager, SessionMonitor, SystemScheduler)
     def _resolve_cli_backend(wid: str) -> TmuxCliBackend | None:

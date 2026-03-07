@@ -1089,20 +1089,48 @@ class SessionManager:
 
     VERBOSITY_LEVELS = ("quiet", "normal", "verbose")
 
+    def _resolve_workspace_dir(self, user_id: int, thread_id: int) -> Path | None:
+        """Resolve workspace directory from user_id + thread_id."""
+        wid = self.get_window_for_thread(user_id, thread_id)
+        # Fallback: group bindings (group mode uses chat_id as user_id, thread_id=0)
+        if not wid:
+            wid = self.group_bindings.get(user_id)
+        if not wid:
+            return None
+        state = self.window_states.get(wid)
+        if state and state.cwd:
+            p = Path(state.cwd)
+            if p.is_dir():
+                return p
+        return None
+
     def get_verbosity(self, user_id: int, thread_id: int = 0) -> str:
-        """Get verbosity for a workspace. Defaults to 'normal'."""
+        """Get verbosity for a workspace.
+
+        Reads from workspace.toml first; falls back to legacy state.json,
+        then defaults to 'normal'.
+        """
+        # Try workspace.toml
+        ws_dir = self._resolve_workspace_dir(user_id, thread_id)
+        if ws_dir:
+            from . import workspace_config
+
+            level = workspace_config.get_verbosity(ws_dir, user_id)
+            if level:
+                return level
+
+        # Legacy fallback: state.json
         threads = self.user_verbosity.get(user_id)
         if threads is None:
             return "normal"
         return threads.get(thread_id, "normal")
 
     def set_verbosity(self, user_id: int, thread_id: int, level: str) -> None:
-        """Set verbosity for a workspace and persist."""
+        """Set verbosity for a workspace and persist to workspace.toml."""
         if level not in self.VERBOSITY_LEVELS:
             raise ValueError(f"Invalid verbosity level: {level}")
-        if user_id not in self.user_verbosity:
-            self.user_verbosity[user_id] = {}
-        old = self.user_verbosity[user_id].get(thread_id)
+
+        old = self.get_verbosity(user_id, thread_id)
         logger.debug(
             "set_verbosity: user=%d thread=%d old=%s new=%s",
             user_id,
@@ -1110,7 +1138,19 @@ class SessionManager:
             old,
             level,
         )
-        if old != level:
+        if old == level:
+            return
+
+        # Write to workspace.toml
+        ws_dir = self._resolve_workspace_dir(user_id, thread_id)
+        if ws_dir:
+            from . import workspace_config
+
+            workspace_config.set_verbosity(ws_dir, user_id, level)
+        else:
+            # Fallback: persist in state.json (no workspace resolved yet)
+            if user_id not in self.user_verbosity:
+                self.user_verbosity[user_id] = {}
             self.user_verbosity[user_id][thread_id] = level
             self._save_state()
 

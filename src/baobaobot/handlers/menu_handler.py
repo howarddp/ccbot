@@ -533,6 +533,12 @@ async def _handle_bswitch(
     ctx.session_manager.window_states[wid] = state
     ctx.session_manager._save_state()
 
+    # Persist to workspace.toml so it survives session rebuilds
+    if state.cwd:
+        from .. import workspace_config
+
+        workspace_config.set_agent_type(Path(state.cwd), new_agent_type)
+
     # Resolve the new backend
     from .status_polling import clear_window_health
 
