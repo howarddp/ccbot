@@ -101,8 +101,17 @@ def parse_gemini_message(msg: dict) -> list[GeminiParsedEntry]:
             text = str(content)
 
         if text.strip():
+            stripped = text.strip()
+            _NO_NOTIFY_TAG = "[NO_NOTIFY]"
+            # Detect [NO_NOTIFY] or [System prefix as implicit no_notify
+            user_no_notify = stripped.startswith(_NO_NOTIFY_TAG) or stripped.startswith("[System")
+            if stripped.startswith(_NO_NOTIFY_TAG):
+                stripped = stripped[len(_NO_NOTIFY_TAG):].strip()
             entries.append(
-                GeminiParsedEntry(text=text.strip(), content_type="text", role="user")
+                GeminiParsedEntry(
+                    text=stripped, content_type="text", role="user",
+                    no_notify=user_no_notify,
+                )
             )
 
     elif msg_type == "gemini":
@@ -257,11 +266,19 @@ class GeminiTranscriptParser:
                 ]
             parsed.extend(all_entries)
 
-        # Track NO_NOTIFY across polls
+        # Apply no_notify_active state: propagate from user messages to
+        # subsequent assistant entries (tool_use, tool_result, text).
+        # A non-no_notify user message resets the state.
         for entry in parsed:
-            if entry.no_notify:
+            if entry.role == "user":
+                if entry.no_notify:
+                    no_notify_active = True
+                else:
+                    no_notify_active = False
+            elif entry.no_notify:
                 no_notify_active = True
-            elif entry.role == "user":
-                no_notify_active = False
+
+            if no_notify_active:
+                entry.no_notify = True
 
         return parsed, {}, no_notify_active

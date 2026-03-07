@@ -139,11 +139,11 @@ class TestCheckSingleHeartbeat:
         scheduler._tmux_manager.send_keys.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skip_when_no_content(
+    async def test_skip_when_no_content_and_no_todos(
         self, scheduler: SystemScheduler, ws_dir: Path
     ):
-        """HEARTBEAT.md empty or missing → skip and reschedule."""
-        # No HEARTBEAT.md file
+        """HEARTBEAT.md empty + no open TODOs → skip and reschedule."""
+        # No HEARTBEAT.md file, no todos table
         scheduler._tmux_manager = MagicMock()
         scheduler._tmux_manager.send_keys = AsyncMock(return_value=True)
 
@@ -158,6 +158,37 @@ class TestCheckSingleHeartbeat:
         assert next_run >= now + _CFG.heartbeat_interval - 1
 
     @pytest.mark.asyncio
+    async def test_send_when_only_todos(
+        self, scheduler: SystemScheduler, ws_dir: Path
+    ):
+        """No HEARTBEAT.md but has open TODOs → should send."""
+        # Create todos table with an open item
+        conn = sqlite3.connect(str(ws_dir / "memory.db"))
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS todos ("
+            "id TEXT PRIMARY KEY, type TEXT, title TEXT, content TEXT, "
+            "created_by TEXT, created_by_id TEXT, created_at TEXT, "
+            "start_date TEXT, deadline TEXT, location TEXT, "
+            "status TEXT DEFAULT 'open', done_at TEXT, attachments TEXT DEFAULT '[]')"
+        )
+        conn.execute(
+            "INSERT INTO todos (id, type, title, content, created_by, created_by_id, created_at, status) "
+            "VALUES ('T20260301-1', 'task', 'Test task', '', 'Howard', '123', '2026-03-01', 'open')"
+        )
+        conn.commit()
+        conn.close()
+
+        now = time.time()
+        scheduler._tmux_manager = MagicMock()
+        scheduler._tmux_manager.send_keys = AsyncMock(return_value=True)
+        scheduler._resolve_window = MagicMock(return_value="@0")
+        scheduler._get_jsonl_path = MagicMock(return_value=None)
+        scheduler._is_summary_due = MagicMock(return_value=False)
+
+        await scheduler._check_single_heartbeat("test", ws_dir, now)
+        scheduler._tmux_manager.send_keys.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_skip_dedup_same_hash_recent(
         self, scheduler: SystemScheduler, ws_dir: Path
     ):
@@ -165,6 +196,7 @@ class TestCheckSingleHeartbeat:
         hb_file = ws_dir / "HEARTBEAT.md"
         hb_file.write_text("- Track deployment status\n", encoding="utf-8")
 
+        # Hash now combines heartbeat content + todo_hash (empty here)
         content_hash = scheduler._compute_content_hash("- Track deployment status")
         now = time.time()
 

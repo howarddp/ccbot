@@ -52,14 +52,16 @@ def _build_heartbeat_keyboard(enabled: bool, wid: str) -> InlineKeyboardMarkup:
 
 
 def _build_heartbeat_text(
-    enabled: bool, ws_name: str, item_count: int
+    enabled: bool, ws_name: str, item_count: tuple[int, int]
 ) -> str:
     """Build the message text showing heartbeat status."""
+    hb_items, todo_count = item_count
     status = "ON" if enabled else "OFF"
     return (
         f"\U0001f493 *Heartbeat*: {status}\n"
         f"Workspace: {ws_name}\n"
-        f"HEARTBEAT.md items: {item_count}"
+        f"HEARTBEAT\\.md items: {hb_items}\n"
+        f"Open TODOs: {todo_count}"
     )
 
 

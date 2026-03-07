@@ -572,6 +572,10 @@ class TranscriptParser:
             elif msg_type == "user":
                 # Check for tool_result blocks and merge with pending tools
                 # tool_result blocks inherit no_notify from the active state
+                has_tool_result = any(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in content
+                )
                 user_text_parts: list[str] = []
 
                 for block in content:
@@ -716,17 +720,23 @@ class TranscriptParser:
                 if user_text_parts:
                     combined = "\n".join(user_text_parts)
                     # Detect and strip [NO_NOTIFY] tag.
-                    # Also detect [System] prefix as implicit no_notify — Claude
+                    # Also detect [System prefix as implicit no_notify — Claude
                     # Code strips [NO_NOTIFY] from user input before writing JSONL,
-                    # so "[NO_NOTIFY] [System] ..." becomes "[System] ..." in the
-                    # stored content. The [System] prefix is only used by the cron
-                    # service for automated messages that should not appear in Telegram.
+                    # so "[NO_NOTIFY] [System Heartbeat]" becomes "[System Heartbeat]"
+                    # in the stored content. Match "[System" prefix (without closing
+                    # bracket) to cover both "[System]" and "[System Heartbeat]".
                     _user_no_notify = combined.startswith(
                         _NO_NOTIFY_TAG
-                    ) or combined.startswith("[System]")
+                    ) or combined.startswith("[System")
                     if combined.startswith(_NO_NOTIFY_TAG):
                         combined = combined[len(_NO_NOTIFY_TAG) :].strip()
-                    no_notify_active = _user_no_notify
+                    # Only reset no_notify_active for genuine user input messages.
+                    # Tool result messages (containing tool_result blocks) are system
+                    # responses and should not reset the no_notify state.
+                    if not has_tool_result:
+                        no_notify_active = _user_no_notify
+                    elif _user_no_notify:
+                        no_notify_active = True
                     # Skip if it looks like local command XML
                     if (
                         combined

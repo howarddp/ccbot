@@ -53,8 +53,11 @@ _META_KEY_HEARTBEAT_CONTENT_HASH = "system_scheduler.heartbeat_content_hash"
 _META_KEY_HEARTBEAT_NEXT_RUN = "system_scheduler.heartbeat_next_run"
 
 _HEARTBEAT_MESSAGE = (
-    "[System Heartbeat] Read HEARTBEAT.md and check if any items need action or user notification. "
-    "Remove completed items. If nothing needs action, reply with [NO_NOTIFY] as the FIRST text in your response — "
+    "[NO_NOTIFY] [System Heartbeat]\n"
+    "1. Read HEARTBEAT.md (if exists) and process items needing action. Remove completed items.\n"
+    "2. Run `todo-list` to review all open TODOs — remind users about overdue or important items, "
+    "give gentle updates on others as you see fit.\n"
+    "3. If nothing needs action or notification, reply with [NO_NOTIFY] as the FIRST text in your response — "
     "do not output any analysis or reasoning before it."
 )
 
@@ -712,6 +715,50 @@ class SystemScheduler:
 
     # --- Heartbeat logic ---
 
+    @staticmethod
+    def _has_open_todos(ws_dir: Path) -> bool:
+        """Check if workspace has any open TODOs in memory.db."""
+        db_path = ws_dir / "memory.db"
+        if not db_path.exists():
+            return False
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM todos WHERE status = 'open' LIMIT 1"
+                ).fetchone()
+                return row is not None
+            except sqlite3.OperationalError:
+                # todos table doesn't exist
+                return False
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _get_todo_ids_hash(ws_dir: Path) -> str:
+        """Get a hash of open TODO IDs for dedup."""
+        db_path = ws_dir / "memory.db"
+        if not db_path.exists():
+            return ""
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                rows = conn.execute(
+                    "SELECT id FROM todos WHERE status = 'open' ORDER BY id"
+                ).fetchall()
+                if not rows:
+                    return ""
+                ids_str = ",".join(r[0] for r in rows)
+                return hashlib.md5(ids_str.encode("utf-8")).hexdigest()
+            except sqlite3.OperationalError:
+                return ""
+            finally:
+                conn.close()
+        except Exception:
+            return ""
+
     def _is_within_active_hours(self) -> bool:
         """Check if current time is within active hours."""
         try:
@@ -840,12 +887,15 @@ class SystemScheduler:
             pass
 
         content = self._read_heartbeat_content(ws_dir)
-        if not content:
-            # No content — reschedule
+        has_todos = self._has_open_todos(ws_dir)
+        if not content and not has_todos:
+            # Nothing to check — reschedule
             self._set_heartbeat_next_run(ws_dir, now + self._cfg.heartbeat_interval)
             return
 
-        content_hash = self._compute_content_hash(content)
+        # Combined hash: HEARTBEAT.md content + open TODO IDs
+        todo_hash = self._get_todo_ids_hash(ws_dir) if has_todos else ""
+        content_hash = self._compute_content_hash(content + todo_hash)
 
         # Dedup: skip if hash unchanged AND last heartbeat < 2h ago
         if content_hash == state["content_hash"]:
@@ -950,27 +1000,49 @@ class SystemScheduler:
             return False
 
         content = self._read_heartbeat_content(ws_dir)
-        if not content:
-            logger.info("trigger_heartbeat: no content in HEARTBEAT.md for %r", workspace_name)
+        has_todos = self._has_open_todos(ws_dir)
+        if not content and not has_todos:
+            logger.info("trigger_heartbeat: no content in HEARTBEAT.md and no open TODOs for %r", workspace_name)
             return False
 
-        content_hash = self._compute_content_hash(content)
+        todo_hash = self._get_todo_ids_hash(ws_dir) if has_todos else ""
+        content_hash = self._compute_content_hash(content + todo_hash)
         now = time.time()
         await self._send_heartbeat(workspace_name, ws_dir, window_id, content_hash, now)
         return True
 
-    def get_heartbeat_item_count(self, ws_dir: Path) -> int:
-        """Count meaningful items in HEARTBEAT.md (for display)."""
+    def get_heartbeat_item_count(self, ws_dir: Path) -> tuple[int, int]:
+        """Count meaningful items in HEARTBEAT.md and open TODOs.
+
+        Returns:
+            (heartbeat_items, open_todos) tuple.
+        """
         content = self._read_heartbeat_content(ws_dir)
-        if not content:
-            return 0
-        # Count non-heading lines as items
-        count = 0
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                count += 1
-        return count
+        hb_count = 0
+        if content:
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    hb_count += 1
+
+        todo_count = 0
+        db_path = ws_dir / "memory.db"
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                try:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM todos WHERE status = 'open'"
+                    ).fetchone()
+                    todo_count = row[0] if row else 0
+                except sqlite3.OperationalError:
+                    pass
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+
+        return hb_count, todo_count
 
     @property
     def is_running(self) -> bool:
